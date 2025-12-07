@@ -1,0 +1,33 @@
+# Docker Compose for development with the UC Core Simulator
+# TODO: Update the name and hostname for your integration
+version: '3.4'
+name: integration-template
+
+services:
+  # Unfolded Circle Core Simulator for testing
+  core-simulator:
+    image: unfoldedcircle/core-simulator
+    restart: "unless-stopped"
+    hostname: core-simulator
+    environment:
+      - UC_INTEGRATION_DISABLE_CERT_VERIFICATION=true
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - simulator-data:/data
+
+  # Your integration service
+  # TODO: Rename 'intg-template' to match your integration folder
+  intg-template:
+     build:
+       context: ../
+       dockerfile: ./dev/Dockerfile
+     hostname: template
+     # nodemon watches for file changes and auto-restarts
+     command: bash -c "UC_INTEGRATION_INTERFACE=$(hostname -i) nodemon -e py,json --exec 'python3 -u' intg-template/driver.py"
+     volumes:
+       - ../:/app
+
+volumes:
+  simulator-data:

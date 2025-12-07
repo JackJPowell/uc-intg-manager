@@ -1,0 +1,151 @@
+# Triggered by version tag creation to build a distribution binary, Docker image, and create a release draft
+name: "Build & Draft Release"
+
+"on":
+  push:
+    tags:
+      - 'v*'
+
+env:
+  INTG_NAME: template
+  # Python version to use in the builder image. See https://hub.docker.com/r/unfoldedcircle/r2-pyinstaller for possible versions.
+  PYTHON_VER: 3.11.12-0.3.0
+
+jobs:
+  build:
+    name: Build Release
+    runs-on: ubuntu-24.04
+    #Save version to env output variable to be able to use it in the following release job as a tag
+    outputs:
+      version: ${{ steps.get-version-and-id.outputs.VERSION }}
+      driver_id: ${{ steps.get-version-and-id.outputs.DRIVER_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # History of 200 should be more than enough to calculate commit count since last release tag
+          fetch-depth: 200
+
+      - name: Get version and id
+        #Id needed for env output variable
+        id: get-version-and-id
+        run: |
+          # Extract version from git tag (remove 'v' prefix)
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_ENV
+          # Save to Github output to later use it in Create Release job
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
+
+      - name: Build
+        run: |
+          sudo apt-get update && sudo apt-get install -y qemu-system-arm binfmt-support qemu-user-static
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          echo "Starting pyinstaller build"
+          docker run --rm --name builder \
+            --platform=aarch64 \
+            --user=$(id -u):$(id -g) \
+            -v ${GITHUB_WORKSPACE}:/workspace \
+            docker.io/unfoldedcircle/r2-pyinstaller:${PYTHON_VER} \
+            bash -c \
+            "cd /workspace && \
+              python -m pip install -r requirements.txt && \
+              pyinstaller --clean --onedir --name intg-${DRIVER_ID} --collect-all zeroconf intg-${INTG_NAME}/driver.py"
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts/bin
+          mv dist/intg-${{ env.DRIVER_ID }}/* artifacts/bin
+          mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
+          cp driver.json artifacts/
+          echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
+          
+      - name: Create upload artifact archive
+        shell: bash
+        run: | 
+          tar czvf ${{ env.ARTIFACT_NAME }}.tar.gz -C ${GITHUB_WORKSPACE}/artifacts .
+          ls -lah
+          
+      - uses: actions/upload-artifact@v4
+        id: upload_artifact
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+            
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-24.04
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/uc-intg-template
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+            
+  release:
+    name: Create Release
+    runs-on: ubuntu-24.04
+    needs: [build, docker]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Extract build archives from downloaded files
+        run: |
+          ls -R
+          # extract tar.gz build archives from downloaded artifacts
+          # (wrapped in tar from actions/upload-artifact, then extracted into a directory by actions/download-artifact)
+          for D in * 
+            do if [ -d "${D}" ]; then
+              mv $D/* ./
+            fi
+          done;
+
+      - name: Create hash file
+        run: |
+          for filename in *.tar.gz; do echo "sha256  `sha256sum $filename`" >> ${{needs.build.outputs.driver_id}}.hash; done;
+
+      - name: Create release draft
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "*.tar.gz,${{needs.build.outputs.driver_id}}.hash"
+          draft: true
+          generateReleaseNotes: true
+          artifactErrorsFailBuild: true
+          tag: v${{needs.build.outputs.version}}

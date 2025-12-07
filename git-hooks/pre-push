@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+
+# Parse JSON with jq, parse TOML with grep/sed
+get_driver_version() {
+  jq -r '.version' driver.json
+}
+
+get_pyproject_version() {
+  # Assumes pyproject.toml has a line like: version = "1.2.3"
+  grep -E '^\s*version\s*=' pyproject.toml | head -n 1 | sed -E 's/.*=\s*"([^"]+)".*/\1/'
+}
+
+while read local_ref local_sha remote_ref remote_sha
+do
+  if [[ "$local_ref" =~ ^refs/tags/ ]]; then
+    tag_name="${local_ref#refs/tags/}"
+
+    driver_version=$(get_driver_version)
+    pyproject_version=$(get_pyproject_version)
+
+    # Check consistency between files
+    if [[ "$driver_version" != "$pyproject_version" ]]; then
+      echo "❌ driver.json ($driver_version) and pyproject.toml ($pyproject_version) have different versions."
+      exit 1
+    fi
+
+    # Normalize: strip leading 'v' from tag
+    normalized_tag="${tag_name#v}"
+
+    # Check that tag matches version
+    if [[ "$normalized_tag" != "$driver_version" ]]; then
+      echo "❌ Tag ($tag_name) does not match version ($driver_version) in driver.json/pyproject.toml."
+      exit 1
+    fi
+
+    echo "✅ Version check passed for tag $tag_name"
+  fi
+done

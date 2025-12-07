@@ -1,0 +1,41 @@
+{
+  "driver_id": "your_device_driver",
+  "version": "0.1.0",
+  "min_core_api": "0.20.0",
+  "name": { "en": "Your Device Name" },
+  "icon": "uc:integration",
+  "description": {
+    "en": "Control your network-connected device"
+  },
+  "developer": {
+    "name": "Your Name",
+    "email": "your.email@example.com",
+    "url": "https://github.com/yourusername"
+  },
+  "home_page": "https://github.com/yourusername/uc-intg-yourdevice",
+  "setup_data_schema": {
+    "title": {
+      "en": "Integration setup",
+      "de": "Integrationssetup",
+      "fr": "Configuration de l'intégration"
+    },
+    "settings": [
+      {
+        "id": "info",
+        "label": {
+          "en": "Setup process",
+          "de": "Setup Fortschritt",
+          "fr": "Progression de la configuration"
+        },
+        "field": {
+          "label": {
+            "value": {
+              "en": "This integration will allow you to control your device from your Unfolded Circle Remote."
+            }
+          }
+        }
+      }
+    ]
+  },
+  "release_date": "2025-01-01"
+}

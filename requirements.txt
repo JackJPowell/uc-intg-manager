@@ -1,0 +1,10 @@
+# Core dependencies
+ucapi==0.4.0
+ucapi-framework==1.2.2
+pyee>=9.0
+
+# Discovery protocols (include what you need)
+
+# TODO: Add your device-specific library here
+# Example:
+# your-device-library==1.0.0
