@@ -8,7 +8,7 @@ get_driver_version() {
 
 get_pyproject_version() {
   # Assumes pyproject.toml has a line like: version = "1.2.3"
-  grep -E '^\s*version\s*=' pyproject.toml | head -n 1 | sed -E 's/.*=\s*"([^"]+)".*/\1/'
+  grep -E '^\s*version\s*=' pyproject.toml | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 while read local_ref local_sha remote_ref remote_sha
