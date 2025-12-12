@@ -11,7 +11,11 @@ _Changes in the next release_
 
 ---
 
-## v0.1.0 - 2025-12-03
+## v1.0.1 - 2025-12-12
+### Corrections
+- Pipeline
+  
+## v1.0.0 - 2025-12-12
 ### Added
 - Initial template release based on ucapi-framework.
 - Media player entity template with common features.
