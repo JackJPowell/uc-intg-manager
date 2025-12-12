@@ -9,6 +9,10 @@
 
 A web-based integration manager for [Unfolded Circle Remote Two/3](https://www.unfoldedcircle.com/). This integration provides a convenient web interface to manage your custom integrations, automatically check for updates, install new integrations, and backup integration config files. And it runs directly on your remote.
 
+
+<img width="1583" height="1142" alt="dashboard" src="https://github.com/user-attachments/assets/4d573636-0a5a-4d24-9f61-a43127d08b34" />
+
+
 ## Features
 
 ### Automatic Updates with Configuration Preservation
@@ -31,6 +35,8 @@ Browse and install integrations from the community registry with a single click.
 - **Category Filtering**: Filter integrations by category (media, lighting, climate, etc.)
 - **Detailed Information**: See integration descriptions, developers, versions, and GitHub links
 - **One-Click Installation**: Install new integrations directly from the web interface
+  
+<img width="800" alt="available" src="https://github.com/user-attachments/assets/41b4352d-13d8-4a78-9fca-e6575240b573" />
 
 ### Automated Configuration Backups
 
@@ -52,6 +58,8 @@ Customize the Integration Manager's behavior through the Settings page:
 - **Automatic Updates**: Enable automatic installation of integration updates when detected (default: disabled - manual confirmation required)
 - **Automatic Backups**: Enable scheduled daily backups of integration configurations (default: disabled)
 - **Backup Time**: Set the time of day for automatic backups (24-hour format, e.g., "02:00")
+  
+<img width="800" alt="settings" src="https://github.com/user-attachments/assets/14b1b4b1-c8dc-43e9-b3bf-4741873f788b" />
 
 ### Integrated Log Viewer
 
@@ -61,6 +69,8 @@ View real-time logs directly in the web interface.
 - **Log Filtering**: Filter by log level (INFO, WARNING, ERROR)
 - **Clear Logs**: Clear the current log buffer with one click
 - **Diagnostic Information**: Helpful for troubleshooting issues
+  
+<img width="800" alt="logs" src="https://github.com/user-attachments/assets/f09bb6ff-8974-4715-8c66-f5b402c83fca" />
 
 ### Power-Aware Operation
 
@@ -69,6 +79,11 @@ The web server automatically starts when your Remote is docked and shuts down wh
 - **Automatic Start/Stop**: Web server lifecycle tied to dock status
 - **Battery Conservation**: No background processes draining battery during mobile use
 - **Status Indicators**: Dashboard shows current dock status and server state
+
+
+
+
+
 
 ## Installation
 
