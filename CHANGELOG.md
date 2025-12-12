@@ -1,4 +1,4 @@
-# Integration Template Changelog
+# Integration manager Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -11,16 +11,14 @@ _Changes in the next release_
 
 ---
 
+## v1.0.2 - 2025-12-12
+### Corrections
+- More Pipeline fixes
+- 
 ## v1.0.1 - 2025-12-12
 ### Corrections
-- Pipeline
+- Pipeline fixes
   
 ## v1.0.0 - 2025-12-12
 ### Added
-- Initial template release based on ucapi-framework.
-- Media player entity template with common features.
-- Device communication template with connection management.
-- Setup flow with manual device entry.
-- mDNS device discovery template.
-- Docker and Docker Compose configurations.
-- Development environment with core-simulator.
+- Initial integration manager release based on ucapi-framework.

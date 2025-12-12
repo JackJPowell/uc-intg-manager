@@ -7,7 +7,7 @@ name: "Build & Draft Release"
       - "v*"
 
 env:
-  INTG_NAME: template
+  INTG_NAME: manager
   # Python version to use in the builder image. See https://hub.docker.com/r/unfoldedcircle/r2-pyinstaller for possible versions.
   PYTHON_VER: 3.11.12-0.3.0
 
@@ -101,7 +101,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/uc-intg-manager
+          images: ghcr.io/${{ github.repository_owner }}/uc-intg-${{ env.INTG_NAME }}
           tags: |
             type=ref,event=tag
             type=raw,value=latest
