@@ -12,6 +12,7 @@ Uses synchronous HTTP clients (requests) to avoid aiohttp async context issues.
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -40,9 +41,16 @@ _LOG = logging.getLogger(__name__)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # Get template and static directories from source
-# Use absolute path to handle frozen/bundled environments
-TEMPLATE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "templates"))
-STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "static"))
+# Handle PyInstaller frozen executables where data is in sys._MEIPASS
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    # Running as PyInstaller bundle
+    BASE_DIR = sys._MEIPASS
+else:
+    # Running as regular Python script
+    BASE_DIR = os.path.dirname(__file__)
+
+TEMPLATE_DIR = os.path.abspath(os.path.join(BASE_DIR, "templates"))
+STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "static"))
 
 # Create Flask app with cache disabled for read-only filesystems
 app = Flask(
@@ -53,6 +61,10 @@ app = Flask(
 # Disable Jinja2 bytecode cache to avoid writing to read-only filesystem
 app.jinja_env.auto_reload = True
 app.jinja_env.cache = {}
+app.jinja_env.bytecode_cache = None
+# Additional config for read-only filesystem
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # Will be set by WebServer class
 _remote_client: SyncRemoteClient | None = None
