@@ -1,0 +1,28 @@
+<!-- Integration List Partial - Loaded via HTMX -->
+<span id="count" class="hidden">{{ integrations|length }}</span>
+
+{% if integrations %}
+<div class="grid grid-cols-1 gap-4">
+    {% for integration in integrations %}
+    {% include 'partials/integration_card.html' %}
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="text-center py-16">
+    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+    </svg>
+    <h3 class="mt-4 text-lg font-medium text-white">No integrations found</h3>
+    <p class="mt-2 text-gray-400">
+        You don't have any custom integrations installed yet.
+    </p>
+    <a href="/available" 
+       class="mt-6 inline-flex items-center px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white font-medium rounded-lg transition-colors">
+        <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+        </svg>
+        Browse Available Integrations
+    </a>
+</div>
+{% endif %}

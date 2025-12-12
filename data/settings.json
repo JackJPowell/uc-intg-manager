@@ -1,0 +1,6 @@
+{
+  "shutdown_on_battery": true,
+  "auto_update": false,
+  "backup_configs": true,
+  "backup_time": "02:00"
+}

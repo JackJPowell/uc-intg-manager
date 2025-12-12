@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Page Header -->
+    <div>
+        <h2 class="text-2xl font-bold text-white">Dashboard</h2>
+        <p class="mt-1 text-gray-400">
+            Overview of your integration status
+        </p>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-center">
+                <div class="p-3 bg-uc-primary/20 rounded-lg">
+                    <svg class="h-6 w-6 text-uc-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-400">Installed Integrations</p>
+                    <p class="text-2xl font-semibold text-white" 
+                       id="installed-count"
+                       hx-get="/api/stats/installed-count"
+                       hx-trigger="load"
+                       hx-swap="innerHTML">
+                        <span class="spinner"></span>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-center">
+                <div class="p-3 bg-yellow-500/20 rounded-lg">
+                    <svg class="h-6 w-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-400">Updates Available</p>
+                    <p class="text-2xl font-semibold text-white" 
+                       id="updates-count"
+                       hx-get="/api/stats/updates-count"
+                       hx-trigger="load"
+                       hx-swap="innerHTML">
+                        <span class="spinner"></span>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-center">
+                <div class="p-3 bg-green-500/20 rounded-lg">
+                    <svg class="h-6 w-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm text-gray-400">Remote Status</p>
+                    <p class="text-2xl font-semibold text-green-400" id="remote-status">Connected</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Integrations -->
+    <div class="bg-uc-card rounded-xl border border-uc-border">
+        <div class="px-6 py-4 border-b border-uc-border flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-white">Your Integrations</h3>
+            <a href="/integrations" class="text-sm text-uc-accent hover:text-white transition-colors">
+                View all →
+            </a>
+        </div>
+        <div class="p-6" 
+             id="integrations-preview"
+             hx-get="/api/integrations/list" 
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="flex items-center justify-center py-8">
+                <div class="spinner"></div>
+                <span class="ml-3 text-gray-400">Loading integrations...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <a href="/available" class="group bg-uc-card rounded-xl p-6 border border-uc-border hover:border-uc-primary transition-colors">
+            <div class="flex items-center">
+                <div class="p-3 bg-uc-primary/20 rounded-lg group-hover:bg-uc-primary/30 transition-colors">
+                    <svg class="h-6 w-6 text-uc-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <h4 class="text-lg font-medium text-white">Browse Integrations</h4>
+                    <p class="text-sm text-gray-400">Discover and install new integrations</p>
+                </div>
+            </div>
+        </a>
+
+        <button disabled class="group bg-uc-card rounded-xl p-6 border border-uc-border opacity-50 cursor-not-allowed text-left">
+            <div class="flex items-center">
+                <div class="p-3 bg-gray-500/20 rounded-lg">
+                    <svg class="h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <h4 class="text-lg font-medium text-white">Update All</h4>
+                    <p class="text-sm text-gray-400">Coming soon</p>
+                </div>
+            </div>
+        </button>
+    </div>
+</div>
+{% endblock %}

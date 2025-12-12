@@ -1,135 +1,255 @@
-# Unfolded Circle Integration Template
+[![Discord](https://badgen.net/discord/online-members/zGVYf58)](https://discord.gg/zGVYf58)
+![GitHub Release](https://img.shields.io/github/v/release/jackjpowell/uc-intg-manager)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/jackjpowell/uc-intg-manager/total)
+![Maintenance](https://img.shields.io/maintenance/yes/2025.svg)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee%20☕-FFDD00?logo=buy-me-a-coffee&logoColor=white&labelColor=555)](https://buymeacoffee.com/jackpowell)
 
-A template repository for creating [Unfolded Circle Remote Two/3](https://www.unfoldedcircle.com/) integration drivers using the [ucapi-framework](https://github.com/jackjpowell/ucapi-framework).
 
-## Getting Started
+# Unfolded Circle Integration Manager
 
-1. **Clone or use this template** to create your own integration repository
-2. **Rename the integration folder** from `intg-template` to `intg-yourdevice`
-3. **Update the following files** with your device-specific information:
-   - `driver.json` - Integration metadata (name, description, developer info)
-   - `intg-template/const.py` - Device configuration and constants
-   - `intg-template/device.py` - Device communication logic
-   - `intg-template/media_player.py` - Media player entity implementation
-   - `intg-template/setup.py` - Setup flow and configuration forms
-   - `intg-template/discover.py` - Device discovery (if applicable)
+A web-based integration manager for [Unfolded Circle Remote Two/3](https://www.unfoldedcircle.com/). This integration provides a convenient web interface to manage your custom integrations, automatically check for updates, install new integrations, and backup integration config files. And it runs directly on your remote.
 
-## Project Structure
+## Features
 
+### Automatic Updates with Configuration Preservation
+
+The Integration Manager can automatically detect when newer versions of your custom integrations are available on GitHub and update them while preserving your existing configuration.
+
+- **Automatic Update Detection**: Periodically checks GitHub releases for new versions
+- **One-Click Updates**: Update integrations directly from the web interface
+- **Configuration Backup & Restore**: Automatically backs up integration settings before updating and restores them after installation (for integrations that support the backup feature)
+- **Version Tracking**: View current and available versions for all installed integrations
+
+> [!IMPORTANT]
+> Configuration preservation depends on the integration implementing the backup/restore API. Check the integration's documentation to confirm support. If not supported, an upgrade button will not be shown.
+
+### Available Integration Registry
+
+Browse and install integrations from the community registry with a single click.
+
+- **Searchable Registry**: View all available integrations from the Unfolded Circle community
+- **Category Filtering**: Filter integrations by category (media, lighting, climate, etc.)
+- **Detailed Information**: See integration descriptions, developers, versions, and GitHub links
+- **One-Click Installation**: Install new integrations directly from the web interface
+
+### Automated Configuration Backups
+
+Protect your integration configurations with automatic scheduled backups.
+
+- **Scheduled Backups**: Configure automatic daily backups at a specified time
+- **Manual Backups**: Trigger immediate backups of all integrations or individual ones
+- **Backup Viewing**: View and manage all saved configuration snapshots
+- **Export & Import**: Download complete backup files for safekeeping or transfer to another Remote
+- **Per-Integration Backups**: Each integration's configuration is backed up separately with timestamps
+
+Backups are stored locally on the Remote and can be exported as JSON files for external storage.
+
+### Settings & Configuration
+
+Customize the Integration Manager's behavior through the Settings page:
+
+- **Shutdown on Battery**: Automatically stop the web server when the Remote is on battery power to conserve energy (default: enabled)
+- **Automatic Updates**: Enable automatic installation of integration updates when detected (default: disabled - manual confirmation required)
+- **Automatic Backups**: Enable scheduled daily backups of integration configurations (default: disabled)
+- **Backup Time**: Set the time of day for automatic backups (24-hour format, e.g., "02:00")
+
+### Integrated Log Viewer
+
+View real-time logs directly in the web interface.
+
+- **Live Log Streaming**: See integration manager logs in real-time
+- **Log Filtering**: Filter by log level (INFO, WARNING, ERROR)
+- **Clear Logs**: Clear the current log buffer with one click
+- **Diagnostic Information**: Helpful for troubleshooting issues
+
+### Power-Aware Operation
+
+The web server automatically starts when your Remote is docked and shuts down when on battery (configurable).
+
+- **Automatic Start/Stop**: Web server lifecycle tied to dock status
+- **Battery Conservation**: No background processes draining battery during mobile use
+- **Status Indicators**: Dashboard shows current dock status and server state
+
+## Installation
+
+### Option 1: Install on Remote
+
+1. Download the latest release archive (`.tar.gz`) from the [Releases](https://github.com/JackJPowell/uc-intg-manager/releases) page
+2. Upload and install via the Web Configurator:
+   - Go to **Settings** → **Integrations & Docks** → **Custom Integrations**
+   - Click **Upload** and select the downloaded archive
+3. Configure the integration:
+   - The integration will automatically discover your Remote using mDNS
+   - **Web Configurator PIN**: Enter the PIN from Settings → Profile → Web Configurator
+   - If discovery fails, you'll be prompted to manually enter:
+     - **IP Address**: Your Remote's IP address (e.g., `192.168.1.100`)
+     - **Web Configurator PIN**: The PIN from Settings → Profile → Web Configurator
+   - Note: The PIN is only required during initial setup. An API key will be created and used for subsequent authentication.
+4. Access the web interface at `http://<remote-ip>:8088` when docked
+
+### Option 2: Run in Docker
+
+You can run the Integration Manager as a Docker container on an external server to manage your Remote.
+
+#### Using docker run
+
+```bash
+docker run -d \\
+  --name uc-intg-manager \\
+  -p 8088:8088 \\
+  -e UC_INTEGRATION_HTTP_PORT=8088
+  -v uc-intg-manager-data:/data \\
+  ghcr.io/jackjpowell/uc-intg-manager:latest
 ```
-├── driver.json              # Integration metadata and configuration
-├── intg-template/           # Main integration code (rename this folder)
-│   ├── const.py             # Constants and device configuration dataclass
-│   ├── device.py            # Device communication and state management
-│   ├── discover.py          # Network device discovery
-│   ├── driver.py            # Main entry point
-│   ├── media_player.py      # Media player entity
-│   └── setup.py             # Setup flow and user configuration
-├── config/                  # Runtime configuration storage
-├── Dockerfile               # Container build configuration
-└── requirements.txt         # Python dependencies
+
+#### Using docker-compose
+
+```yaml
+version: '3.8'
+
+services:
+  uc-intg-manager:
+    image: ghcr.io/jackjpowell/uc-intg-manager:latest
+    container_name: uc-intg-manager
+    ports:
+      - "8088:8088"
+    environment:
+      - UC_INTEGRATION_HTTP_PORT=8088
+    volumes:
+      - uc-intg-manager-data:/data
+    restart: unless-stopped
+
+volumes:
+  uc-intg-manager-data:
 ```
+
+#### Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `UC_INTG_MANAGER_HTTP_PORT` | HTTP port for Integration Manager Web Server | `8088` | No|
+| `UC_CONFIG_HOME` | Configuration directory path | `/config` | No |
+| `UC_INTEGRATION_INTERFACE` | Network interface to bind integration API | `0.0.0.0` | No |
+| `UC_INTEGRATION_HTTP_PORT` | HTTP port for integration API | `9090` | No |
+
+
+## Usage
+
+### Accessing the Web Interface
+
+1. Ensure your Remote is docked (if running on the Remote itself)
+2. Open a browser and navigate to `http://<remote-ip>:8088`
+3. That's it!
+
+### Managing Integrations
+
+- **Your Integrations**: View all installed integrations with status, version, and helpful links
+- **Available Integrations**: Browse the community registry and install new integrations
+- **Settings**: Configure automatic updates, manage backups, and other preferences
+- **Logs**: View real-time integration manager logs for diagnostics
+
+### Updating an Integration
+
+1. Navigate to **Your Integrations**
+2. If an update is available, you'll see an "Update Available" badge
+3. Click the **Update** button
+4. The manager will:
+   - Backup the current configuration
+   - Download the latest release from GitHub
+   - Uninstall the old version
+   - Install the new version
+   - Restore the configuration
+
+### Installing a New Integration
+
+1. Navigate to **Available Integrations**
+2. Browse or search for the integration you want
+3. Click the **Install** button
+4. The integration will be downloaded from GitHub and installed
+5. Configure it through the Remote's normal integration setup
+
+### Managing Backups
+
+1. Navigate to **Settings**
+2. In the **Export & Import Data** section:
+   - **Export Backup File**: Download a complete backup including all integration configs and settings
+   - **Import Backup File**: Upload a previously exported backup to restore everything
+3. In the **Integration Configurations** section:
+   - **Capture Configs Now**: Immediately backup all integration configurations
+   - **View Saved Configs**: See all stored backups with timestamps
+4. Enable **Automatic Backups** and set a time for daily scheduled backups
 
 ## Development
 
 ### Prerequisites
 
-- Python 3.11+
-- Docker (optional, for containerized deployment)
+- Python 3.11 or later
+- pip or uv package manager
 
-### Local Development
+### Local Development Setup
 
-1. Create a virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Run the integration:
-   ```bash
-   python intg-template/driver.py
-   ```
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `UC_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | `DEBUG` |
-| `UC_CONFIG_HOME` | Configuration directory path | `/config` |
-| `UC_INTEGRATION_INTERFACE` | Network interface to bind | `0.0.0.0` |
-| `UC_INTEGRATION_HTTP_PORT` | HTTP port for the integration | `9090` |
-| `UC_DISABLE_MDNS_PUBLISH` | Disable mDNS advertisement | `false` |
-
-## Deployment
-
-### Install on Remote
-
-1. Build the integration package (tar.gz file)
-2. Upload via the Remote's web configurator under Integrations
-3. Configure your device through the setup wizard
-
-### Docker
+Clone the repository:
 
 ```bash
-docker run -d \
-  --name=uc-intg-yourdevice \
-  --network host \
-  -v $(pwd)/config:/config \
-  --restart unless-stopped \
-  ghcr.io/yourusername/uc-intg-yourdevice:latest
+git clone https://github.com/JackJPowell/uc-intg-manager.git
+cd uc-intg-manager
 ```
 
-### Docker Compose
+Create and activate a virtual environment:
 
-```yaml
-services:
-  uc-intg-yourdevice:
-    image: ghcr.io/yourusername/uc-intg-yourdevice:latest
-    container_name: uc-intg-yourdevice
-    network_mode: host
-    volumes:
-      - ./config:/config
-    restart: unless-stopped
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\\Scripts\\activate
 ```
 
-## Customization Guide
+or using uv
 
-### Adding Entity Types
+```bash
+uv venv
+source .venv/bin/activate  # On Windows: .venv\\Scripts\\activate
+```
 
-The template includes a Media Player entity. To add additional entity types:
+Install dependencies:
 
-1. Create a new entity file (e.g., `light.py`, `switch.py`, `climate.py`)
-2. Import and add the entity class to `driver.py`:
-   ```python
-   driver = BaseIntegrationDriver(
-       device_class=Device, entity_classes=[DeviceMediaPlayer, DeviceLight]
-   )
-   ```
+```bash
+pip install -r requirements.txt
+```
+or using uv
 
-### Implementing Device Communication
+```bash
+uv pip install -r requirements.txt
+```
 
-In `device.py`, implement the communication methods for your device:
+Run the driver:
 
-1. `connect()` - Establish connection to the device
-2. `disconnect()` - Clean up connection
-3. `verify_connection()` - Check device availability and get current state
-4. Device-specific methods (power control, volume, etc.)
+```bash
+python -m intg-manager\driver.py
+```
 
-### Customizing the Setup Flow
+Access the web interface at `http://localhost:8088`
 
-In `setup.py`, modify the `_MANUAL_INPUT_SCHEMA` to add fields for your device's configuration (IP, port, credentials, etc.).
 
-## Resources
+## Contributing
 
-- [UC Integration Python Library](https://github.com/aitatoi/integration-python-library)
-- [UCAPI Framework](https://github.com/jackjpowell/ucapi-framework)
-- [Unfolded Circle Developer Documentation](https://github.com/unfoldedcircle/core-api)
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-Mozilla Public License Version 2.0 - see [LICENSE](LICENSE) for details.
+This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- [Unfolded Circle](https://www.unfoldedcircle.com/) for the amazing Remote devices
+- The Unfolded Circle community for inspiration and feedback
+
+## Related Projects
+
+- [ucapi](https://github.com/unfoldedcircle/integration-python-library) - Python integration library for building custom integrations
+- [core-api](https://github.com/unfoldedcircle/core-api) - Official Remote Core API documentation
+- [ucapi-framework](https://github.com/jackjpowell/ucapi-framework) - Unofficial python ucapi framework

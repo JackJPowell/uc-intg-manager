@@ -10,5 +10,5 @@ RUN pip3 install --no-cache-dir --upgrade -r requirements.txt
 
 ADD . .
 
-# TODO: Update the path if you rename the intg-template folder
-CMD ["python3", "-u", "intg-template/driver.py"]
+# TODO: Update the path if you rename the intg-manager folder
+CMD ["python3", "-u", "intg-manager/driver.py"]

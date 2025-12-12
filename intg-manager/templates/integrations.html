@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Your Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-white">Your Integrations</h2>
+            <p class="mt-1 text-gray-400">
+                Manage your installed custom integrations
+            </p>
+        </div>
+        <button 
+            class="inline-flex items-center px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white font-medium rounded-lg transition-colors"
+            hx-post="/api/integrations/refresh-versions"
+            hx-swap="none"
+            hx-indicator="#refresh-spinner"
+            hx-on::after-request="if(event.detail.successful) { htmx.ajax('GET', '/api/integrations/list', {target: '#integrations-container', swap: 'innerHTML'}); }"
+            title="Refresh list and check for updates">
+            <span id="refresh-spinner" class="htmx-indicator spinner mr-2"></span>
+            <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+        </button>
+    </div>
+
+    <!-- Filter/Search Bar -->
+    <div class="bg-uc-card rounded-xl p-4 border border-uc-border">
+        <div class="flex flex-col sm:flex-row gap-4">
+            <div class="flex-1">
+                <div class="relative">
+                    <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    <input 
+                        type="text" 
+                        id="intg-search"
+                        placeholder="Search integrations..." 
+                        oninput="filterInstalledIntegrations()"
+                        class="w-full pl-10 pr-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-uc-primary focus:border-transparent">
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <select id="intg-status-filter" onchange="filterInstalledIntegrations()" class="px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-uc-primary">
+                    <option value="all">All Status</option>
+                    <option value="updates">Updates Available</option>
+                    <option value="needs-config">Needs Configuration</option>
+                    <option value="connected">Connected</option>
+                    <option value="disconnected">Disconnected</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- Integrations List -->
+    <div id="integrations-container"
+         hx-get="/api/integrations/list"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="flex items-center justify-center py-16">
+            <div class="spinner"></div>
+            <span class="ml-3 text-gray-400">Loading integrations...</span>
+        </div>
+    </div>
+</div>
+
+<script>
+function filterInstalledIntegrations() {
+    const searchTerm = document.getElementById('intg-search').value.toLowerCase();
+    const statusFilter = document.getElementById('intg-status-filter').value;
+    const cards = document.querySelectorAll('#integrations-container .integration-card');
+    
+    cards.forEach(card => {
+        const name = (card.dataset.name || '').toLowerCase();
+        const description = (card.dataset.description || '').toLowerCase();
+        const developer = (card.dataset.developer || '').toLowerCase();
+        const status = (card.dataset.status || '').toLowerCase();
+        const hasUpdate = card.dataset.hasUpdate === 'true';
+        
+        // Search filter
+        const matchesSearch = !searchTerm || 
+            name.includes(searchTerm) || 
+            description.includes(searchTerm) || 
+            developer.includes(searchTerm);
+        
+        // Status filter
+        let matchesStatus = true;
+        if (statusFilter === 'updates') {
+            matchesStatus = hasUpdate;
+        } else if (statusFilter === 'needs-config') {
+            matchesStatus = status === 'not_configured';
+        } else if (statusFilter === 'connected') {
+            matchesStatus = status === 'connected' || status === 'ok';
+        } else if (statusFilter === 'disconnected') {
+            matchesStatus = status === 'disconnected' || status === 'error';
+        }
+        
+        card.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
+    });
+}
+</script>
+{% endblock %}

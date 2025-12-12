@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Available Integrations{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-white">Available Integrations</h2>
+            <p class="mt-1 text-gray-400">
+                Discover and install new integrations for your Remote
+            </p>
+        </div>
+        <button 
+            class="inline-flex items-center px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white font-medium rounded-lg transition-colors"
+            hx-get="/api/integrations/available"
+            hx-target="#available-container"
+            hx-swap="innerHTML"
+            hx-indicator="#refresh-spinner">
+            <span id="refresh-spinner" class="htmx-indicator spinner mr-2"></span>
+            <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+        </button>
+    </div>
+
+    <!-- Category Filter -->
+    <div class="bg-uc-card rounded-xl p-4 border border-uc-border">
+        <div class="flex flex-col sm:flex-row gap-4">
+            <div class="flex-1">
+                <div class="relative">
+                    <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    <input 
+                        type="text" 
+                        id="available-search"
+                        placeholder="Search available integrations..." 
+                        oninput="filterAvailableIntegrations()"
+                        class="w-full pl-10 pr-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-uc-primary focus:border-transparent">
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <select id="available-category-filter" onchange="filterAvailableIntegrations()" class="px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-uc-primary">
+                    <option value="all">All Categories</option>
+                    <option value="home-automation">Home Automation</option>
+                    <option value="av-receiver">AV Receivers</option>
+                    <option value="media-player">Media Players</option>
+                    <option value="streaming">Streaming</option>
+                    <option value="tv">TVs</option>
+                    <option value="projector">Projectors</option>
+                    <option value="lighting">Lighting</option>
+                    <option value="audio">Audio</option>
+                    <option value="gaming">Gaming</option>
+                    <option value="security">Security</option>
+                    <option value="utility">Utilities</option>
+                    <option value="cover">Covers & Shades</option>
+                    <option value="video-processor">Video Processors</option>
+                </select>
+                <select id="available-status-filter" onchange="filterAvailableIntegrations()" class="px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-uc-primary">
+                    <option value="all">All</option>
+                    <option value="not-installed">Not Installed</option>
+                    <option value="installed">Installed</option>
+                    <option value="updates">Updates Available</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- Available Integrations Grid -->
+    <div id="available-container"
+         hx-get="/api/integrations/available"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="flex items-center justify-center py-16">
+            <div class="spinner"></div>
+            <span class="ml-3 text-gray-400">Loading available integrations...</span>
+        </div>
+    </div>
+</div>
+
+<script>
+function filterAvailableIntegrations() {
+    const searchTerm = document.getElementById('available-search').value.toLowerCase();
+    const categoryFilter = document.getElementById('available-category-filter').value;
+    const statusFilter = document.getElementById('available-status-filter').value;
+    const cards = document.querySelectorAll('#available-container .integration-card');
+    
+    cards.forEach(card => {
+        const name = (card.dataset.name || '').toLowerCase();
+        const description = (card.dataset.description || '').toLowerCase();
+        const developer = (card.dataset.developer || '').toLowerCase();
+        const categories = (card.dataset.categories || '').toLowerCase();
+        const isInstalled = card.dataset.installed === 'true';
+        const hasUpdate = card.dataset.hasUpdate === 'true';
+        
+        // Search filter - matches name, description, developer, or categories
+        const matchesSearch = !searchTerm || 
+            name.includes(searchTerm) || 
+            description.includes(searchTerm) || 
+            developer.includes(searchTerm) ||
+            categories.includes(searchTerm);
+        
+        // Category filter
+        const matchesCategory = categoryFilter === 'all' || categories.includes(categoryFilter);
+        
+        // Status filter
+        let matchesStatus = true;
+        if (statusFilter === 'installed') {
+            matchesStatus = isInstalled;
+        } else if (statusFilter === 'not-installed') {
+            matchesStatus = !isInstalled;
+        } else if (statusFilter === 'updates') {
+            matchesStatus = hasUpdate;
+        }
+        
+        card.style.display = (matchesSearch && matchesCategory && matchesStatus) ? '' : 'none';
+    });
+}
+</script>
+{% endblock %}

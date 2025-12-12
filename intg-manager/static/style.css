@@ -1,0 +1,13 @@
+/* 
+ * Custom styles for Integration Manager
+ * Most styling is handled by Tailwind CSS via CDN
+ */
+
+/* Additional custom styles can be added here */
+
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}

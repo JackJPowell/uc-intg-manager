@@ -1,41 +1,44 @@
 {
-  "driver_id": "your_device_driver",
+  "driver_id": "intg_manager_driver",
   "version": "0.1.0",
   "min_core_api": "0.20.0",
-  "name": { "en": "Your Device Name" },
+  "name": {
+    "en": "Integration Manager",
+    "de": "Integrations-Manager"
+  },
   "icon": "uc:integration",
   "description": {
-    "en": "Control your network-connected device"
+    "en": "Manage your custom integrations with a web interface. View installed integrations, check for updates, and discover new integrations.",
+    "de": "Verwalten Sie Ihre benutzerdefinierten Integrationen über eine Weboberfläche. Zeigen Sie installierte Integrationen an, suchen Sie nach Updates und entdecken Sie neue Integrationen."
   },
   "developer": {
-    "name": "Your Name",
-    "email": "your.email@example.com",
-    "url": "https://github.com/yourusername"
+    "name": "Jack Powell",
+    "email": "jackjpowell@gmail.com",
+    "url": "https://github.com/JackJPowell"
   },
-  "home_page": "https://github.com/yourusername/uc-intg-yourdevice",
+  "home_page": "https://github.com/JackJPowell/uc-intg-manager",
   "setup_data_schema": {
     "title": {
-      "en": "Integration setup",
-      "de": "Integrationssetup",
-      "fr": "Configuration de l'intégration"
+      "en": "Remote Connection",
+      "de": "Remote-Verbindung"
     },
     "settings": [
       {
         "id": "info",
         "label": {
-          "en": "Setup process",
-          "de": "Setup Fortschritt",
-          "fr": "Progression de la configuration"
+          "en": "Setup your connection",
+          "de": "Verbindung einrichten"
         },
         "field": {
           "label": {
             "value": {
-              "en": "This integration will allow you to control your device from your Unfolded Circle Remote."
+              "en": "This integration provides a web interface to manage your custom integrations. Enter your Remote's IP address and web configurator PIN to get started. The web interface is only available when the remote is docked.",
+              "de": "Diese Integration bietet eine Weboberfläche zur Verwaltung Ihrer benutzerdefinierten Integrationen. Geben Sie die IP-Adresse und den Web-Konfigurator-PIN Ihres Remotes ein. Die Weboberfläche ist nur verfügbar, wenn das Remote angedockt ist."
             }
           }
         }
       }
     ]
   },
-  "release_date": "2025-01-01"
+  "release_date": "2025-12-10"
 }

@@ -1,0 +1,30 @@
+<!-- Available Integrations List Partial - Loaded via HTMX -->
+
+{% if integrations %}
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for integration in integrations %}
+    {% include 'partials/available_card.html' %}
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="text-center py-16">
+    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+    </svg>
+    <h3 class="mt-4 text-lg font-medium text-white">No integrations available</h3>
+    <p class="mt-2 text-gray-400">
+        Unable to load the integration registry. Please check your internet connection.
+    </p>
+    <button 
+        class="mt-6 inline-flex items-center px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white font-medium rounded-lg transition-colors"
+        hx-get="/api/integrations/available"
+        hx-target="#available-container"
+        hx-swap="innerHTML">
+        <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Retry
+    </button>
+</div>
+{% endif %}

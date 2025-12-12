@@ -1,0 +1,136 @@
+<!-- Integration Detail Partial - Loaded in Modal via HTMX -->
+
+<div class="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+    <div class="flex min-h-screen items-center justify-center p-4">
+        <!-- Background overlay -->
+        <div class="fixed inset-0 bg-black/60 transition-opacity" 
+             hx-on:click="this.closest('#modal-content').innerHTML = ''; this.closest('#modal-content').classList.add('hidden')"></div>
+
+        <!-- Modal panel -->
+        <div class="relative bg-uc-card rounded-2xl border border-uc-border shadow-xl w-full max-w-lg mx-auto">
+            <!-- Header -->
+            <div class="flex items-center justify-between p-6 border-b border-uc-border">
+                <div class="flex items-center space-x-4">
+                    <div class="w-12 h-12 bg-uc-primary/20 rounded-xl flex items-center justify-center">
+                        <svg class="h-6 w-6 text-uc-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 id="modal-title" class="text-lg font-semibold text-white">{{ integration.name }}</h3>
+                        <p class="text-sm text-gray-400">v{{ integration.version }}</p>
+                    </div>
+                </div>
+                <button 
+                    class="p-2 text-gray-400 hover:text-white hover:bg-uc-darker rounded-lg transition-colors"
+                    hx-on:click="document.getElementById('modal-content').innerHTML = ''; document.getElementById('modal-content').classList.add('hidden')">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Content -->
+            <div class="p-6 space-y-6">
+                <!-- Status -->
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-400">Status</span>
+                    <div class="flex items-center space-x-2">
+                        {% if integration.state == 'CONNECTED' or integration.state == 'OK' %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/20 text-green-300">
+                            <span class="w-1.5 h-1.5 mr-1.5 bg-green-400 rounded-full"></span>
+                            Connected
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-500/20 text-gray-300">
+                            {{ integration.state }}
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Description -->
+                {% if integration.description %}
+                <div>
+                    <h4 class="text-sm font-medium text-gray-400 mb-2">Description</h4>
+                    <p class="text-sm text-white">{{ integration.description }}</p>
+                </div>
+                {% endif %}
+
+                <!-- Details Grid -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-uc-darker rounded-lg p-3">
+                        <span class="text-xs text-gray-400 block">Driver ID</span>
+                        <span class="text-sm text-white font-mono">{{ integration.driver_id }}</span>
+                    </div>
+                    <div class="bg-uc-darker rounded-lg p-3">
+                        <span class="text-xs text-gray-400 block">Instance ID</span>
+                        <span class="text-sm text-white font-mono truncate block">{{ integration.instance_id[:12] }}...</span>
+                    </div>
+                    <div class="bg-uc-darker rounded-lg p-3">
+                        <span class="text-xs text-gray-400 block">Entities</span>
+                        <span class="text-sm text-white">{{ integration.configured_entities }}</span>
+                    </div>
+                    <div class="bg-uc-darker rounded-lg p-3">
+                        <span class="text-xs text-gray-400 block">Developer</span>
+                        <span class="text-sm text-white">{{ integration.developer or 'Unknown' }}</span>
+                    </div>
+                </div>
+
+                <!-- Update Available -->
+                {% if integration.update_available %}
+                <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
+                    <div class="flex items-center">
+                        <svg class="h-5 w-5 text-yellow-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-medium text-yellow-300">Update Available</p>
+                            <p class="text-xs text-yellow-400/80">Version {{ integration.latest_version }} is available (current: {{ integration.version }})</p>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Home Page -->
+                {% if integration.home_page %}
+                <div>
+                    <h4 class="text-sm font-medium text-gray-400 mb-2">Home Page</h4>
+                    <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
+                       class="inline-flex items-center text-sm text-uc-accent hover:text-white transition-colors">
+                        {{ integration.home_page }}
+                        <svg class="h-4 w-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                        </svg>
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Footer Actions -->
+            <div class="flex items-center justify-end space-x-3 p-6 border-t border-uc-border">
+                {% if integration.update_available %}
+                <button 
+                    class="inline-flex items-center px-4 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 font-medium rounded-lg transition-colors"
+                    hx-post="/api/integration/{{ integration.instance_id }}/update"
+                    hx-swap="none">
+                    <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                    </svg>
+                    Update
+                </button>
+                {% endif %}
+                <button 
+                    class="px-4 py-2 bg-uc-darker hover:bg-uc-border text-white font-medium rounded-lg transition-colors"
+                    hx-on:click="document.getElementById('modal-content').innerHTML = ''; document.getElementById('modal-content').classList.add('hidden')">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Show the modal
+    document.getElementById('modal-content').classList.remove('hidden');
+</script>

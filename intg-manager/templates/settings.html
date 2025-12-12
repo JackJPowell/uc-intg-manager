@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Integration Manager{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold text-white mb-2">Settings</h1>
+    <p class="text-gray-400">Configure your Integration Manager preferences</p>
+</div>
+
+<!-- Settings Form -->
+<form id="settings-form" hx-post="/api/settings" hx-target="#save-result" hx-swap="innerHTML">
+    
+    <!-- Web Server Settings -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+            </svg>
+            Web Server
+        </h2>
+        
+        <div class="space-y-4">
+            <label class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-700">
+                <div>
+                    <div class="text-white font-medium">Shutdown on Battery</div>
+                    <div class="text-sm text-gray-400">
+                        Stop the web server when the remote is removed from the dock.
+                        Helps conserve battery life.
+                    </div>
+                </div>
+                <input type="checkbox" name="shutdown_on_battery" 
+                       class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
+                       {% if settings.shutdown_on_battery %}checked{% endif %}>
+            </label>
+        </div>
+    </div>
+
+    <!-- Update Settings -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Updates
+        </h2>
+        
+        <div class="space-y-4">
+            <label class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-700">
+                <div>
+                    <div class="text-white font-medium">Auto Update Integrations</div>
+                    <div class="text-sm text-gray-400">
+                        Automatically install updates when new versions are available.
+                        Updates occur while the remote is docked. <br>Only integrations that support 
+                        backup/restore will be auto-updated to ensure safe rollback if needed.
+                    </div>
+                </div>
+                <input type="checkbox" name="auto_update" 
+                       class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
+                       {% if settings.auto_update %}checked{% endif %}>
+            </label>
+        </div>
+    </div>
+
+    <!-- Backup Settings -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+            </svg>
+            Backups
+        </h2>
+        
+        <div class="space-y-4">
+            <label class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-700">
+                <div>
+                    <div class="text-white font-medium">Backup Integration Configs</div>
+                    <div class="text-sm text-gray-400">
+                        Automatically backup configuration files for installed integrations.
+                        Backups are stored in /data/backups.
+                    </div>
+                </div>
+                <input type="checkbox" name="backup_configs" 
+                       class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
+                       {% if settings.backup_configs %}checked{% endif %}>
+            </label>
+            
+            <div class="p-4 bg-gray-700/50 rounded-lg">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="text-white font-medium">Backup Time</div>
+                        <div class="text-sm text-gray-400">What time each day to create backups</div>
+                    </div>
+                    <input type="time" name="backup_time" 
+                           value="{{ settings.backup_time or '02:00' }}"
+                           class="px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white text-center focus:ring-blue-500 focus:border-blue-500">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save Button and Result -->
+    <div class="flex items-center gap-4">
+        <button type="submit" 
+                class="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+            Save Settings
+        </button>
+        <div id="save-result"></div>
+    </div>
+</form>
+
+<!-- Backup Management -->
+<div class="mt-8 bg-gray-800 rounded-lg p-6">
+    <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+        </svg>
+        Backup & Restore
+    </h2>
+    
+    <!-- Export/Import Section -->
+    <div class="mb-6 pb-6 border-b border-gray-700">
+        <h3 class="text-lg font-medium text-white mb-3">Export & Import Data</h3>
+        <p class="text-sm text-gray-400 mb-4">Download or restore a complete backup file containing all integration configs and app settings. Use this before upgrading Integration Manager.</p>
+        
+        <div class="flex items-center gap-4 flex-wrap">
+            <!-- Download Complete Backup -->
+            <a href="/api/backups/download"
+               class="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center gap-2"
+               download="uc_integration_manager_backup.json">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Export Backup File
+            </a>
+            
+            <!-- Upload Complete Backup -->
+            <label class="px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-colors flex items-center gap-2 cursor-pointer">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                </svg>
+                Import Backup File
+                <input type="file" id="backup-upload" accept=".json" class="hidden" 
+                       onchange="uploadBackupFile(this)"/>
+            </label>
+        </div>
+    </div>
+    
+    <!-- Integration Configs Section -->
+    <div>
+        <h3 class="text-lg font-medium text-white mb-3">Integration Configurations</h3>
+        <p class="text-sm text-gray-400 mb-4">Capture current configuration snapshots from installed integrations. These are saved locally and can be restored through the Integrations page.</p>
+        
+        <div class="flex items-center gap-4 flex-wrap">
+            <button hx-post="/api/backups/create" 
+                    hx-target="#backup-result"
+                    hx-swap="innerHTML"
+                    class="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                Capture Configs Now
+            </button>
+            
+            <button hx-get="/api/backups/list" 
+                    hx-target="#backup-list"
+                    hx-swap="innerHTML"
+                    class="px-4 py-2 bg-gray-600 text-white rounded-lg font-medium hover:bg-gray-500 transition-colors flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+                View Saved Configs
+            </button>
+        </div>
+        
+        <div id="backup-result" class="mt-4"></div>
+        <div id="backup-list" class="mt-4"></div>
+        <div id="backup-content"></div>
+    </div>
+    
+    <script>
+        function uploadBackupFile(input) {
+            const file = input.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/api/backups/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                const resultDiv = document.getElementById('backup-result');
+                if (data.status === 'ok') {
+                    resultDiv.innerHTML = '<div class=\"text-green-400\">' + data.message + '</div>';
+                    // Refresh backup list
+                    htmx.trigger('#backup-list', 'load');
+                } else {
+                    resultDiv.innerHTML = '<div class=\"text-red-400\">Error: ' + data.message + '</div>';
+                }
+                // Clear file input
+                input.value = '';
+            })
+            .catch(error => {
+                document.getElementById('backup-result').innerHTML = 
+                    '<div class=\"text-red-400\">Upload failed: ' + error + '</div>';
+                input.value = '';
+            });
+        }
+    </script>
+</div>
+
+<!-- Remote Connection Info -->
+<div class="mt-8 bg-gray-800 rounded-lg p-6">
+    <h2 class="text-xl font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        Connection Info
+    </h2>
+    
+    <div class="grid grid-cols-2 gap-4 text-sm">
+        <div class="p-3 bg-gray-700/50 rounded-lg">
+            <div class="text-gray-400">Remote Address</div>
+            <div class="text-white font-mono">{{ remote_address or 'Not configured' }}</div>
+        </div>
+        <div class="p-3 bg-gray-700/50 rounded-lg">
+            <div class="text-gray-400">Web Server Port</div>
+            <div class="text-white font-mono">{{ web_server_port }}</div>
+        </div>
+    </div>
+</div>
+{% endblock %}

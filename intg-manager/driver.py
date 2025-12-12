@@ -1,12 +1,10 @@
 """
-Remote Two/3 Integration Driver.
+Integration Manager Driver.
 
-This is the main entry point for the integration driver. It initializes
+This is the main entry point for the integration manager. It initializes
 the driver, sets up logging, and starts the integration API.
 
-TODO: Replace "YourDevice" references with your actual device name.
-
-:copyright: (c) 2025 by Your Name.
+:copyright: (c) 2025.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
@@ -14,30 +12,36 @@ import asyncio
 import logging
 import os
 
-from const import DeviceConfig
-from device import Device
-from discover import DeviceDiscovery
-from media_player import DeviceMediaPlayer
-from setup import DeviceSetupFlow
+from const import RemoteConfig
+from device import IntegrationManagerDevice
+from discover import ManagerDiscovery
+from log_handler import setup_log_handler
+from setup import RemoteSetupFlow
 from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, get_config_path
 
 
 async def main():
-    """Start the Remote Two integration driver."""
+    """Start the Integration Manager driver."""
     logging.basicConfig()
+
+    # Set up the ring buffer log handler to capture logs for the web UI
+    setup_log_handler()
 
     # Configure logging level from environment variable
     level = os.getenv("UC_LOG_LEVEL", "DEBUG").upper()
     logging.getLogger("driver").setLevel(level)
-    logging.getLogger("media_player").setLevel(level)
     logging.getLogger("device").setLevel(level)
-    logging.getLogger("setup_flow").setLevel(level)
+    logging.getLogger("setup").setLevel(level)
+    logging.getLogger("web_server").setLevel(level)
+    logging.getLogger("remote_api").setLevel(level)
+    logging.getLogger("github_api").setLevel(level)
+    logging.getLogger("integration_service").setLevel(level)
 
     # Initialize the integration driver
-    # TODO: Add additional entity classes if your device supports them
-    # Available entity types: MediaPlayer, Remote, Light, Switch, Climate, etc.
+    # This integration doesn't expose entities - it's purely a web UI
     driver = BaseIntegrationDriver(
-        device_class=Device, entity_classes=[DeviceMediaPlayer]
+        device_class=IntegrationManagerDevice,
+        entity_classes=[],  # No entities exposed
     )
 
     # Configure the device config manager
@@ -45,16 +49,15 @@ async def main():
         get_config_path(driver.api.config_dir_path),
         driver.on_device_added,
         driver.on_device_removed,
-        config_class=DeviceConfig,
+        config_class=RemoteConfig,
     )
 
     # Register all configured devices from config file
     await driver.register_all_configured_devices()
 
-    # Set up device discovery (optional - remove if not using discovery)
-    # TODO: Update the discovery parameters for your device's discovery protocol
-    discovery = DeviceDiscovery(timeout=1, service_type="_yourdevice._tcp.local.")
-    setup_handler = DeviceSetupFlow.create_handler(driver, discovery=discovery)
+    # Set up the setup handler
+    discovery = ManagerDiscovery("_uc-remote._tcp.local.", timeout=2)
+    setup_handler = RemoteSetupFlow.create_handler(driver, discovery=discovery)
 
     # Initialize the API with the driver configuration
     await driver.api.init("driver.json", setup_handler)

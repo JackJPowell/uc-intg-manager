@@ -1,29 +1,28 @@
 [project]
-# TODO: Update project name to match your integration
-name = "uc-intg-template"
-version = "0.1.0"
-description = "Unfolded Circle Integration Template"
+name = "uc-intg-manager"
+version = "1.0.0"
+description = "Unfolded Circle Integration Manager - Web interface for managing custom integrations"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MPL-2.0"
 
-# TODO: Update author information
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Jack Powell", email = "jackjpowell@gmail.com" }
 ]
 
-# TODO: Update repository URL
-urls.Homepage = "https://github.com/yourusername/uc-intg-yourdevice"
-urls.Repository = "https://github.com/yourusername/uc-intg-yourdevice"
+urls.Homepage = "https://github.com/JackJPowell/uc-intg-manager"
+urls.Repository = "https://github.com/JackJPowell/uc-intg-manager"
 
 dependencies = [
     # Core dependencies
     "ucapi==0.4.0",
     "ucapi-framework==1.2.2",
     "pyee>=9.0",
-    
-    # Discovery protocols
-    
-    # TODO: Add your device-specific library here
-    # "your-device-library==1.0.0",
+    # Web framework
+    "flask>=3.0.0",
+    "werkzeug>=3.0.0",
+    # HTTP client
+    "aiohttp>=3.9.0",
+    "requests>=2.32.5",
+    "packaging>=25.0",
 ]

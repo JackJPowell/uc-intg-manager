@@ -3,8 +3,13 @@ ucapi==0.4.0
 ucapi-framework==1.2.2
 pyee>=9.0
 
-# Discovery protocols (include what you need)
+# Web framework
+flask>=3.0.0
+werkzeug>=3.0.0
 
-# TODO: Add your device-specific library here
-# Example:
-# your-device-library==1.0.0
+# HTTP clients
+aiohttp>=3.9.0
+requests>=2.31.0
+
+#Other dependencies
+packaging>=25.0
