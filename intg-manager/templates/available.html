@@ -5,15 +5,15 @@
 {% block content %}
 <div class="space-y-6">
     <!-- Page Header -->
-    <div class="flex items-center justify-between">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
         <div>
-            <h2 class="text-2xl font-bold text-white">Available Integrations</h2>
-            <p class="mt-1 text-gray-400">
+            <h2 class="text-xl sm:text-2xl font-bold text-white">Available Integrations</h2>
+            <p class="mt-1 text-sm sm:text-base text-gray-400">
                 Discover and install new integrations for your Remote
             </p>
         </div>
         <button 
-            class="inline-flex items-center px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white font-medium rounded-lg transition-colors"
+            class="inline-flex items-center justify-center px-3 sm:px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white text-sm font-medium rounded-lg transition-colors"
             hx-get="/api/integrations/available"
             hx-target="#available-container"
             hx-swap="innerHTML"
@@ -42,8 +42,8 @@
                         class="w-full pl-10 pr-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-uc-primary focus:border-transparent">
                 </div>
             </div>
-            <div class="flex gap-2">
-                <select id="available-category-filter" onchange="filterAvailableIntegrations()" class="px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-uc-primary">
+            <div class="flex flex-col sm:flex-row gap-2">
+                <select id="available-category-filter" onchange="filterAvailableIntegrations()" class="px-3 sm:px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-uc-primary">
                     <option value="all">All Categories</option>
                     <option value="home-automation">Home Automation</option>
                     <option value="av-receiver">AV Receivers</option>
@@ -59,7 +59,7 @@
                     <option value="cover">Covers & Shades</option>
                     <option value="video-processor">Video Processors</option>
                 </select>
-                <select id="available-status-filter" onchange="filterAvailableIntegrations()" class="px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-uc-primary">
+                <select id="available-status-filter" onchange="filterAvailableIntegrations()" class="px-3 sm:px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-uc-primary">
                     <option value="all">All</option>
                     <option value="not-installed">Not Installed</option>
                     <option value="installed">Installed</option>

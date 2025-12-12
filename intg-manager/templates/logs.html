@@ -3,33 +3,33 @@
 {% block title %}Logs - Integration Manager{% endblock %}
 
 {% block content %}
-<div class="mb-8">
-    <div class="flex justify-between items-center">
+<div class="mb-6 sm:mb-8">
+    <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div>
-            <h1 class="text-3xl font-bold text-white mb-2">Application Logs</h1>
-            <p class="text-gray-400">Last {{ log_count }} log messages (newest first)</p>
+            <h1 class="text-2xl sm:text-3xl font-bold text-white mb-2">Application Logs</h1>
+            <p class="text-sm sm:text-base text-gray-400">Last {{ log_count }} log messages (newest first)</p>
         </div>
-        <div class="flex gap-3">
+        <div class="flex gap-2 sm:gap-3">
             <button type="button"
                     hx-get="/api/logs/entries"
                     hx-target="#log-entries"
                     hx-swap="innerHTML"
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2">
+                    class="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
-                Refresh
+                <span class="hidden sm:inline">Refresh</span>
             </button>
             <button type="button"
                     hx-post="/api/logs/clear"
                     hx-target="#log-entries"
                     hx-swap="innerHTML"
                     hx-confirm="Are you sure you want to clear all logs?"
-                    class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-2">
+                    class="px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                 </svg>
-                Clear
+                <span class="hidden sm:inline">Clear</span>
             </button>
         </div>
     </div>
@@ -53,19 +53,19 @@
 
 <!-- Log Entries Container -->
 <div class="bg-gray-800 rounded-lg overflow-hidden">
-    <div id="log-entries" class="divide-y divide-gray-700 max-h-[70vh] overflow-y-auto font-mono text-sm">
+    <div id="log-entries" class="divide-y divide-gray-700 max-h-[70vh] overflow-auto font-mono text-xs sm:text-sm">
         {% if entries %}
             {% for entry in entries %}
-            <div class="p-3 hover:bg-gray-750 {% if entry.level == 'ERROR' %}bg-red-900/20{% elif entry.level == 'WARNING' %}bg-yellow-900/20{% endif %}">
-                <div class="flex items-start gap-3">
+            <div class="p-3 sm:p-4 hover:bg-gray-750 {% if entry.level == 'ERROR' %}bg-red-900/20{% elif entry.level == 'WARNING' %}bg-yellow-900/20{% endif %}">
+                <div class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3">
                     <!-- Level indicator -->
-                    <span class="w-2 h-2 mt-1.5 rounded-full flex-shrink-0 {% if entry.level == 'ERROR' %}bg-red-500{% elif entry.level == 'WARNING' %}bg-yellow-500{% else %}bg-blue-500{% endif %}"></span>
+                    <span class="w-2 h-2 mt-1 sm:mt-1.5 rounded-full flex-shrink-0 {% if entry.level == 'ERROR' %}bg-red-500{% elif entry.level == 'WARNING' %}bg-yellow-500{% else %}bg-blue-500{% endif %}"></span>
                     
                     <!-- Timestamp -->
-                    <span class="text-gray-500 flex-shrink-0 w-36">{{ entry.timestamp }}</span>
+                    <span class="text-gray-500 flex-shrink-0 text-xs">{{ entry.timestamp }}</span>
                     
                     <!-- Logger name -->
-                    <span class="text-purple-400 flex-shrink-0 w-32 truncate" title="{{ entry.logger }}">{{ entry.logger }}</span>
+                    <span class="text-purple-400 flex-shrink-0 truncate text-xs" title="{{ entry.logger }}">{{ entry.logger }}</span>
                     
                     <!-- Message -->
                     <span class="text-gray-300 break-all">{{ entry.message }}</span>

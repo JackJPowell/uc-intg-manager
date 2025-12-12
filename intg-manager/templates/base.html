@@ -83,16 +83,24 @@
     <div class="min-h-full flex flex-col">
         <!-- Header -->
         <header class="bg-uc-dark border-b border-uc-border">
-            <div class="max-w-12xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8">
                 <div class="flex items-center justify-between h-16">
-                    <div class="flex items-center">
-                        <div class="flex-shrink-0">
-                            <svg class="h-8 w-8 text-uc-primary" viewBox="0 0 24 24" fill="currentColor">
+                    <div class="flex items-center space-x-2 sm:space-x-3">
+                        <!-- Mobile Menu Button -->
+                        <button id="mobile-menu-button" class="lg:hidden p-2 rounded-lg text-gray-400 hover:text-white hover:bg-uc-card focus:outline-none" onclick="toggleMobileMenu()">
+                            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path id="menu-icon" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                                <path id="close-icon" class="hidden" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                        
+                        <div class="flex-shrink-0 flex items-center space-x-2 sm:space-x-3">
+                            <svg class="h-6 sm:h-8 w-6 sm:w-8 text-uc-primary" viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                             </svg>
-                        </div>
-                        <div class="ml-4">
-                            <h1 class="text-xl font-bold text-white">Integration Manager</h1>
+                            <div>
+                                <h1 class="text-base sm:text-xl font-bold text-white">Integration Manager</h1>
+                            </div>
                         </div>
                     </div>
                     <div id="status-indicator" 
@@ -107,9 +115,12 @@
         </header>
 
         <!-- Main Content -->
-        <div class="flex-1 flex">
+        <div class="flex-1 flex relative">
+            <!-- Mobile Overlay -->
+            <div id="mobile-overlay" class="hidden lg:hidden fixed inset-0 bg-black bg-opacity-50 z-20" onclick="toggleMobileMenu()"></div>
+            
             <!-- Sidebar Navigation -->
-            <nav class="w-64 bg-uc-dark border-r border-uc-border flex-shrink-0">
+            <nav id="mobile-sidebar" class="fixed lg:static inset-y-0 left-0 transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out z-30 w-64 bg-uc-dark border-r border-uc-border flex-shrink-0">
                 <div class="p-4 space-y-2">
                     <h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
                         Management
@@ -166,7 +177,7 @@
 
             <!-- Main Content Area -->
             <main class="flex-1 overflow-auto">
-                <div class="max-w-7xl mx-auto px-6 py-8">
+                <div class="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
                     {% block content %}{% endblock %}
                 </div>
             </main>
@@ -174,12 +185,12 @@
 
         <!-- Footer -->
         <footer class="bg-uc-dark border-t border-uc-border">
-            <div class="max-w-12xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-                <div class="flex items-center justify-between text-sm text-gray-400">
+            <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8 py-4">
+                <div class="flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-0 text-xs sm:text-sm text-gray-400">
                     <div>
-                        Integration Manager v1.0.1
+                        Integration Manager v1.0.5
                     </div>
-                    <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-3 sm:space-x-4">
                         <a href="https://github.com/jackjpowell/uc-intg-manager" target="_blank" rel="noopener" 
                            class="hover:text-white transition-colors">
                             GitHub
@@ -194,5 +205,33 @@
             </div>
         </footer>
     </div>
+    
+    <!-- Mobile Menu Toggle Script -->
+    <script>
+        function toggleMobileMenu() {
+            const sidebar = document.getElementById('mobile-sidebar');
+            const overlay = document.getElementById('mobile-overlay');
+            const menuIcon = document.getElementById('menu-icon');
+            const closeIcon = document.getElementById('close-icon');
+            
+            sidebar.classList.toggle('-translate-x-full');
+            overlay.classList.toggle('hidden');
+            menuIcon.classList.toggle('hidden');
+            closeIcon.classList.toggle('hidden');
+        }
+        
+        // Close menu when clicking a link on mobile
+        document.addEventListener('DOMContentLoaded', function() {
+            const sidebar = document.getElementById('mobile-sidebar');
+            const links = sidebar.querySelectorAll('a');
+            links.forEach(link => {
+                link.addEventListener('click', function() {
+                    if (window.innerWidth < 1024) {
+                        toggleMobileMenu();
+                    }
+                });
+            });
+        });
+    </script>
 </body>
 </html>

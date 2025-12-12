@@ -1458,7 +1458,7 @@ def _build_error_card(driver_id: str, registry: list, error_msg: str) -> str:
         '''
 
     return f'''
-<div class="integration-card relative bg-uc-card rounded-xl p-5 border border-red-500/50"
+<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border border-red-500/50"
      id="card-{driver_id}"
      data-name="{name}"
      data-description="{description}"
@@ -1467,26 +1467,26 @@ def _build_error_card(driver_id: str, registry: list, error_msg: str) -> str:
      data-installed="false"
      data-status="error">
     <div class="flex flex-col h-full">
-        <div class="flex items-start justify-between mb-3">
-            <div class="flex items-center space-x-3">
+        <div class="flex items-start justify-between gap-2 mb-3">
+            <div class="flex items-center space-x-3 min-w-0 flex-1">
                 <div class="flex-shrink-0 w-10 h-10 {bg_color} rounded-lg flex items-center justify-center">
                     <i class="fa-solid fa-puzzle-piece text-lg {icon_color}"></i>
                 </div>
-                <div>
-                    <h4 class="font-semibold text-white text-sm">{name}</h4>
+                <div class="min-w-0">
+                    <h4 class="font-semibold text-white text-sm truncate">{name}</h4>
                 </div>
             </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-300" title="{error_msg}">
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-300 flex-shrink-0" title="{error_msg}">
                 Failed
             </span>
         </div>
         <p class="text-sm text-gray-400 flex-1 mb-4 line-clamp-2">{description or "No description available"}</p>
-        <div class="flex items-center justify-between pt-3 border-t border-uc-border">
-            <div class="flex items-center space-x-2 text-xs text-gray-500">
+        <div class="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-uc-border">
+            <div class="flex items-center flex-wrap gap-2 text-xs text-gray-500 min-w-0">
                 <span>{developer}</span>
                 {f'<span class="inline-flex items-center px-2 py-0.5 rounded bg-uc-darker text-gray-400">{category}</span>' if category else ""}
             </div>
-            <div class="flex items-center space-x-2">
+            <div class="flex items-center flex-wrap gap-2">
                 {github_link}
                 <button 
                     class="install-btn inline-flex items-center px-3 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1661,7 +1661,7 @@ def install_integration(driver_id: str):
             _LOG.info("Lock released after successful install of %s", driver_id)
 
         return f'''
-<div class="integration-card relative bg-uc-card rounded-xl p-5 border border-uc-border opacity-80"
+<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border border-uc-border opacity-80"
      id="card-{driver_id}"
      data-name="{name}"
      data-description="{description}"
@@ -1670,26 +1670,26 @@ def install_integration(driver_id: str):
      data-installed="true"
      data-status="installed">
     <div class="flex flex-col h-full">
-        <div class="flex items-start justify-between mb-3">
-            <div class="flex items-center space-x-3">
+        <div class="flex items-start justify-between gap-2 mb-3">
+            <div class="flex items-center space-x-3 min-w-0 flex-1">
                 <div class="flex-shrink-0 w-10 h-10 {bg_color} rounded-lg flex items-center justify-center">
                     <i class="fa-solid fa-puzzle-piece text-lg {icon_color}"></i>
                 </div>
-                <div>
-                    <h4 class="font-semibold text-white text-sm">{name}</h4>
+                <div class="min-w-0">
+                    <h4 class="font-semibold text-white text-sm truncate">{name}</h4>
                 </div>
             </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-300" title="Driver installed - needs configuration">
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-300 flex-shrink-0" title="Driver installed - needs configuration">
                 Installed
             </span>
         </div>
         <p class="text-sm text-gray-400 flex-1 mb-4 line-clamp-2">{description or "No description available"}</p>
-        <div class="flex items-center justify-between pt-3 border-t border-uc-border">
-            <div class="flex items-center space-x-2 text-xs text-gray-500">
+        <div class="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-uc-border">
+            <div class="flex items-center flex-wrap gap-2 text-xs text-gray-500 min-w-0">
                 <span>{developer}</span>
                 {f'<span class="inline-flex items-center px-2 py-0.5 rounded bg-uc-darker text-gray-400">{category}</span>' if category else ""}
             </div>
-            <div class="flex items-center space-x-2">
+            <div class="flex items-center flex-wrap gap-2">
                 {github_link}
                 <span class="inline-flex items-center text-xs text-green-400">
                     <i class="fa-solid fa-check mr-1"></i>
@@ -1932,7 +1932,7 @@ def get_status_html():
             '<i class="fa-regular fa-battery-half mr-1.5"></i>On Battery</span>'
         )
         server_badge = (
-            '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/20 text-green-300">'
+            '<span class="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/20 text-green-300">'
             '<span class="w-1.5 h-1.5 mr-1.5 bg-green-400 rounded-full animate-pulse"></span>Running</span>'
         )
         return f"{docked_badge} {server_badge}"

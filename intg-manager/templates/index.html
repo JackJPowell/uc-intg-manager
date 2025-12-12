@@ -6,15 +6,15 @@
 <div class="space-y-8">
     <!-- Page Header -->
     <div>
-        <h2 class="text-2xl font-bold text-white">Dashboard</h2>
-        <p class="mt-1 text-gray-400">
+        <h2 class="text-xl sm:text-2xl font-bold text-white">Dashboard</h2>
+        <p class="mt-1 text-sm sm:text-base text-gray-400">
             Overview of your integration status
         </p>
     </div>
 
     <!-- Quick Stats -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
+        <div class="bg-uc-card rounded-xl p-4 sm:p-6 border border-uc-border">
             <div class="flex items-center">
                 <div class="p-3 bg-uc-primary/20 rounded-lg">
                     <svg class="h-6 w-6 text-uc-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -34,7 +34,7 @@
             </div>
         </div>
 
-        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+        <div class="bg-uc-card rounded-xl p-4 sm:p-6 border border-uc-border">
             <div class="flex items-center">
                 <div class="p-3 bg-yellow-500/20 rounded-lg">
                     <svg class="h-6 w-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -54,7 +54,7 @@
             </div>
         </div>
 
-        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+        <div class="bg-uc-card rounded-xl p-4 sm:p-6 border border-uc-border">
             <div class="flex items-center">
                 <div class="p-3 bg-green-500/20 rounded-lg">
                     <svg class="h-6 w-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -71,13 +71,13 @@
 
     <!-- Recent Integrations -->
     <div class="bg-uc-card rounded-xl border border-uc-border">
-        <div class="px-6 py-4 border-b border-uc-border flex items-center justify-between">
-            <h3 class="text-lg font-semibold text-white">Your Integrations</h3>
+        <div class="px-4 sm:px-6 py-4 border-b border-uc-border flex items-center justify-between">
+            <h3 class="text-base sm:text-lg font-semibold text-white">Your Integrations</h3>
             <a href="/integrations" class="text-sm text-uc-accent hover:text-white transition-colors">
                 View all →
             </a>
         </div>
-        <div class="p-6" 
+        <div class="p-3 sm:p-6" 
              id="integrations-preview"
              hx-get="/api/integrations/list" 
              hx-trigger="load"
@@ -90,8 +90,8 @@
     </div>
 
     <!-- Quick Actions -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <a href="/available" class="group bg-uc-card rounded-xl p-6 border border-uc-border hover:border-uc-primary transition-colors">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-6">
+        <a href="/available" class="group bg-uc-card rounded-xl p-4 sm:p-6 border border-uc-border hover:border-uc-primary transition-colors">
             <div class="flex items-center">
                 <div class="p-3 bg-uc-primary/20 rounded-lg group-hover:bg-uc-primary/30 transition-colors">
                     <svg class="h-6 w-6 text-uc-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -99,13 +99,13 @@
                     </svg>
                 </div>
                 <div class="ml-4">
-                    <h4 class="text-lg font-medium text-white">Browse Integrations</h4>
+                    <h4 class="text-base sm:text-lg font-medium text-white">Browse Integrations</h4>
                     <p class="text-sm text-gray-400">Discover and install new integrations</p>
                 </div>
             </div>
         </a>
 
-        <button disabled class="group bg-uc-card rounded-xl p-6 border border-uc-border opacity-50 cursor-not-allowed text-left">
+        <button disabled class="group bg-uc-card rounded-xl p-4 sm:p-6 border border-uc-border opacity-50 cursor-not-allowed text-left">
             <div class="flex items-center">
                 <div class="p-3 bg-gray-500/20 rounded-lg">
                     <svg class="h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -113,7 +113,7 @@
                     </svg>
                 </div>
                 <div class="ml-4">
-                    <h4 class="text-lg font-medium text-white">Update All</h4>
+                    <h4 class="text-base sm:text-lg font-medium text-white">Update All</h4>
                     <p class="text-sm text-gray-400">Coming soon</p>
                 </div>
             </div>

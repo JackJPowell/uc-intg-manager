@@ -1,5 +1,5 @@
 <!-- Available Integration Card Partial -->
-<div class="integration-card relative bg-uc-card rounded-xl p-5 border border-uc-border {% if not integration.official and not integration.installed and not integration.external %}hover:border-uc-primary/50{% endif %}"
+<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border border-uc-border {% if not integration.official and not integration.installed and not integration.external %}hover:border-uc-primary/50{% endif %}"
      id="card-{{ integration.driver_id }}"
      data-name="{{ integration.name }}"
      data-description="{{ integration.description }}"
@@ -10,8 +10,8 @@
      data-status="{{ integration.install_status }}">
     <div class="flex flex-col h-full">
         <!-- Header -->
-        <div class="flex items-start justify-between mb-3">
-            <div class="flex items-center space-x-3">
+        <div class="flex items-start justify-between gap-2 mb-3">
+            <div class="flex items-center space-x-3 min-w-0 flex-1">
                 <!-- Icon - default color for all -->
                 {% set icon_color = 'text-uc-primary' %}
                 {% set bg_color = 'bg-uc-primary/20' %}
@@ -20,8 +20,8 @@
                 <div class="flex-shrink-0 w-10 h-10 {{ bg_color }} rounded-lg flex items-center justify-center">
                     <i class="fa-solid fa-{{ integration.icon or 'puzzle-piece' }} text-lg {{ icon_color }}"></i>
                 </div>
-                <div>
-                    <h4 class="font-semibold text-white text-sm">{{ integration.name }}</h4>
+                <div class="min-w-0">
+                    <h4 class="font-semibold text-white text-sm sm:text-base truncate">{{ integration.name }}</h4>
                     {% if integration.version %}
                     <span class="text-xs text-gray-500">v{{ integration.version }}</span>
                     {% endif %}
@@ -68,8 +68,8 @@
         </p>
         
         <!-- Footer -->
-        <div class="flex items-center justify-between pt-3 border-t border-uc-border">
-            <div class="flex items-center space-x-2 text-xs text-gray-500">
+        <div class="flex items-center justify-between gap-2 pt-3 border-t border-uc-border">
+            <div class="flex items-center flex-wrap gap-2 text-xs text-gray-500 min-w-0">
                 {% if integration.developer %}
                 <span>{{ integration.developer }}</span>
                 {% endif %}
@@ -80,7 +80,7 @@
                 {% endif %}
             </div>
             
-            <div class="flex items-center space-x-2" id="actions-{{ integration.driver_id }}">
+            <div class="flex items-center flex-wrap gap-2" id="actions-{{ integration.driver_id }}">
                 {% if integration.home_page %}
                 <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
                    class="p-1.5 text-gray-400 hover:text-white hover:bg-uc-darker rounded transition-colors"
