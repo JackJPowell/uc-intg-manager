@@ -1,6 +1,6 @@
 {
   "driver_id": "intg_manager_driver",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "min_core_api": "0.20.0",
   "name": {
     "en": "Integration Manager",

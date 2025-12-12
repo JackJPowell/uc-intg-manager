@@ -40,15 +40,19 @@ _LOG = logging.getLogger(__name__)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # Get template and static directories from source
-TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+# Use absolute path to handle frozen/bundled environments
+TEMPLATE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "templates"))
+STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "static"))
 
-# Create Flask app
+# Create Flask app with cache disabled for read-only filesystems
 app = Flask(
     __name__,
     template_folder=TEMPLATE_DIR,
     static_folder=STATIC_DIR,
 )
+# Disable Jinja2 bytecode cache to avoid writing to read-only filesystem
+app.jinja_env.auto_reload = True
+app.jinja_env.cache = {}
 
 # Will be set by WebServer class
 _remote_client: SyncRemoteClient | None = None
