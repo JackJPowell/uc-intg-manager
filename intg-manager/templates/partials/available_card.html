@@ -38,7 +38,7 @@
                 External
             </span>
             {% elif integration.update_available %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-300" title="Update available: {{ integration.latest_version }}">
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-300" title="{% if integration.can_update %}Update available: {{ integration.latest_version }}{% else %}Update available but requires manual upgrade (version too old for automatic update){% endif %}">
                 <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
                 </svg>
@@ -97,7 +97,7 @@
                 </a>
                 {% elif integration.external %}
                 <span class="text-xs text-blue-400 italic">Via Docker</span>
-                {% elif integration.update_available %}
+                {% elif integration.update_available and integration.can_update %}
                 <!-- Update button for installed integrations with updates -->
                 <span class="text-xs text-gray-400">v{{ integration.version }}</span>
                 <span class="text-gray-500">→</span>
@@ -139,7 +139,7 @@
         </div>
     </div>
     <!-- Overlay for install/update - positioned as direct child of card for proper centering -->
-    {% if not integration.official and not integration.external and (not integration.installed or integration.update_available) %}
+    {% if not integration.official and not integration.external and (not integration.installed or (integration.update_available and integration.can_update)) %}
     <div id="overlay-{{ integration.driver_id }}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-uc-primary mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">

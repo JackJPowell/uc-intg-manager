@@ -101,6 +101,7 @@ class IntegrationInfo:
     external: bool = False  # Running externally (Docker/network)
     configured_entities: int = 0
     supports_backup: bool = False  # Uses ucapi-framework with backup support
+    can_update: bool = False  # Version meets minimum requirement for updates
 
 
 @dataclass
@@ -124,6 +125,7 @@ class AvailableIntegration:
     update_available: bool = False
     latest_version: str = ""
     instance_id: str = ""  # Instance ID if configured
+    can_update: bool = False  # Version meets minimum requirement for updates
 
     @property
     def install_status(self) -> str:
@@ -340,6 +342,7 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
         if is_custom and driver_id in _cached_version_data:
             version_info = _cached_version_data[driver_id]
             if version_info.get("has_update"):
+                # Always mark that an update is available (for badge display)
                 info.update_available = True
                 info.latest_version = version_info.get("latest", "")
                 _LOG.debug(
@@ -348,6 +351,23 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
                     info.version,
                     info.latest_version,
                 )
+
+                # Check if current version meets minimum version requirement for updates
+                min_version = registry_item.get("backup_min_version")
+                info.can_update = True
+                if min_version:
+                    try:
+                        if Version(info.version) < Version(min_version):
+                            info.can_update = False
+                            _LOG.debug(
+                                "Update button hidden for %s: current version %s is below minimum %s",
+                                driver_id,
+                                info.version,
+                                min_version,
+                            )
+                    except (InvalidVersion, TypeError):
+                        # If version parsing fails, allow update
+                        pass
 
         integrations.append(info)
 
@@ -415,8 +435,26 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
         if is_custom and driver_id in _cached_version_data:
             version_info = _cached_version_data[driver_id]
             if version_info.get("has_update"):
+                # Always mark that an update is available (for badge display)
                 info.update_available = True
                 info.latest_version = version_info.get("latest", "")
+
+                # Check if current version meets minimum version requirement for updates
+                min_version = registry_item.get("backup_min_version")
+                info.can_update = True
+                if min_version:
+                    try:
+                        if Version(info.version) < Version(min_version):
+                            info.can_update = False
+                            _LOG.debug(
+                                "Update button hidden for %s: current version %s is below minimum %s",
+                                driver_id,
+                                info.version,
+                                min_version,
+                            )
+                    except (InvalidVersion, TypeError):
+                        # If version parsing fails, allow update
+                        pass
 
         integrations.append(info)
 
@@ -521,13 +559,32 @@ def _get_available_integrations() -> list[AvailableIntegration]:
         # Check for updates for installed custom integrations using cached data
         update_available = False
         latest_version = ""
+        can_update = False
         if is_installed and not is_official and not is_external:
             # Use the actual driver_id from the remote (not registry id) for cache lookup
             if actual_driver_id and actual_driver_id in _cached_version_data:
                 version_info = _cached_version_data[actual_driver_id]
                 if version_info.get("has_update"):
+                    # Always mark that an update is available (for badge display)
                     update_available = True
                     latest_version = version_info.get("latest", "")
+
+                    # Check if current version meets minimum version requirement for updates
+                    min_version = item.get("backup_min_version")
+                    can_update = True
+                    if min_version and version:
+                        try:
+                            if Version(version) < Version(min_version):
+                                can_update = False
+                                _LOG.debug(
+                                    "Update button hidden for %s: current version %s is below minimum %s",
+                                    actual_driver_id,
+                                    version,
+                                    min_version,
+                                )
+                        except (InvalidVersion, TypeError):
+                            # If version parsing fails, allow update
+                            pass
 
         categories_list = item.get("categories", [])
         avail = AvailableIntegration(
@@ -548,6 +605,7 @@ def _get_available_integrations() -> list[AvailableIntegration]:
             update_available=update_available,
             latest_version=latest_version,
             instance_id=instance_id,
+            can_update=can_update,
         )
         available.append(avail)
 
@@ -1626,22 +1684,6 @@ def install_integration(driver_id: str):
         # Determine icon color based on category
         icon_color = "text-uc-primary"
         bg_color = "bg-uc-primary/20"
-        categories_lower = categories_str.lower()
-        if "media" in categories_lower or "audio" in categories_lower:
-            icon_color = "text-purple-400"
-            bg_color = "bg-purple-500/20"
-        elif "lighting" in categories_lower or "light" in categories_lower:
-            icon_color = "text-yellow-400"
-            bg_color = "bg-yellow-500/20"
-        elif "climate" in categories_lower or "hvac" in categories_lower:
-            icon_color = "text-cyan-400"
-            bg_color = "bg-cyan-500/20"
-        elif "projector" in categories_lower or "display" in categories_lower:
-            icon_color = "text-blue-400"
-            bg_color = "bg-blue-500/20"
-        elif "hub" in categories_lower or "automation" in categories_lower:
-            icon_color = "text-green-400"
-            bg_color = "bg-green-500/20"
 
         github_link = ""
         if home_page:
