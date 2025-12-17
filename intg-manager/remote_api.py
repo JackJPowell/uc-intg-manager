@@ -247,12 +247,3 @@ class RemoteAPIClient:
         except RemoteAPIError as e:
             _LOG.error("Failed to create API key: %s", e)
             return None
-
-    # TODO: Add methods for performing updates
-    # async def install_integration(self, archive_path: str) -> bool:
-    #     """Install or update an integration from archive."""
-    #     pass
-
-    # async def delete_integration_instance(self, instance_id: str) -> bool:
-    #     """Delete an integration instance."""
-    #     pass

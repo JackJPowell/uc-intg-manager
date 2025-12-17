@@ -760,11 +760,13 @@ def get_integrations_list():
             # Re-fetch integrations with updated cache
             integrations = _get_installed_integrations()
 
+        settings = Settings.load()
         remote_ip = _remote_client._address if _remote_client else None
         return render_template(
             "partials/integration_list.html",
             integrations=integrations,
             remote_ip=remote_ip,
+            settings=settings,
         )
     except Exception as e:
         _LOG.error("Failed to get integrations: %s", e)
@@ -827,6 +829,28 @@ def get_integration_detail(instance_id: str):
 @app.route("/api/integration/<instance_id>/update", methods=["POST"])
 def update_integration(instance_id: str):
     """
+    Update an existing integration to the latest version using default settings.
+
+    The register_entities behavior is determined by the user's auto_register_entities setting.
+    """
+    settings = Settings.load()
+    return _perform_update_integration(instance_id, settings.auto_register_entities)
+
+
+@app.route("/api/integration/<instance_id>/update-alt", methods=["POST"])
+def update_integration_alt(instance_id: str):
+    """
+    Update an existing integration with the opposite entity registration behavior.
+
+    If auto_register_entities is enabled, this will NOT register entities.
+    If auto_register_entities is disabled, this WILL register entities.
+    """
+    settings = Settings.load()
+    return _perform_update_integration(instance_id, not settings.auto_register_entities)
+
+
+def _perform_update_integration(instance_id: str, register_entities: bool):
+    """
     Update an existing integration to the latest version.
 
     Process:
@@ -836,6 +860,10 @@ def update_integration(instance_id: str):
     4. Delete the existing driver (which cascades to delete instance)
     5. Install the new version
     6. Restore configuration
+    7. Optionally register entities if register_entities=True
+
+    :param instance_id: The integration instance ID to update
+    :param register_entities: Whether to register entities after update
     """
     if not _remote_client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
@@ -895,65 +923,111 @@ def update_integration(instance_id: str):
                 }
             ), 400
 
-        # Step 1: Backup current configuration before updating
-        # For integrations that support backup, we REQUIRE a successful backup before proceeding
-        _LOG.info("Backing up configuration before update: %s", integration.driver_id)
-        try:
-            backup_data = backup_integration(
-                _remote_client, integration.driver_id, save_to_file=True
-            )
-            if backup_data:
+        # Determine if this is a configured instance (has backup/restore capability)
+        is_configured = bool(instance_id and integration.instance_id)
+        _LOG.info(
+            "Updating %s: configured=%s, supports_backup=%s",
+            integration.driver_id,
+            is_configured,
+            integration.supports_backup,
+        )
+
+        # Capture list of configured entities before update (if user wants to re-register)
+        configured_entity_ids = []
+        if register_entities and is_configured:
+            try:
                 _LOG.info(
-                    "Successfully backed up configuration for %s", integration.driver_id
+                    "Capturing configured entities before update: %s", instance_id
                 )
-            elif integration.supports_backup:
-                # Integration supports backup but backup failed - don't proceed
-                _LOG.error(
-                    "Backup required for %s but no data was retrieved",
+                configured_entities = _remote_client.get_configured_entities(
+                    instance_id
+                )
+                configured_entity_ids = [
+                    entity.get("entity_id")
+                    for entity in configured_entities
+                    if entity.get("entity_id")
+                ]
+                _LOG.info(
+                    "Found %d configured entities for %s: %s",
+                    len(configured_entity_ids),
                     integration.driver_id,
+                    configured_entity_ids,
                 )
-                with _operation_lock:
-                    _operation_in_progress = False
-                    _LOG.info(
-                        "Lock released - backup failed for integration %s", instance_id
-                    )
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Backup failed - cannot update without successful backup for this integration",
-                    }
-                ), 400
-            else:
+            except Exception as e:
                 _LOG.warning(
-                    "No backup data retrieved for %s - integration may not support backup",
-                    integration.driver_id,
-                )
-        except Exception as e:
-            if integration.supports_backup:
-                # Integration supports backup but backup failed - don't proceed
-                _LOG.error(
-                    "Backup required for %s but failed: %s",
+                    "Failed to capture configured entities for %s: %s",
                     integration.driver_id,
                     e,
                 )
-                with _operation_lock:
-                    _operation_in_progress = False
-                    _LOG.info(
-                        "Lock released - backup exception for integration %s",
-                        instance_id,
-                    )
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Backup failed - cannot update: {e}",
-                    }
-                ), 400
-            else:
-                _LOG.warning(
-                    "Failed to backup %s, continuing with update: %s",
-                    integration.driver_id,
-                    e,
+
+        # Step 1: Backup current configuration before updating (only for configured instances)
+        # For integrations that support backup, we REQUIRE a successful backup before proceeding
+        if is_configured:
+            _LOG.info(
+                "Backing up configuration before update: %s", integration.driver_id
+            )
+            try:
+                backup_data = backup_integration(
+                    _remote_client, integration.driver_id, save_to_file=True
                 )
+                if backup_data:
+                    _LOG.info(
+                        "Successfully backed up configuration for %s",
+                        integration.driver_id,
+                    )
+                elif integration.supports_backup:
+                    # Integration supports backup but backup failed - don't proceed
+                    _LOG.error(
+                        "Backup required for %s but no data was retrieved",
+                        integration.driver_id,
+                    )
+                    with _operation_lock:
+                        _operation_in_progress = False
+                        _LOG.info(
+                            "Lock released - backup failed for integration %s",
+                            instance_id,
+                        )
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": "Backup failed - cannot update without successful backup for this integration",
+                        }
+                    ), 400
+                else:
+                    _LOG.warning(
+                        "No backup data retrieved for %s - integration may not support backup",
+                        integration.driver_id,
+                    )
+            except Exception as e:
+                if integration.supports_backup:
+                    # Integration supports backup but backup failed - don't proceed
+                    _LOG.error(
+                        "Backup required for %s but failed: %s",
+                        integration.driver_id,
+                        e,
+                    )
+                    with _operation_lock:
+                        _operation_in_progress = False
+                        _LOG.info(
+                            "Lock released - backup exception for integration %s",
+                            instance_id,
+                        )
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": f"Backup failed - cannot update: {e}",
+                        }
+                    ), 400
+                else:
+                    _LOG.warning(
+                        "Failed to backup %s, continuing with update: %s",
+                        integration.driver_id,
+                        e,
+                    )
+        else:
+            _LOG.info(
+                "Skipping backup for unconfigured driver: %s", integration.driver_id
+            )
 
         # Parse GitHub URL
         parsed = SyncGitHubClient.parse_github_url(integration.home_page)
@@ -1036,9 +1110,9 @@ def update_integration(instance_id: str):
         # Additional pause to ensure driver is fully initialized
         time.sleep(API_DELAY * 3)
 
-        # Restore configuration if backup data exists
+        # Restore configuration if backup data exists (only for configured instances)
         restore_status = ""
-        if backup_data:
+        if backup_data and is_configured:
             try:
                 _LOG.info(
                     "Starting configuration restore for %s", integration.driver_id
@@ -1127,6 +1201,33 @@ def update_integration(instance_id: str):
                         restored_instance_id,
                     )
 
+                    # Re-register previously configured entities if requested
+                    if register_entities and configured_entity_ids:
+                        time.sleep(API_DELAY * 5)
+                        _LOG.info(
+                            "Re-registering %d previously configured entities for instance %s",
+                            len(configured_entity_ids),
+                            restored_instance_id,
+                        )
+
+                        try:
+                            # Register all entities in one API call
+                            _remote_client.register_entities(
+                                restored_instance_id, configured_entity_ids
+                            )
+
+                            _LOG.info(
+                                "Successfully re-registered %d entities for instance %s",
+                                len(configured_entity_ids),
+                                restored_instance_id,
+                            )
+                        except SyncAPIError as e:
+                            _LOG.warning(
+                                "Failed to register entities for instance %s: %s",
+                                restored_instance_id,
+                                e,
+                            )
+
                 _LOG.info(
                     "Configuration restored successfully for %s", integration.driver_id
                 )
@@ -1190,11 +1291,13 @@ def update_integration(instance_id: str):
 
         if updated_integration:
             # Return the updated card HTML
+            settings = Settings.load()
             remote_ip = _remote_client._address if _remote_client else None
             return render_template(
                 "partials/integration_card.html",
                 integration=updated_integration,
                 remote_ip=remote_ip,
+                settings=settings,
                 just_updated=True,
             )
         else:
@@ -2005,6 +2108,9 @@ def save_settings():
         settings.shutdown_on_battery = request.form.get("shutdown_on_battery") == "on"
         settings.auto_update = request.form.get("auto_update") == "on"
         settings.backup_configs = request.form.get("backup_configs") == "on"
+        settings.auto_register_entities = (
+            request.form.get("auto_register_entities") == "on"
+        )
 
         backup_time = request.form.get("backup_time")
         if backup_time:

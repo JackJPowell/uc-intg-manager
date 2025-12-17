@@ -55,6 +55,9 @@ class Settings:
     backup_time: str = "02:00"
     """Time of day to run automatic backups (HH:MM format)."""
 
+    auto_register_entities: bool = True
+    """Automatically re-register previously configured entities after integration updates."""
+
     @classmethod
     def load(cls) -> "Settings":
         """Load settings from file or return defaults."""
