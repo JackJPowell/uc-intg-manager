@@ -44,6 +44,15 @@
             display: inline-block;
         }
         
+        /* Show overlays when they're specifically targeted by HTMX */
+        /* Generic overlay targeting - works with any ID */
+        [id^="upgrade-overlay-"].htmx-request,
+        [id^="backup-overlay-"].htmx-request,
+        [id^="overlay-"].htmx-request {
+            display: flex !important;
+            pointer-events: auto !important;
+        }
+        
         /* Loading spinner */
         .spinner {
             border: 2px solid rgba(255, 255, 255, 0.3);

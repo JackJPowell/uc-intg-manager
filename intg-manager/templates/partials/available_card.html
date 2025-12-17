@@ -1,5 +1,5 @@
 <!-- Available Integration Card Partial -->
-<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border border-uc-border {% if not integration.official and not integration.installed and not integration.external %}hover:border-uc-primary/50{% endif %}"
+<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border {% if install_error %}border-red-500/50{% else %}border-uc-border{% endif %} {% if not integration.official and not integration.installed and not integration.external %}hover:border-uc-primary/50{% endif %}"
      id="card-{{ integration.driver_id }}"
      data-name="{{ integration.name }}"
      data-description="{{ integration.description }}"
@@ -7,7 +7,7 @@
      data-categories="{{ integration.categories|join(' ') if integration.categories else integration.category }}"
      data-installed="{{ 'true' if (integration.installed or integration.driver_installed or integration.external) else 'false' }}"
      data-has-update="{{ 'true' if integration.update_available else 'false' }}"
-     data-status="{{ integration.install_status }}">
+     data-status="{% if install_error %}error{% else %}{{ integration.install_status }}{% endif %}">
     <div class="flex flex-col h-full">
         <!-- Header -->
         <div class="flex items-start justify-between gap-2 mb-3">
@@ -29,7 +29,16 @@
             </div>
             
             <!-- Status Badge -->
-            {% if integration.official %}
+            {% if install_error %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-300 flex-shrink-0" title="{{ install_error }}">
+                Failed
+            </span>
+            {% elif just_installed %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-300 flex-shrink-0" title="Just installed successfully">
+                <i class="fa-solid fa-check w-3 h-3 mr-1"></i>
+                Installed
+            </span>
+            {% elif integration.official %}
             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-teal-500/20 text-teal-300" title="Official UC integration - delivered with firmware">
                 Official
             </span>
@@ -111,6 +120,24 @@
                     <i class="fa-solid fa-check mr-1"></i>
                     Up to date
                 </span>
+                {% elif just_installed %}
+                <!-- Just installed indicator -->
+                <span class="inline-flex items-center text-xs text-green-400">
+                    <i class="fa-solid fa-check mr-1"></i>
+                    Installed
+                </span>
+                {% elif install_error %}
+                <!-- Retry button for failed install -->
+                <button 
+                    class="install-btn inline-flex items-center px-3 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    hx-post="/api/integration/{{ integration.driver_id }}/install"
+                    hx-target="#card-{{ integration.driver_id }}"
+                    hx-swap="outerHTML"
+                    hx-indicator="#overlay-{{ integration.driver_id }}"
+                    title="Retry installation">
+                    <i class="fa-solid fa-rotate-right h-3 w-3 mr-1"></i>
+                    Retry
+                </button>
                 {% elif integration.installed or integration.driver_installed %}
                 <!-- Status shown in badge above -->
                 {% else %}
@@ -130,7 +157,7 @@
     </div>
     <!-- Overlay for install/update - positioned as direct child of card for proper centering -->
     {% if not integration.official and not integration.external and (not integration.installed or (integration.update_available and integration.can_update)) %}
-    <div id="overlay-{{ integration.driver_id }}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
+    <div id="overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-uc-primary mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

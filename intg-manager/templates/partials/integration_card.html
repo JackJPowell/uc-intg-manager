@@ -226,7 +226,7 @@
     </div>
     
     <!-- Upgrade overlay - always present so HTMX can find it during requests -->
-    <div id="upgrade-overlay-{{ integration.driver_id }}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
+    <div id="upgrade-overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-yellow-400 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -238,7 +238,7 @@
     
     <!-- Backup overlay -->
     {% if integration.state != 'NOT_CONFIGURED' and integration.supports_backup %}
-    <div id="backup-overlay-{{ integration.driver_id }}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
+    <div id="backup-overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-uc-primary mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
