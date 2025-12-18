@@ -225,10 +225,8 @@ class IntegrationManagerDevice(PollingDevice):
 
         if not self._web_server.is_running:
             self._web_server.start()
-            _LOG.info(
-                "[%s] Web server started at http://%s:%d", self.log_id, self.address, WEB_SERVER_PORT
-            )
-            
+            _LOG.info("[%s] Web server started", self.log_id)
+
             # Trigger initial version check on startup
             _LOG.info("[%s] Triggering initial version check...", self.log_id)
             try:

@@ -142,8 +142,8 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                     address.startswith("127.") or address.lower() == "localhost"
                 )
 
+                actual_address = address  # Default to user-provided address
                 if is_localhost:
-                    actual_address = address  # Default fallback
                     try:
                         wifi_info = await client.get_wifi_info()
                         if wifi_info and isinstance(wifi_info, dict):
@@ -158,8 +158,6 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                         _LOG.debug(
                             "Could not retrieve WiFi info, keeping provided address"
                         )
-                else:
-                    actual_address = address  # User provided non-loopback, use as-is
 
             except RemoteAPIError as e:
                 _LOG.error("Failed to connect to remote: %s", e)
