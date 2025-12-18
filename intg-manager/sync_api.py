@@ -359,7 +359,7 @@ class SyncRemoteClient:
         _LOG.debug("List of Entities to register: %s", entity_ids)
 
         if entity_ids:
-            _LOG.info(
+            _LOG.debug(
                 "Registering %d specific entities for integration: %s",
                 len(entity_ids),
                 integration_id,
