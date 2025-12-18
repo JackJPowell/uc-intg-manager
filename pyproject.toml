@@ -1,6 +1,6 @@
 [project]
 name = "uc-intg-manager"
-version = "1.0.5"
+version = "1.1.0"
 description = "Unfolded Circle Integration Manager - Web interface for managing custom integrations"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ urls.Repository = "https://github.com/JackJPowell/uc-intg-manager"
 dependencies = [
     # Core dependencies
     "ucapi==0.4.0",
-    "ucapi-framework==1.2.2",
+    "ucapi-framework==1.2.3",
     "pyee>=9.0",
     # Web framework
     "flask>=3.0.0",
