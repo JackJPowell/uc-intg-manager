@@ -356,7 +356,7 @@ class SyncRemoteClient:
         """
         endpoint = f"/intg/instances/{integration_id}/entities"
 
-        _LOG.info("List of Entities to register: %s", entity_ids)
+        _LOG.debug("List of Entities to register: %s", entity_ids)
 
         if entity_ids:
             _LOG.info(
