@@ -136,6 +136,31 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                 else:
                     _LOG.info("Using PIN-based authentication")
 
+                # Get actual IP if user provided loopback address
+                # Check for common localhost/loopback values
+                is_localhost = (
+                    address.startswith("127.") or address.lower() == "localhost"
+                )
+
+                if is_localhost:
+                    actual_address = address  # Default fallback
+                    try:
+                        wifi_info = await client.get_wifi_info()
+                        if wifi_info and isinstance(wifi_info, dict):
+                            ip_address = wifi_info.get("ip_address")
+                            if ip_address and not ip_address.startswith("127."):
+                                actual_address = ip_address
+                                _LOG.info(
+                                    "Detected loopback address, using actual IP from WiFi: %s",
+                                    actual_address,
+                                )
+                    except RemoteAPIError:
+                        _LOG.debug(
+                            "Could not retrieve WiFi info, keeping provided address"
+                        )
+                else:
+                    actual_address = address  # User provided non-loopback, use as-is
+
             except RemoteAPIError as e:
                 _LOG.error("Failed to connect to remote: %s", e)
                 await client.close()
@@ -149,7 +174,7 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
             return RemoteConfig(
                 identifier=identifier,
                 name=name,
-                address=address,
+                address=actual_address,  # Use the actual IP from network info
                 pin=pin,
                 api_key=api_key or "",
             )

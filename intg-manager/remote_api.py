@@ -195,6 +195,21 @@ class RemoteAPIClient:
             _LOG.error("Failed to get device name: %s", e)
             return None
 
+    async def get_wifi_info(self) -> dict[str, Any] | None:
+        """
+        Get the remote's WiFi information including IP address.
+
+        Requires authentication (PIN or API key).
+
+        :return: WiFi info dictionary with ip_address field, or None if request failed
+        """
+        try:
+            wifi_info = await self._request("GET", "/system/wifi")
+            return wifi_info
+        except RemoteAPIError as e:
+            _LOG.error("Failed to get WiFi info: %s", e)
+            return None
+
     async def create_api_key(self, name: str = "intg-manager") -> str | None:
         """
         Create an API key for persistent authentication.
