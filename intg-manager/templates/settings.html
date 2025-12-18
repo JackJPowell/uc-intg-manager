@@ -55,6 +55,19 @@
                        class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
                        {% if settings.auto_update %}checked{% endif %}>
             </label>
+            
+            <label class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-700">
+                <div>
+                    <div class="text-white font-medium">Auto-Register Entities After Update</div>
+                    <div class="text-sm text-gray-400">
+                        Automatically re-register previously configured entities after upgrading an integration.
+                        Only entities that were configured before the update will be re-registered.
+                    </div>
+                </div>
+                <input type="checkbox" name="auto_register_entities" 
+                       class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
+                       {% if settings.auto_register_entities %}checked{% endif %}>
+            </label>
         </div>
     </div>
 

@@ -44,6 +44,15 @@
             display: inline-block;
         }
         
+        /* Show overlays when they're specifically targeted by HTMX */
+        /* Generic overlay targeting - works with any ID */
+        [id^="upgrade-overlay-"].htmx-request,
+        [id^="backup-overlay-"].htmx-request,
+        [id^="overlay-"].htmx-request {
+            display: flex !important;
+            pointer-events: auto !important;
+        }
+        
         /* Loading spinner */
         .spinner {
             border: 2px solid rgba(255, 255, 255, 0.3);
@@ -71,10 +80,10 @@
         
         /* Card hover effect */
         .integration-card {
-            transition: all 0.2s ease;
+            transition: box-shadow 0.2s ease;
+            overflow: visible;
         }
         .integration-card:hover {
-            transform: translateY(-2px);
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
         }
     </style>
@@ -205,6 +214,43 @@
             menuIcon.classList.toggle('hidden');
             closeIcon.classList.toggle('hidden');
         }
+        
+        // Toggle dropdown menu
+        function toggleDropdown(event, dropdownId, forceClose = false) {
+            event.stopPropagation();
+            const dropdown = document.getElementById(dropdownId);
+            const chevronId = dropdownId.replace('dropdown-', 'chevron-');
+            const chevron = document.getElementById(chevronId);
+            
+            if (forceClose || !dropdown.classList.contains('hidden')) {
+                dropdown.classList.add('hidden');
+                if (chevron) chevron.classList.remove('fa-rotate-180');
+            } else {
+                // Close all other dropdowns first
+                document.querySelectorAll('[id^="dropdown-"]').forEach(d => {
+                    if (d.id !== dropdownId) {
+                        d.classList.add('hidden');
+                        const otherId = d.id.replace('dropdown-', 'chevron-');
+                        const otherChevron = document.getElementById(otherId);
+                        if (otherChevron) otherChevron.classList.remove('fa-rotate-180');
+                    }
+                });
+                dropdown.classList.remove('hidden');
+                if (chevron) chevron.classList.add('fa-rotate-180');
+            }
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!event.target.closest('[id^="dropdown-"]') && !event.target.closest('button')) {
+                document.querySelectorAll('[id^="dropdown-"]').forEach(d => {
+                    d.classList.add('hidden');
+                    const chevronId = d.id.replace('dropdown-', 'chevron-');
+                    const chevron = document.getElementById(chevronId);
+                    if (chevron) chevron.classList.remove('fa-rotate-180');
+                });
+            }
+        });
         
         // Close menu when clicking a link on mobile
         document.addEventListener('DOMContentLoaded', function() {

@@ -273,21 +273,36 @@ class SyncRemoteClient:
     def get_instantiable_drivers(self) -> list[dict[str, Any]]:
         """Get instantiable and enabled drivers (for post-install verification)."""
         try:
-            return self._request("GET", "/intg/drivers?instantiable=true&enabled=true&limit=50&page=1") or []
+            return (
+                self._request(
+                    "GET",
+                    "/intg/drivers?instantiable=true&enabled=true&limit=50&page=1",
+                )
+                or []
+            )
         except SyncAPIError:
             return []
 
     def get_custom_drivers_without_instances(self) -> list[dict[str, Any]]:
         """Get custom drivers without instances (for post-install verification)."""
         try:
-            return self._request("GET", "/intg/drivers?driver_type=CUSTOM&has_instances=false&enabled=true&limit=50&page=1") or []
+            return (
+                self._request(
+                    "GET",
+                    "/intg/drivers?driver_type=CUSTOM&has_instances=false&enabled=true&limit=50&page=1",
+                )
+                or []
+            )
         except SyncAPIError:
             return []
 
     def get_enabled_instances(self) -> list[dict[str, Any]]:
         """Get enabled integration instances (for post-restore verification)."""
         try:
-            return self._request("GET", "/intg/instances?enabled=true&limit=50&page=1") or []
+            return (
+                self._request("GET", "/intg/instances?enabled=true&limit=50&page=1")
+                or []
+            )
         except SyncAPIError:
             return []
 
@@ -295,15 +310,80 @@ class SyncRemoteClient:
         """Get a single integration instance by ID."""
         return self._request("GET", f"/intg/instances/{instance_id}")
 
-    def get_instance_entities(self, instance_id: str) -> list[dict[str, Any]]:
-        """Get entities for an integration instance."""
+    def get_instance_entities(
+        self, instance_id: str, filter_type: str = "NEW"
+    ) -> list[dict[str, Any]]:
+        """
+        Get entities for an integration instance.
+
+        :param instance_id: The integration instance ID
+        :param filter_type: Entity filter type (NEW, CONFIGURED, etc.)
+        :return: List of entity dictionaries
+        """
         try:
-            return self._request(
-                "GET",
-                f"/intg/instances/{instance_id}/entities?reload=true&filter=NEW&limit=20&page=1"
-            ) or []
+            return (
+                self._request(
+                    "GET",
+                    f"/intg/instances/{instance_id}/entities?reload=true&filter={filter_type}&limit=100&page=1",
+                )
+                or []
+            )
         except SyncAPIError:
             return []
+
+    def get_configured_entities(self, instance_id: str) -> list[dict[str, Any]]:
+        """
+        Get configured entities for an integration instance.
+
+        :param instance_id: The integration instance ID
+        :return: List of configured entity dictionaries
+        """
+        return self.get_instance_entities(instance_id, filter_type="CONFIGURED")
+
+    def register_entities(
+        self, integration_id: str, entity_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        """
+        Register entities for an integration.
+
+        If entity_ids is None, registers all available entities.
+        If entity_ids is provided, registers only the specified entities.
+
+        :param integration_id: The integration instance ID
+        :param entity_ids: Optional list of entity IDs to register (e.g., ["entity1", "entity2"])
+        :return: Response dictionary from the API
+        :raises SyncAPIError: If the request fails
+        """
+        endpoint = f"/intg/instances/{integration_id}/entities"
+
+        _LOG.debug("List of Entities to register: %s", entity_ids)
+
+        if entity_ids:
+            _LOG.info(
+                "Registering %d specific entities for integration: %s",
+                len(entity_ids),
+                integration_id,
+            )
+            return self._request("POST", endpoint, json=entity_ids)
+
+        _LOG.debug("Registering all entities for integration: %s", integration_id)
+        return self._request("POST", endpoint)
+
+    def register_entity(self, integration_id: str, entity_id: str) -> dict[str, Any]:
+        """
+        Register a specific entity for an integration.
+
+        :param integration_id: The integration instance ID
+        :param entity_id: The entity ID to register
+        :return: Response dictionary from the API
+        :raises SyncAPIError: If the request fails
+        """
+        _LOG.info(
+            "Registering entity %s for integration: %s", entity_id, integration_id
+        )
+        return self._request(
+            "POST", f"/intg/instances/{integration_id}/entities/{entity_id}"
+        )
 
 
 class SyncGitHubClient:
@@ -342,22 +422,35 @@ class SyncGitHubClient:
 
         try:
             response = self._session.get(url, timeout=REQUEST_TIMEOUT)
-            
+
             # Check for rate limiting
             rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
             if response.status_code == 403 and rate_limit_remaining == "0":
                 rate_limit_reset = response.headers.get("X-RateLimit-Reset")
                 # Convert Unix timestamp to readable time
                 from datetime import datetime
-                reset_time = datetime.fromtimestamp(int(rate_limit_reset)) if rate_limit_reset else None
-                reset_str = reset_time.strftime("%Y-%m-%d %H:%M:%S") if reset_time else "unknown"
+
+                reset_time = (
+                    datetime.fromtimestamp(int(rate_limit_reset))
+                    if rate_limit_reset
+                    else None
+                )
+                reset_str = (
+                    reset_time.strftime("%Y-%m-%d %H:%M:%S")
+                    if reset_time
+                    else "unknown"
+                )
                 _LOG.warning(
                     "GitHub API rate limit exceeded for %s/%s. Reset at: %s (in %d seconds)",
-                    owner, repo, reset_str, 
-                    int(rate_limit_reset) - int(datetime.now().timestamp()) if rate_limit_reset else 0
+                    owner,
+                    repo,
+                    reset_str,
+                    int(rate_limit_reset) - int(datetime.now().timestamp())
+                    if rate_limit_reset
+                    else 0,
                 )
                 return None
-            
+
             if response.status_code == 200:
                 return response.json()
             if response.status_code == 404:
@@ -433,7 +526,7 @@ class SyncGitHubClient:
 
         try:
             response = self._session.get(url, timeout=REQUEST_TIMEOUT)
-            
+
             # Check for rate limiting
             if response.status_code == 403:
                 rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
@@ -441,15 +534,28 @@ class SyncGitHubClient:
                 if rate_limit_remaining == "0":
                     # Convert Unix timestamp to readable time
                     from datetime import datetime
-                    reset_time = datetime.fromtimestamp(int(rate_limit_reset)) if rate_limit_reset else None
-                    reset_str = reset_time.strftime("%Y-%m-%d %H:%M:%S") if reset_time else "unknown"
+
+                    reset_time = (
+                        datetime.fromtimestamp(int(rate_limit_reset))
+                        if rate_limit_reset
+                        else None
+                    )
+                    reset_str = (
+                        reset_time.strftime("%Y-%m-%d %H:%M:%S")
+                        if reset_time
+                        else "unknown"
+                    )
                     _LOG.warning(
                         "GitHub API rate limit exceeded for %s/%s tags. Reset at: %s (in %d seconds)",
-                        owner, repo, reset_str,
-                        int(rate_limit_reset) - int(datetime.now().timestamp()) if rate_limit_reset else 0
+                        owner,
+                        repo,
+                        reset_str,
+                        int(rate_limit_reset) - int(datetime.now().timestamp())
+                        if rate_limit_reset
+                        else 0,
                     )
                     return None
-            
+
             if response.status_code == 200:
                 tags = response.json()
                 if tags:

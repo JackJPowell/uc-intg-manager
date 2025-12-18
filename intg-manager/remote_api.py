@@ -195,6 +195,21 @@ class RemoteAPIClient:
             _LOG.error("Failed to get device name: %s", e)
             return None
 
+    async def get_wifi_info(self) -> dict[str, Any] | None:
+        """
+        Get the remote's WiFi information including IP address.
+
+        Requires authentication (PIN or API key).
+
+        :return: WiFi info dictionary with ip_address field, or None if request failed
+        """
+        try:
+            wifi_info = await self._request("GET", "/system/wifi")
+            return wifi_info
+        except RemoteAPIError as e:
+            _LOG.error("Failed to get WiFi info: %s", e)
+            return None
+
     async def create_api_key(self, name: str = "intg-manager") -> str | None:
         """
         Create an API key for persistent authentication.
@@ -247,12 +262,3 @@ class RemoteAPIClient:
         except RemoteAPIError as e:
             _LOG.error("Failed to create API key: %s", e)
             return None
-
-    # TODO: Add methods for performing updates
-    # async def install_integration(self, archive_path: str) -> bool:
-    #     """Install or update an integration from archive."""
-    #     pass
-
-    # async def delete_integration_instance(self, instance_id: str) -> bool:
-    #     """Delete an integration instance."""
-    #     pass

@@ -70,7 +70,7 @@
     <!-- Footer: Status & Actions -->
     <div class="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-uc-border">
         <!-- Status Badge -->
-        <div class="flex items-center flex-wrap gap-2">
+        <div class="flex items-center flex-wrap gap-2 py-1">
             {% if integration.state == 'NOT_CONFIGURED' %}
             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-yellow-400 rounded-full"></span>
@@ -93,7 +93,7 @@
             </span>
             {% endif %}
             
-            {% if integration.update_available and integration.can_update and not integration.official and not integration.external %}
+            {% if integration.update_available and integration.can_update and not integration.official and not integration.external and (not integration.instance_id or integration.supports_backup) %}
             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-300" title="Update available: {{ integration.latest_version }}">
                 <i class="fa-solid fa-arrow-up w-3 h-3 mr-1"></i>
                 {{ integration.latest_version }}
@@ -102,30 +102,79 @@
         </div>
         
         <!-- Actions -->
-        <div class="flex items-center flex-wrap gap-2">
-            {% if integration.update_available and integration.can_update and not integration.official and not integration.external %}
+        <div class="flex items-center flex-wrap gap-2 py-1">
+            {% if integration.update_available and integration.can_update and not integration.official and not integration.external and (not integration.instance_id or integration.supports_backup) %}
             <!-- Update available - show update button (takes priority over configure link) -->
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="p-2 text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
             {% endif %}
             
-            <!-- Version upgrade display: current -> button with new version -->
+            <!-- Version upgrade display: current -> split button with new version -->
             <span class="text-xs text-gray-400">v{{ integration.version }}</span>
             <span class="text-gray-500">→</span>
-            <button 
-                class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-sm font-medium rounded-lg transition-colors"
-                hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
-                hx-target="#card-{{ integration.driver_id }}"
-                hx-swap="outerHTML"
-                hx-indicator="#upgrade-overlay-{{ integration.driver_id }}"
-                title="Update to {{ integration.latest_version }}">
-                <i class="fa-solid fa-upload h-4 w-4 mr-1"></i>
-                {{ integration.latest_version }}
-            </button>
+            
+            <!-- Split button: Main action + Dropdown for alternative -->
+            <div class="relative inline-flex rounded-lg shadow-sm">
+                <!-- Main Update Button -->
+                <button 
+                    class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-500/30"
+                    hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                    hx-target="#card-{{ integration.driver_id }}"
+                    hx-swap="outerHTML"
+                    hx-indicator="#upgrade-overlay-{{ integration.driver_id }}"
+                    title="Update to {{ integration.latest_version }}{% if settings and settings.auto_register_entities %} (will re-register configured entities){% endif %}">
+                    <i class="fa-solid fa-upload h-4 w-4 mr-1"></i>
+                    {{ integration.latest_version }}
+                </button>
+                
+                <!-- Dropdown Toggle Button -->
+                <button 
+                    type="button"
+                    class="inline-flex items-center px-2 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-sm font-medium rounded-r-lg transition-colors"
+                    onclick="toggleDropdown(event, 'dropdown-{{ integration.driver_id }}')"
+                    title="More options">
+                    <i id="chevron-{{ integration.driver_id }}" class="fa-solid fa-chevron-down h-3 w-3 transition-transform duration-200"></i>
+                </button>
+                
+                <!-- Dropdown Menu -->
+                <div id="dropdown-{{ integration.driver_id }}" class="hidden absolute right-0 top-full mt-1 w-56 rounded-lg shadow-lg bg-uc-card border border-uc-border z-[9999]">
+                    <div class="py-1">
+                        <button
+                            class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-uc-darker hover:text-white transition-colors flex items-center gap-2 rounded-lg"
+                            hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update-alt{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                            hx-target="#card-{{ integration.driver_id }}"
+                            hx-swap="outerHTML"
+                            hx-indicator="#upgrade-overlay-{{ integration.driver_id }}"
+                            onclick="toggleDropdown(event, 'dropdown-{{ integration.driver_id }}', true)"
+                            title="{% if settings and settings.auto_register_entities %}Update without re-registering entities{% else %}Update and re-register configured entities{% endif %}">
+                            <i class="fa-solid fa-upload h-4 w-4 mr-1"></i>
+                            {% if settings and settings.auto_register_entities %}
+                            Update without Registering Entities
+                            {% else %}
+                            Update and Register Entities
+                            {% endif %}
+                        </button>
+                        
+                        {% if integration.instance_id and integration.supports_backup %}
+                        <button
+                            class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-uc-darker hover:text-white transition-colors flex items-center gap-2"
+                            hx-post="/api/backup/{{ integration.driver_id }}"
+                            hx-swap="none"
+                            hx-indicator="#backup-overlay-{{ integration.driver_id }}"
+                            onclick="toggleDropdown(event, 'dropdown-{{ integration.driver_id }}', true)"
+                            hx-on::after-request="if(event.detail.successful) { this.classList.add('text-green-400'); setTimeout(() => this.classList.remove('text-green-400'), 3000); }"
+                            title="Backup configuration before update">
+                            <i class="fa-solid fa-download h-4 w-4"></i>
+                            Backup Config
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
             
             {% elif integration.state == 'NOT_CONFIGURED' %}
             <!-- Unconfigured driver - link to remote configurator -->
@@ -138,7 +187,7 @@
             <!-- Custom integrations installed on the remote -->
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="p-2 text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -161,7 +210,7 @@
             <!-- External/Docker integrations - read-only -->
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="p-2 text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -177,7 +226,7 @@
     </div>
     
     <!-- Upgrade overlay - always present so HTMX can find it during requests -->
-    <div id="upgrade-overlay-{{ integration.driver_id }}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
+    <div id="upgrade-overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-yellow-400 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -189,7 +238,7 @@
     
     <!-- Backup overlay -->
     {% if integration.state != 'NOT_CONFIGURED' and integration.supports_backup %}
-    <div id="backup-overlay-{{ integration.driver_id }}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
+    <div id="backup-overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-uc-primary mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

@@ -1,0 +1,22 @@
+<!-- Status Message Partial - used for inline success/error messages -->
+{% if status == 'success' %}
+<span class="inline-flex items-center gap-1 text-green-400 text-sm" {% if title %}title="{{ title }}"{% endif %}>
+    <i class="fas fa-check-circle"></i>
+    {{ message }}
+</span>
+{% elif status == 'error' %}
+<span class="inline-flex items-center gap-1 text-red-400 text-sm" {% if title %}title="{{ title }}"{% endif %}>
+    <i class="fas fa-exclamation-circle"></i>
+    {{ message }}
+</span>
+{% elif status == 'warning' %}
+<span class="inline-flex items-center gap-1 text-yellow-400 text-sm" {% if title %}title="{{ title }}"{% endif %}>
+    <i class="fas fa-exclamation-triangle"></i>
+    {{ message }}
+</span>
+{% elif status == 'info' %}
+<span class="inline-flex items-center gap-1 text-blue-400 text-sm" {% if title %}title="{{ title }}"{% endif %}>
+    <i class="fas fa-info-circle"></i>
+    {{ message }}
+</span>
+{% endif %}

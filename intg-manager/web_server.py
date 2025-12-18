@@ -760,11 +760,13 @@ def get_integrations_list():
             # Re-fetch integrations with updated cache
             integrations = _get_installed_integrations()
 
+        settings = Settings.load()
         remote_ip = _remote_client._address if _remote_client else None
         return render_template(
             "partials/integration_list.html",
             integrations=integrations,
             remote_ip=remote_ip,
+            settings=settings,
         )
     except Exception as e:
         _LOG.error("Failed to get integrations: %s", e)
@@ -827,6 +829,28 @@ def get_integration_detail(instance_id: str):
 @app.route("/api/integration/<instance_id>/update", methods=["POST"])
 def update_integration(instance_id: str):
     """
+    Update an existing integration to the latest version using default settings.
+
+    The register_entities behavior is determined by the user's auto_register_entities setting.
+    """
+    settings = Settings.load()
+    return _perform_update_integration(instance_id, settings.auto_register_entities)
+
+
+@app.route("/api/integration/<instance_id>/update-alt", methods=["POST"])
+def update_integration_alt(instance_id: str):
+    """
+    Update an existing integration with the opposite entity registration behavior.
+
+    If auto_register_entities is enabled, this will NOT register entities.
+    If auto_register_entities is disabled, this WILL register entities.
+    """
+    settings = Settings.load()
+    return _perform_update_integration(instance_id, not settings.auto_register_entities)
+
+
+def _perform_update_integration(instance_id: str, register_entities: bool):
+    """
     Update an existing integration to the latest version.
 
     Process:
@@ -836,6 +860,10 @@ def update_integration(instance_id: str):
     4. Delete the existing driver (which cascades to delete instance)
     5. Install the new version
     6. Restore configuration
+    7. Optionally register entities if register_entities=True
+
+    :param instance_id: The integration instance ID to update
+    :param register_entities: Whether to register entities after update
     """
     if not _remote_client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
@@ -895,65 +923,111 @@ def update_integration(instance_id: str):
                 }
             ), 400
 
-        # Step 1: Backup current configuration before updating
-        # For integrations that support backup, we REQUIRE a successful backup before proceeding
-        _LOG.info("Backing up configuration before update: %s", integration.driver_id)
-        try:
-            backup_data = backup_integration(
-                _remote_client, integration.driver_id, save_to_file=True
-            )
-            if backup_data:
+        # Determine if this is a configured instance (has backup/restore capability)
+        is_configured = bool(instance_id and integration.instance_id)
+        _LOG.info(
+            "Updating %s: configured=%s, supports_backup=%s",
+            integration.driver_id,
+            is_configured,
+            integration.supports_backup,
+        )
+
+        # Capture list of configured entities before update (if user wants to re-register)
+        configured_entity_ids = []
+        if register_entities and is_configured:
+            try:
                 _LOG.info(
-                    "Successfully backed up configuration for %s", integration.driver_id
+                    "Capturing configured entities before update: %s", instance_id
                 )
-            elif integration.supports_backup:
-                # Integration supports backup but backup failed - don't proceed
-                _LOG.error(
-                    "Backup required for %s but no data was retrieved",
+                configured_entities = _remote_client.get_configured_entities(
+                    instance_id
+                )
+                configured_entity_ids = [
+                    entity.get("entity_id")
+                    for entity in configured_entities
+                    if entity.get("entity_id")
+                ]
+                _LOG.info(
+                    "Found %d configured entities for %s: %s",
+                    len(configured_entity_ids),
                     integration.driver_id,
+                    configured_entity_ids,
                 )
-                with _operation_lock:
-                    _operation_in_progress = False
-                    _LOG.info(
-                        "Lock released - backup failed for integration %s", instance_id
-                    )
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Backup failed - cannot update without successful backup for this integration",
-                    }
-                ), 400
-            else:
+            except Exception as e:
                 _LOG.warning(
-                    "No backup data retrieved for %s - integration may not support backup",
-                    integration.driver_id,
-                )
-        except Exception as e:
-            if integration.supports_backup:
-                # Integration supports backup but backup failed - don't proceed
-                _LOG.error(
-                    "Backup required for %s but failed: %s",
+                    "Failed to capture configured entities for %s: %s",
                     integration.driver_id,
                     e,
                 )
-                with _operation_lock:
-                    _operation_in_progress = False
-                    _LOG.info(
-                        "Lock released - backup exception for integration %s",
-                        instance_id,
-                    )
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Backup failed - cannot update: {e}",
-                    }
-                ), 400
-            else:
-                _LOG.warning(
-                    "Failed to backup %s, continuing with update: %s",
-                    integration.driver_id,
-                    e,
+
+        # Step 1: Backup current configuration before updating (only for configured instances)
+        # For integrations that support backup, we REQUIRE a successful backup before proceeding
+        if is_configured:
+            _LOG.info(
+                "Backing up configuration before update: %s", integration.driver_id
+            )
+            try:
+                backup_data = backup_integration(
+                    _remote_client, integration.driver_id, save_to_file=True
                 )
+                if backup_data:
+                    _LOG.info(
+                        "Successfully backed up configuration for %s",
+                        integration.driver_id,
+                    )
+                elif integration.supports_backup:
+                    # Integration supports backup but backup failed - don't proceed
+                    _LOG.error(
+                        "Backup required for %s but no data was retrieved",
+                        integration.driver_id,
+                    )
+                    with _operation_lock:
+                        _operation_in_progress = False
+                        _LOG.info(
+                            "Lock released - backup failed for integration %s",
+                            instance_id,
+                        )
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": "Backup failed - cannot update without successful backup for this integration",
+                        }
+                    ), 400
+                else:
+                    _LOG.warning(
+                        "No backup data retrieved for %s - integration may not support backup",
+                        integration.driver_id,
+                    )
+            except Exception as e:
+                if integration.supports_backup:
+                    # Integration supports backup but backup failed - don't proceed
+                    _LOG.error(
+                        "Backup required for %s but failed: %s",
+                        integration.driver_id,
+                        e,
+                    )
+                    with _operation_lock:
+                        _operation_in_progress = False
+                        _LOG.info(
+                            "Lock released - backup exception for integration %s",
+                            instance_id,
+                        )
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": f"Backup failed - cannot update: {e}",
+                        }
+                    ), 400
+                else:
+                    _LOG.warning(
+                        "Failed to backup %s, continuing with update: %s",
+                        integration.driver_id,
+                        e,
+                    )
+        else:
+            _LOG.info(
+                "Skipping backup for unconfigured driver: %s", integration.driver_id
+            )
 
         # Parse GitHub URL
         parsed = SyncGitHubClient.parse_github_url(integration.home_page)
@@ -1036,9 +1110,8 @@ def update_integration(instance_id: str):
         # Additional pause to ensure driver is fully initialized
         time.sleep(API_DELAY * 3)
 
-        # Restore configuration if backup data exists
-        restore_status = ""
-        if backup_data:
+        # Restore configuration if backup data exists (only for configured instances)
+        if backup_data and is_configured:
             try:
                 _LOG.info(
                     "Starting configuration restore for %s", integration.driver_id
@@ -1078,7 +1151,7 @@ def update_integration(instance_id: str):
                     },
                 )
 
-                time.sleep(API_DELAY * 2)
+                time.sleep(API_DELAY * 6)
 
                 # Post-restore verification calls (like official tool)
                 _LOG.info(
@@ -1127,10 +1200,36 @@ def update_integration(instance_id: str):
                         restored_instance_id,
                     )
 
+                    # Re-register previously configured entities if requested
+                    if register_entities and configured_entity_ids:
+                        time.sleep(API_DELAY * 5)
+                        _LOG.info(
+                            "Re-registering %d previously configured entities for instance %s",
+                            len(configured_entity_ids),
+                            restored_instance_id,
+                        )
+
+                        try:
+                            # Register all entities in one API call
+                            _remote_client.register_entities(
+                                restored_instance_id, configured_entity_ids
+                            )
+
+                            _LOG.info(
+                                "Successfully re-registered %d entities for instance %s",
+                                len(configured_entity_ids),
+                                restored_instance_id,
+                            )
+                        except SyncAPIError as e:
+                            _LOG.warning(
+                                "Failed to register entities for instance %s: %s",
+                                restored_instance_id,
+                                e,
+                            )
+
                 _LOG.info(
                     "Configuration restored successfully for %s", integration.driver_id
                 )
-                restore_status = " (config restored)"
 
             except SyncAPIError as e:
                 _LOG.error(
@@ -1146,7 +1245,6 @@ def update_integration(instance_id: str):
                     time.sleep(API_DELAY)  # Brief pause after cleanup
                 except SyncAPIError:
                     pass
-                restore_status = " (restore failed)"
             except Exception as e:
                 _LOG.error(
                     "Unexpected error during restore for %s: %s",
@@ -1162,7 +1260,6 @@ def update_integration(instance_id: str):
                     time.sleep(API_DELAY)  # Brief pause after cleanup
                 except SyncAPIError:
                     pass
-                restore_status = " (restore failed)"
 
         # Update the cache entry for this driver instead of full refresh
         # This avoids GitHub rate limiting issues
@@ -1182,6 +1279,9 @@ def update_integration(instance_id: str):
                 "Lock released after successful update of instance %s", instance_id
             )
 
+        # Brief delay to ensure remote has processed the update
+        time.sleep(API_DELAY)
+
         # Re-fetch the integration info with updated version
         integrations = _get_installed_integrations()
         updated_integration = next(
@@ -1190,23 +1290,31 @@ def update_integration(instance_id: str):
 
         if updated_integration:
             # Return the updated card HTML
+            settings = Settings.load()
             remote_ip = _remote_client._address if _remote_client else None
             return render_template(
                 "partials/integration_card.html",
                 integration=updated_integration,
                 remote_ip=remote_ip,
+                settings=settings,
                 just_updated=True,
             )
         else:
-            # Fallback to simple success message
-            backup_status = " (config backed up)" if backup_data else ""
-            status_message = f"Updated{backup_status}{restore_status}"
-            return f"""
-                <span class="inline-flex items-center gap-1 text-green-400 text-sm">
-                    <i class="fas fa-check-circle"></i>
-                    {status_message}
-                </span>
-            """
+            # Fallback: use original integration data with updated flag
+            # This shouldn't normally happen, but ensures we return a card
+            _LOG.warning(
+                "Could not find updated integration %s, using original data",
+                integration.driver_id,
+            )
+            settings = Settings.load()
+            remote_ip = _remote_client._address if _remote_client else None
+            return render_template(
+                "partials/integration_card.html",
+                integration=integration,
+                remote_ip=remote_ip,
+                settings=settings,
+                just_updated=True,
+            )
 
     except SyncAPIError as e:
         _LOG.error("Update failed: %s", e)
@@ -1419,6 +1527,9 @@ def update_driver(driver_id: str):
             _operation_in_progress = False
             _LOG.info("Lock released after successful update of driver %s", driver_id)
 
+        # Brief delay to ensure remote has processed the update
+        time.sleep(API_DELAY)
+
         # Re-fetch the integration info with updated version from available list
         # Since this is for unconfigured drivers, we use _get_available_integrations
         available = _get_available_integrations()
@@ -1426,9 +1537,10 @@ def update_driver(driver_id: str):
             (i for i in available if i.driver_id == driver_id), None
         )
 
+        remote_ip = _remote_client._address if _remote_client else None
+
         if updated_integration:
             # Return the updated card HTML for available list
-            remote_ip = _remote_client._address if _remote_client else None
             return render_template(
                 "partials/available_card.html",
                 integration=updated_integration,
@@ -1436,13 +1548,60 @@ def update_driver(driver_id: str):
                 just_updated=True,
             )
         else:
-            # Fallback to simple success message
-            return """
-                <span class="inline-flex items-center gap-1 text-green-400 text-sm">
-                    <i class="fas fa-check-circle"></i>
-                    Updated
-                </span>
-            """
+            # Fallback: Try to find it in installed integrations list
+            # This shouldn't normally happen, but ensures we return a card
+            _LOG.warning(
+                "Could not find updated driver %s in available list, checking installed",
+                driver_id,
+            )
+            integrations = _get_installed_integrations()
+            integration = next(
+                (i for i in integrations if i.driver_id == driver_id), None
+            )
+
+            if integration:
+                settings = Settings.load()
+                return render_template(
+                    "partials/integration_card.html",
+                    integration=integration,
+                    remote_ip=remote_ip,
+                    settings=settings,
+                    just_updated=True,
+                )
+            else:
+                # Last resort: Create a minimal AvailableIntegration from registry
+                _LOG.error("Could not find driver %s anywhere after update", driver_id)
+                registry = load_registry()
+                registry_item = next(
+                    (item for item in registry if item.get("id") == driver_id), {}
+                )
+                categories_list = registry_item.get("categories", [])
+                fallback_integration = AvailableIntegration(
+                    driver_id=driver_id,
+                    name=registry_item.get("name", driver_id),
+                    description=registry_item.get("description", ""),
+                    icon=registry_item.get("icon", "puzzle-piece"),
+                    home_page=registry_item.get("repository", ""),
+                    developer=registry_item.get("author", ""),
+                    version="",
+                    category=categories_list[0] if categories_list else "",
+                    categories=categories_list,
+                    installed=False,
+                    driver_installed=True,
+                    external=False,
+                    custom=True,
+                    official=False,
+                    update_available=False,
+                    latest_version="",
+                    instance_id="",
+                    can_update=False,
+                )
+                return render_template(
+                    "partials/available_card.html",
+                    integration=fallback_integration,
+                    remote_ip=remote_ip,
+                    just_updated=True,
+                )
 
     except SyncAPIError as e:
         _LOG.error("Update failed: %s", e)
@@ -1490,87 +1649,38 @@ def update_driver(driver_id: str):
 
 def _build_error_card(driver_id: str, registry: list, error_msg: str) -> str:
     """Build an error card HTML for a failed install."""
-    integration = next((item for item in registry if item.get("id") == driver_id), {})
-    name = integration.get("name", driver_id)
-    description = integration.get("description", "")
-    developer = integration.get("author", "")
-    categories = integration.get("categories", [])
-    category = categories[0] if categories else ""
-    categories_str = " ".join(categories)
-    home_page = integration.get("repository", "")
+    registry_item = next((item for item in registry if item.get("id") == driver_id), {})
 
-    # Use default icon color (matching available_list.html after color removal)
-    icon_color = "text-uc-primary"
-    bg_color = "bg-uc-primary/20"
+    # Convert registry item to AvailableIntegration structure
+    categories_list = registry_item.get("categories", [])
+    integration = AvailableIntegration(
+        driver_id=driver_id,
+        name=registry_item.get("name", driver_id),
+        description=registry_item.get("description", ""),
+        icon=registry_item.get("icon", "puzzle-piece"),
+        home_page=registry_item.get("repository", ""),
+        developer=registry_item.get("author", ""),
+        version="",
+        category=categories_list[0] if categories_list else "",
+        categories=categories_list,
+        installed=False,
+        driver_installed=False,
+        external=False,
+        custom=True,
+        official=False,
+        update_available=False,
+        latest_version="",
+        instance_id="",
+        can_update=False,
+    )
 
-    github_link = ""
-    if home_page:
-        github_link = f'''
-            <a href="{home_page}" target="_blank" rel="noopener"
-               class="p-1.5 text-gray-400 hover:text-white hover:bg-uc-darker rounded transition-colors"
-               title="View on GitHub">
-                <i class="fa-brands fa-github h-4 w-4"></i>
-            </a>
-        '''
-
-    return f'''
-<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border border-red-500/50"
-     id="card-{driver_id}"
-     data-name="{name}"
-     data-description="{description}"
-     data-developer="{developer}"
-     data-categories="{categories_str}"
-     data-installed="false"
-     data-status="error">
-    <div class="flex flex-col h-full">
-        <div class="flex items-start justify-between gap-2 mb-3">
-            <div class="flex items-center space-x-3 min-w-0 flex-1">
-                <div class="flex-shrink-0 w-10 h-10 {bg_color} rounded-lg flex items-center justify-center">
-                    <i class="fa-solid fa-puzzle-piece text-lg {icon_color}"></i>
-                </div>
-                <div class="min-w-0">
-                    <h4 class="font-semibold text-white text-sm truncate">{name}</h4>
-                </div>
-            </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-300 flex-shrink-0" title="{error_msg}">
-                Failed
-            </span>
-        </div>
-        <p class="text-sm text-gray-400 flex-1 mb-4 line-clamp-2">{description or "No description available"}</p>
-        <div class="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-uc-border">
-            <div class="flex items-center flex-wrap gap-2 text-xs text-gray-500 min-w-0">
-                <span>{developer}</span>
-                {f'<span class="inline-flex items-center px-2 py-0.5 rounded bg-uc-darker text-gray-400">{category}</span>' if category else ""}
-            </div>
-            <div class="flex items-center flex-wrap gap-2">
-                {github_link}
-                <button 
-                    class="install-btn inline-flex items-center px-3 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    hx-post="/api/integration/{driver_id}/install"
-                    hx-target="#card-{driver_id}"
-                    hx-swap="outerHTML"
-                    hx-indicator="#overlay-{driver_id}"
-                    title="Retry installation">
-                    <svg class="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                    </svg>
-                    Retry
-                </button>
-            </div>
-        </div>
-    </div>
-    <!-- Overlay for install retry -->
-    <div id="overlay-{driver_id}" class="htmx-indicator absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none [&.htmx-request]:pointer-events-auto">
-        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-            <svg class="animate-spin h-8 w-8 text-uc-primary mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span class="text-sm text-gray-300">Installing...</span>
-        </div>
-    </div>
-</div>
-    '''
+    remote_ip = _remote_client._address if _remote_client else None
+    return render_template(
+        "partials/available_card.html",
+        integration=integration,
+        remote_ip=remote_ip,
+        install_error=error_msg,
+    )
 
 
 @app.route("/api/integration/<driver_id>/install", methods=["POST"])
@@ -1670,74 +1780,41 @@ def install_integration(driver_id: str):
         _remote_client.install_integration(archive_data, filename)
         _LOG.info("Installed integration %s successfully", integration.get("name"))
 
-        # Return a replacement card HTML for HTMX outerHTML swap
-        name = integration.get("name", driver_id)
-        description = integration.get("description", "")
-        developer = integration.get("author", "")
-        categories = integration.get("categories", [])
-        category = categories[0] if categories else ""
-        categories_str = " ".join(categories)
-        home_page = integration.get("repository", "")
-
-        # Determine icon color based on category
-        icon_color = "text-uc-primary"
-        bg_color = "bg-uc-primary/20"
-
-        github_link = ""
-        if home_page:
-            github_link = f'''
-                <a href="{home_page}" target="_blank" rel="noopener"
-                   class="p-1.5 text-gray-400 hover:text-white hover:bg-uc-darker rounded transition-colors"
-                   title="View on GitHub">
-                    <i class="fa-brands fa-github h-4 w-4"></i>
-                </a>
-            '''
-
         # Release operation lock
         with _operation_lock:
             _operation_in_progress = False
             _LOG.info("Lock released after successful install of %s", driver_id)
 
-        return f'''
-<div class="integration-card relative bg-uc-card rounded-xl p-3 sm:p-5 border border-uc-border opacity-80"
-     id="card-{driver_id}"
-     data-name="{name}"
-     data-description="{description}"
-     data-developer="{developer}"
-     data-categories="{categories_str}"
-     data-installed="true"
-     data-status="installed">
-    <div class="flex flex-col h-full">
-        <div class="flex items-start justify-between gap-2 mb-3">
-            <div class="flex items-center space-x-3 min-w-0 flex-1">
-                <div class="flex-shrink-0 w-10 h-10 {bg_color} rounded-lg flex items-center justify-center">
-                    <i class="fa-solid fa-puzzle-piece text-lg {icon_color}"></i>
-                </div>
-                <div class="min-w-0">
-                    <h4 class="font-semibold text-white text-sm truncate">{name}</h4>
-                </div>
-            </div>
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-300 flex-shrink-0" title="Driver installed - needs configuration">
-                Installed
-            </span>
-        </div>
-        <p class="text-sm text-gray-400 flex-1 mb-4 line-clamp-2">{description or "No description available"}</p>
-        <div class="flex items-center justify-between flex-wrap gap-2 pt-3 border-t border-uc-border">
-            <div class="flex items-center flex-wrap gap-2 text-xs text-gray-500 min-w-0">
-                <span>{developer}</span>
-                {f'<span class="inline-flex items-center px-2 py-0.5 rounded bg-uc-darker text-gray-400">{category}</span>' if category else ""}
-            </div>
-            <div class="flex items-center flex-wrap gap-2">
-                {github_link}
-                <span class="inline-flex items-center text-xs text-green-400">
-                    <i class="fa-solid fa-check mr-1"></i>
-                    Installed
-                </span>
-            </div>
-        </div>
-    </div>
-</div>
-        '''
+        # Return a replacement card HTML for HTMX outerHTML swap
+        categories_list = integration.get("categories", [])
+        integration_obj = AvailableIntegration(
+            driver_id=driver_id,
+            name=integration.get("name", driver_id),
+            description=integration.get("description", ""),
+            icon=integration.get("icon", "puzzle-piece"),
+            home_page=integration.get("repository", ""),
+            developer=integration.get("author", ""),
+            version="",
+            category=categories_list[0] if categories_list else "",
+            categories=categories_list,
+            installed=False,
+            driver_installed=True,  # Just installed, not configured yet
+            external=False,
+            custom=True,
+            official=False,
+            update_available=False,
+            latest_version="",
+            instance_id="",
+            can_update=False,
+        )
+
+        remote_ip = _remote_client._address if _remote_client else None
+        return render_template(
+            "partials/available_card.html",
+            integration=integration_obj,
+            remote_ip=remote_ip,
+            just_installed=True,
+        )
 
     except SyncAPIError as e:
         _LOG.error("Install failed: %s", e)
@@ -2005,6 +2082,9 @@ def save_settings():
         settings.shutdown_on_battery = request.form.get("shutdown_on_battery") == "on"
         settings.auto_update = request.form.get("auto_update") == "on"
         settings.backup_configs = request.form.get("backup_configs") == "on"
+        settings.auto_register_entities = (
+            request.form.get("auto_register_entities") == "on"
+        )
 
         backup_time = request.form.get("backup_time")
         if backup_time:
