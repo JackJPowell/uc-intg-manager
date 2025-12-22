@@ -2127,34 +2127,37 @@ def update_driver(driver_id: str):
 def get_delete_confirmation(driver_id: str):
     """
     Get delete confirmation modal content for an integration.
-    
+
     Returns HTML to be displayed in the modal with delete options.
     """
     if not _remote_client:
         return "<p class='text-red-400'>Service not initialized</p>"
-    
+
     try:
         # Get integration name for display
         integrations = _get_installed_integrations()
         integration = next((i for i in integrations if i.driver_id == driver_id), None)
-        
+
         # Also check available list for unconfigured drivers
         if not integration:
             available = _get_available_integrations()
             integration = next((i for i in available if i.driver_id == driver_id), None)
-        
+
         integration_name = integration.name if integration else driver_id
-        
+
         # Determine if integration is configured (has an instance)
         is_configured = False
         if integration:
             # For IntegrationInfo, check if it has an instance_id and is not NOT_CONFIGURED
-            if hasattr(integration, 'instance_id') and hasattr(integration, 'state'):
-                is_configured = bool(integration.instance_id) and integration.state != 'NOT_CONFIGURED'
+            if hasattr(integration, "instance_id") and hasattr(integration, "state"):
+                is_configured = (
+                    bool(integration.instance_id)
+                    and integration.state != "NOT_CONFIGURED"
+                )
             # For AvailableIntegration, check the installed flag
-            elif hasattr(integration, 'installed'):
+            elif hasattr(integration, "installed"):
                 is_configured = integration.installed
-        
+
         return render_template(
             "partials/modal_delete_confirm.html",
             driver_id=driver_id,
@@ -2170,20 +2173,20 @@ def get_delete_confirmation(driver_id: str):
 def delete_integration(driver_id: str):
     """
     Delete an integration - either just the configuration or the entire integration.
-    
+
     Query parameters:
     - type: 'configuration' or 'full'
     """
     if not _remote_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
-    
+
     delete_type = request.args.get("type", "configuration")
     _LOG.info("Delete request for %s: type=%s", driver_id, delete_type)
-    
+
     try:
         # Build the instance_id (driver_id + ".main")
         instance_id = f"{driver_id}.main"
-        
+
         # Delete the instance/configuration
         try:
             _remote_client.delete_instance(instance_id)
@@ -2191,12 +2194,12 @@ def delete_integration(driver_id: str):
         except SyncAPIError as e:
             # If instance doesn't exist, that's okay - might be unconfigured
             _LOG.warning("Failed to delete instance %s: %s", instance_id, e)
-        
+
         # If full delete, also delete the driver
         if delete_type == "full":
             # Small delay to let instance deletion complete
             time.sleep(API_DELAY * 2)
-            
+
             try:
                 _remote_client.delete_driver(driver_id)
                 _LOG.info("Deleted driver: %s", driver_id)
@@ -2205,10 +2208,10 @@ def delete_integration(driver_id: str):
                 return jsonify(
                     {"status": "error", "message": f"Failed to delete driver: {e}"}
                 ), 500
-        
+
         # Small delay to ensure remote has processed
         time.sleep(API_DELAY)
-        
+
         # Return updated card or empty response
         if delete_type == "full":
             # Full delete - return empty (card will be removed)
@@ -2219,7 +2222,7 @@ def delete_integration(driver_id: str):
             integration = next(
                 (i for i in integrations if i.driver_id == driver_id), None
             )
-            
+
             if integration:
                 settings = Settings.load()
                 remote_ip = _remote_client._address if _remote_client else None
@@ -2232,7 +2235,7 @@ def delete_integration(driver_id: str):
             else:
                 # Driver might have been removed, return empty
                 return "", 200
-                
+
     except Exception as e:
         _LOG.error("Unexpected error during delete for %s: %s", driver_id, e)
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -2531,7 +2534,7 @@ def list_integration_backups():
 def get_release_notes_unavailable(version: str):
     """
     Return a user-friendly message when release notes cannot be fetched.
-    
+
     Used when GitHub URL cannot be parsed or release info is unavailable.
     """
     return render_template(
@@ -2546,7 +2549,7 @@ def get_release_notes_unavailable(version: str):
 def get_release_notes(owner: str, repo: str, version: str):
     """
     Get release notes for a specific version and return HTML for modal.
-    
+
     Renders markdown release notes as HTML.
     """
     if not _github_client:
@@ -2555,11 +2558,11 @@ def get_release_notes(owner: str, repo: str, version: str):
             error="GitHub client not available",
             version=version,
         )
-    
+
     try:
         # Fetch release info from GitHub
         release = _github_client.get_release_by_tag(owner, repo, version)
-        
+
         if not release:
             return render_template(
                 "partials/modal_release_notes.html",
@@ -2567,34 +2570,34 @@ def get_release_notes(owner: str, repo: str, version: str):
                 version=version,
                 github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
             )
-        
+
         # Get release body (markdown)
         release_body = release.get("body", "")
-        
+
         # Convert markdown to HTML with comprehensive extensions
         md = markdown.Markdown(
             extensions=[
-                "markdown.extensions.fenced_code",    # ```code blocks```
-                "markdown.extensions.tables",         # Tables
-                "markdown.extensions.nl2br",          # Newline to <br>
-                "markdown.extensions.sane_lists",     # Better list handling
-                "markdown.extensions.codehilite",     # Code highlighting
-                "markdown.extensions.attr_list",      # Add attributes to elements
-                "markdown.extensions.def_list",       # Definition lists
-                "markdown.extensions.abbr",           # Abbreviations
-                "markdown.extensions.footnotes",      # Footnotes
-                "markdown.extensions.md_in_html",     # Markdown in HTML
-                "markdown.extensions.toc",            # Table of contents
+                "markdown.extensions.fenced_code",  # ```code blocks```
+                "markdown.extensions.tables",  # Tables
+                "markdown.extensions.nl2br",  # Newline to <br>
+                "markdown.extensions.sane_lists",  # Better list handling
+                "markdown.extensions.codehilite",  # Code highlighting
+                "markdown.extensions.attr_list",  # Add attributes to elements
+                "markdown.extensions.def_list",  # Definition lists
+                "markdown.extensions.abbr",  # Abbreviations
+                "markdown.extensions.footnotes",  # Footnotes
+                "markdown.extensions.md_in_html",  # Markdown in HTML
+                "markdown.extensions.toc",  # Table of contents
             ],
             extension_configs={
                 "markdown.extensions.codehilite": {
                     "css_class": "highlight",
                     "linenums": False,
                 },
-            }
+            },
         )
         release_notes_html = md.convert(release_body) if release_body else ""
-        
+
         # Format the published date
         published_at = release.get("published_at", "")
         if published_at:
@@ -2605,7 +2608,7 @@ def get_release_notes(owner: str, repo: str, version: str):
                 release_date = published_at
         else:
             release_date = "Unknown"
-        
+
         # Render the release notes template
         return render_template(
             "partials/modal_release_notes.html",
@@ -2617,7 +2620,9 @@ def get_release_notes(owner: str, repo: str, version: str):
             author=release.get("author", {}).get("login", ""),
         )
     except Exception as e:
-        _LOG.error("Error loading release notes for %s/%s %s: %s", owner, repo, version, e)
+        _LOG.error(
+            "Error loading release notes for %s/%s %s: %s", owner, repo, version, e
+        )
         return render_template(
             "partials/modal_release_notes.html",
             error=f"Error loading release notes: {str(e)}",
