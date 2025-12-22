@@ -17,7 +17,6 @@ from const import (
     Settings,
     POWER_POLL_INTERVAL,
     VERSION_CHECK_INTERVAL_POLLS,
-    WEB_SERVER_PORT,
 )
 from remote_api import RemoteAPIClient, RemoteAPIError
 from web_server import WebServer
@@ -135,9 +134,6 @@ class IntegrationManagerDevice(PollingDevice):
         """Disconnect from the remote."""
         _LOG.debug("[%s] Disconnecting from remote", self.log_id)
 
-        # Stop polling
-        self._stop_polling()
-
         # Stop web server if running
         if self._web_server and self._web_server.is_running:
             self._web_server.stop()
@@ -146,6 +142,9 @@ class IntegrationManagerDevice(PollingDevice):
         # Close API client
         await self._client.close()
         self._connected = False
+
+        # Let base class handle stopping the polling
+        await super().disconnect()
 
     async def verify_connection(self) -> None:
         """

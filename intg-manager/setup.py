@@ -125,9 +125,11 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                     version_info.get("device_name", "Unknown"),
                     version_info.get("version", "Unknown"),
                 )
-                name = version_info.get("device_name", None)
+                name: str | None = version_info.get("device_name", None)
                 if name is None:
-                    name = await client.get_device_name() or version_info.get("model")
+                    name: str = await client.get_device_name() or version_info.get(
+                        "model", "UCR Remote"
+                    )
 
                 # Try to create an API key for better authentication
                 api_key = await client.create_api_key("intg-manager")

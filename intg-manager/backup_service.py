@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from const import INTEGRATION_BACKUPS_FILE, API_DELAY
+from const import INTEGRATION_BACKUPS_FILE, API_DELAY, Settings
 from sync_api import SyncRemoteClient, SyncAPIError
 
 _LOG = logging.getLogger(__name__)
@@ -44,12 +44,17 @@ def _load_backups() -> dict[str, Any]:
                         "settings": {},
                         "integrations": data.get("backups", {}),
                         "backup_timestamp": data.get("last_updated"),
-                        "version": "1.0"
+                        "version": "1.0",
                     }
                 return data
         except (json.JSONDecodeError, OSError) as e:
             _LOG.error("Failed to load backups file: %s", e)
-    return {"settings": {}, "integrations": {}, "backup_timestamp": None, "version": "1.0"}
+    return {
+        "settings": {},
+        "integrations": {},
+        "backup_timestamp": None,
+        "version": "1.0",
+    }
 
 
 def _save_backups(data: dict[str, Any]) -> bool:
@@ -326,7 +331,9 @@ def delete_backup(driver_id: str) -> bool:
     return True
 
 
-def backup_all_integrations(client: SyncRemoteClient, include_settings: bool = True) -> dict[str, bool]:
+def backup_all_integrations(
+    client: SyncRemoteClient, include_settings: bool = True
+) -> dict[str, bool]:
     """
     Backup all installed custom integrations and optionally settings.
 
@@ -360,7 +367,6 @@ def backup_all_integrations(client: SyncRemoteClient, include_settings: bool = T
 
         # Save settings to backup file if requested
         if include_settings:
-            from const import Settings
             settings = Settings.load()
             backups = _load_backups()
             backups["settings"] = settings.to_dict()

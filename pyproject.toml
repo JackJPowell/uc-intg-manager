@@ -15,8 +15,8 @@ urls.Repository = "https://github.com/JackJPowell/uc-intg-manager"
 
 dependencies = [
     # Core dependencies
-    "ucapi==0.4.0",
-    "ucapi-framework==1.2.3",
+    "ucapi==0.5.1",
+    "ucapi-framework==1.4.0",
     "pyee>=9.0",
     # Web framework
     "flask>=3.0.0",
