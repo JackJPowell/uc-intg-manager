@@ -7,9 +7,12 @@ Uses the `requests` library instead of aiohttp to avoid async context issues.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
+import json
 import logging
+import os
 import re
 from typing import Any
+from datetime import datetime
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -385,6 +388,35 @@ class SyncRemoteClient:
             "POST", f"/intg/instances/{integration_id}/entities/{entity_id}"
         )
 
+    def delete_all_entities(self, integration_id: str) -> dict[str, Any]:
+        """
+        Delete all entities for an integration.
+
+        :param integration_id: The integration instance ID
+        :return: Response dictionary from the API
+        :raises SyncAPIError: If the request fails
+        """
+        _LOG.info("Deleting all entities for integration: %s", integration_id)
+        return self._request(
+            "DELETE", "/entities", json={"integration_id": integration_id}
+        )
+
+    def delete_entity(self, integration_id: str, entity_id: str) -> dict[str, Any]:
+        """
+        Delete a specific entity for an integration.
+
+        :param integration_id: The integration instance ID (e.g., "psn_driver.main")
+        :param entity_id: The partial entity ID without integration prefix (e.g., "media_player.device1")
+        :return: Response dictionary from the API
+        :raises SyncAPIError: If the request fails
+        """
+        # Build full entity_id: integration_id + "." + entity_id
+        full_entity_id = f"{integration_id}.{entity_id}"
+        _LOG.info(
+            "Deleting entity %s for integration: %s", full_entity_id, integration_id
+        )
+        return self._request("DELETE", f"/entities/{full_entity_id}")
+
 
 class SyncGitHubClient:
     """
@@ -428,7 +460,6 @@ class SyncGitHubClient:
             if response.status_code == 403 and rate_limit_remaining == "0":
                 rate_limit_reset = response.headers.get("X-RateLimit-Reset")
                 # Convert Unix timestamp to readable time
-                from datetime import datetime
 
                 reset_time = (
                     datetime.fromtimestamp(int(rate_limit_reset))
@@ -533,7 +564,6 @@ class SyncGitHubClient:
                 rate_limit_reset = response.headers.get("X-RateLimit-Reset")
                 if rate_limit_remaining == "0":
                     # Convert Unix timestamp to readable time
-                    from datetime import datetime
 
                     reset_time = (
                         datetime.fromtimestamp(int(rate_limit_reset))
@@ -577,8 +607,21 @@ class SyncGitHubClient:
 
 
 def load_registry() -> list[dict[str, Any]]:
-    """Load the integrations registry from URL."""
+    """Load the integrations registry from URL or local file."""
     try:
+        # Check if it's a local file path
+        if os.path.exists(KNOWN_INTEGRATIONS_URL):
+            _LOG.debug("Loading registry from local file: %s", KNOWN_INTEGRATIONS_URL)
+            with open(KNOWN_INTEGRATIONS_URL, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "integrations" in data:
+                    return data["integrations"]
+                if isinstance(data, list):
+                    return data
+                return []
+
+        # Otherwise treat it as a URL
+        _LOG.debug("Loading registry from URL: %s", KNOWN_INTEGRATIONS_URL)
         response = requests.get(KNOWN_INTEGRATIONS_URL, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             data = response.json()
@@ -587,6 +630,6 @@ def load_registry() -> list[dict[str, Any]]:
             if isinstance(data, list):
                 return data
         return []
-    except requests.RequestException as e:
+    except (requests.RequestException, OSError, json.JSONDecodeError) as e:
         _LOG.warning("Failed to load registry: %s", e)
         return []

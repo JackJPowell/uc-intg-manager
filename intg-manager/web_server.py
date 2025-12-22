@@ -9,6 +9,9 @@ Uses synchronous HTTP clients (requests) to avoid aiohttp async context issues.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
+import re
+
+import io
 import json
 import logging
 import os
@@ -19,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_file
 from werkzeug.serving import make_server
 
 from backup_service import (
@@ -29,11 +32,11 @@ from backup_service import (
     backup_all_integrations,
     get_backup,
 )
-from const import WEB_SERVER_PORT, Settings, API_DELAY
+from const import WEB_SERVER_PORT, Settings, API_DELAY, INTEGRATION_BACKUPS_FILE
 from log_handler import get_log_entries, get_log_handler
+from migration_service import extract_migration_mappings
 from sync_api import SyncRemoteClient, SyncGitHubClient, load_registry, SyncAPIError
 from packaging.version import Version, InvalidVersion
-
 
 _LOG = logging.getLogger(__name__)
 
@@ -116,7 +119,7 @@ class AvailableIntegration:
     developer: str = ""
     version: str = ""
     category: str = ""
-    categories: list = None
+    categories: list | None = None
     installed: bool = False  # Has an instance configured
     driver_installed: bool = False  # Driver is installed (may not have instance)
     external: bool = False  # Running externally (Docker/network)
@@ -305,19 +308,19 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
         supports_backup = registry_item.get("supports_backup", False)
 
         if not home_page and registry_item.get("repository"):
-            home_page = registry_item.get("repository")
+            home_page: str = registry_item.get("repository", "")
         # Also use registry if driver home_page doesn't have github.com
         elif (
             home_page
             and "github.com" not in home_page
             and registry_item.get("repository")
         ):
-            home_page = registry_item.get("repository")
+            home_page = registry_item.get("repository", "")
 
         # Get description from driver, fall back to registry
-        description = driver.get("description", {}).get("en", "") if driver else ""
+        description: str = driver.get("description", {}).get("en", "") if driver else ""
         if not description and registry_item.get("description"):
-            description = registry_item.get("description")
+            description = registry_item.get("description", "")
 
         info = IntegrationInfo(
             instance_id=instance.get("integration_id", ""),
@@ -399,19 +402,19 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
 
         # Use registry repository as fallback for home_page
         if not home_page and registry_item.get("repository"):
-            home_page = registry_item.get("repository")
+            home_page = registry_item.get("repository", "")
         # Also use registry if driver home_page doesn't have github.com
         elif (
             home_page
             and "github.com" not in home_page
             and registry_item.get("repository")
         ):
-            home_page = registry_item.get("repository")
+            home_page = registry_item.get("repository", "")
 
         # Get description from driver, fall back to registry
         description = driver.get("description", {}).get("en", "")
         if not description and registry_item.get("description"):
-            description = registry_item.get("description")
+            description = registry_item.get("description", "")
 
         info = IntegrationInfo(
             instance_id="",  # No instance yet
@@ -854,13 +857,16 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
     Update an existing integration to the latest version.
 
     Process:
-    1. Backup the current configuration
-    2. Find the integration's GitHub repo URL
-    3. Download the latest release tar.gz
-    4. Delete the existing driver (which cascades to delete instance)
-    5. Install the new version
-    6. Restore configuration
-    7. Optionally register entities if register_entities=True
+    1. Fetch current version (for migration check)
+    2. Backup the current configuration
+    3. Find the integration's GitHub repo URL
+    4. Download the latest release tar.gz
+    5. Delete the existing driver (which cascades to delete instance)
+    6. Install the new version
+    7. Check if migration is required
+    8. Restore configuration (with updated entity IDs if migration needed)
+    9. Execute migration if required
+    10. Optionally register entities if register_entities=True
 
     :param instance_id: The integration instance ID to update
     :param register_entities: Whether to register entities after update
@@ -885,6 +891,7 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
         _LOG.info("Lock acquired for updating instance %s", instance_id)
 
     backup_data = None
+    previous_version = None
 
     try:
         # Find the integration to get its GitHub URL
@@ -932,6 +939,29 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
             integration.supports_backup,
         )
 
+        # Load registry to check for migration_required_at
+        migration_required_at = None
+        try:
+            registry = load_registry()
+            for entry in registry:
+                if entry.get("driver_id") == integration.driver_id:
+                    migration_required_at = entry.get("migration_required_at")
+                    if migration_required_at:
+                        _LOG.info(
+                            "Registry indicates migration may be required at version: %s",
+                            migration_required_at,
+                        )
+                    break
+        except Exception as e:
+            _LOG.warning("Failed to load registry for migration check: %s", e)
+
+        # Step 1: Store current version for migration check
+        previous_version = integration.version
+        if previous_version:
+            _LOG.info(
+                "Current version of %s: %s", integration.driver_id, previous_version
+            )
+
         # Capture list of configured entities before update (if user wants to re-register)
         configured_entity_ids = []
         if register_entities and is_configured:
@@ -943,7 +973,7 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
                     instance_id
                 )
                 configured_entity_ids = [
-                    entity.get("entity_id")
+                    str(entity.get("entity_id"))
                     for entity in configured_entities
                     if entity.get("entity_id")
                 ]
@@ -1104,11 +1134,55 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
         time.sleep(API_DELAY * 2)
 
         # Post-installation verification - give the remote time to process the driver
-        _LOG.info("Waiting for driver to be ready: %s", integration.driver_id)
+        _LOG.debug("Waiting for driver to be ready: %s", integration.driver_id)
         _remote_client.get_drivers()  # Verify driver is available
 
         # Additional pause to ensure driver is fully initialized
         time.sleep(API_DELAY * 3)
+
+        # Get current version once after installation for migration use
+        current_version = ""
+        should_check_migration = False
+
+        if previous_version:
+            # Get current version for migration checks
+            driver_info = _remote_client.get_driver(integration.driver_id)
+            if driver_info:
+                current_version = driver_info.get("version", "")
+                _LOG.info(
+                    "Installed version: %s (upgrading from %s)",
+                    current_version,
+                    previous_version,
+                )
+
+            # Check if migration is needed based on registry's migration_required_at
+            if migration_required_at:
+                # Compare versions to see if migration is still needed
+                try:
+                    if Version(previous_version) < Version(migration_required_at):
+                        should_check_migration = True
+                        _LOG.info(
+                            "Previous version %s is less than %s - will check for migration",
+                            previous_version,
+                            migration_required_at,
+                        )
+                    else:
+                        _LOG.info(
+                            "Previous version %s is greater than or equal to %s - migration already completed, skipping",
+                            previous_version,
+                            migration_required_at,
+                        )
+                except Exception as e:
+                    _LOG.warning(
+                        "Failed to compare versions, will check for migration anyway: %s",
+                        e,
+                    )
+                    should_check_migration = True
+            else:
+                _LOG.info(
+                    "No migration_required_at in registry for %s - no migration needed",
+                    integration.driver_id,
+                )
 
         # Restore configuration if backup data exists (only for configured instances)
         if backup_data and is_configured:
@@ -1117,12 +1191,106 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
                     "Starting configuration restore for %s", integration.driver_id
                 )
 
-                # Step 1: POST /intg/setup with reconfigure=false to start restore mode
+                # Step 1: Start setup for restore
                 _remote_client.start_setup(integration.driver_id, reconfigure=False)
-                _LOG.info("Started setup mode for restore")
+                _LOG.info("Started setup for restore (reconfigure=false)")
 
-                # Brief pause between API calls
-                # time.sleep(API_DELAY)
+                time.sleep(API_DELAY * 4)  # Give more time for setup to initialize
+
+                # Step 1a: Check for migration metadata in the setup response
+                setup_response = _remote_client.get_setup(integration.driver_id)
+                _LOG.debug("Initial setup response: %s", setup_response)
+
+                # Check if setup is in the right state
+                setup_state = setup_response.get("state", "")
+                if setup_state != "WAIT_USER_ACTION":
+                    _LOG.warning(
+                        "Setup not ready yet (state: %s), waiting longer...",
+                        setup_state,
+                    )
+                    time.sleep(API_DELAY * 2)
+                    setup_response = _remote_client.get_setup(integration.driver_id)
+                    setup_state = setup_response.get("state", "")
+                    _LOG.debug("Setup response after wait: %s", setup_response)
+
+                migration_required = (
+                    None  # None = unknown, True = required, False = not required
+                )
+                migration_possible = False
+                migration_mappings = []
+
+                # Only check for migration if registry indicates it might be needed
+                if previous_version and should_check_migration:
+                    _LOG.info(
+                        "Checking for migration metadata (previous_version: %s Migration Required: %s)",
+                        previous_version,
+                        should_check_migration,
+                    )
+
+                    # Look for migration_required and migration_possible in settings
+                    settings = (
+                        setup_response.get("require_user_action", {})
+                        .get("input", {})
+                        .get("settings", [])
+                    )
+
+                    _LOG.debug("Found %d settings in setup response", len(settings))
+
+                    # Log all setting IDs to help debug
+                    setting_ids = [s.get("id") for s in settings]
+                    _LOG.debug("Setting IDs in response: %s", setting_ids)
+
+                    for setting in settings:
+                        setting_id = setting.get("id")
+
+                        if setting_id == "migration_possible":
+                            # This indicates the integration supports migration (has get_migration_data override)
+                            migration_possible = True
+                            _LOG.info(
+                                "Migration is possible for %s - integration supports migration",
+                                integration.driver_id,
+                            )
+                        elif setting_id == "migration_required":
+                            # Get the previous_version value from the label
+                            label_value = (
+                                setting.get("field", {})
+                                .get("label", {})
+                                .get("value", "")
+                            )
+                            # If there's a value, migration is required
+                            migration_required = bool(label_value)
+                            _LOG.info(
+                                "Migration metadata found: migration_required=%s (previous_version from field: %s)",
+                                migration_required,
+                                label_value,
+                            )
+
+                    if not migration_possible:
+                        _LOG.info(
+                            "Integration %s does not support migration (no migration_possible field)",
+                            integration.driver_id,
+                        )
+                    elif migration_required is False:
+                        _LOG.info(
+                            "Migration explicitly not required for %s",
+                            integration.driver_id,
+                        )
+                    elif migration_required is None:
+                        _LOG.debug(
+                            "Migration requirement unknown for %s (will attempt if possible)",
+                            integration.driver_id,
+                        )
+                    else:
+                        _LOG.info(
+                            "Migration IS required for %s - will execute after restore",
+                            integration.driver_id,
+                        )
+                elif previous_version and not should_check_migration:
+                    _LOG.info(
+                        "Skipping migration check - registry indicates migration not needed or already completed"
+                    )
+                else:
+                    _LOG.info("No previous_version provided - skipping migration check")
 
                 # Step 2: PUT /intg/setup/{driver_id} with restore_from_backup="true"
                 _remote_client.send_setup_input(
@@ -1189,36 +1357,345 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
                 # Final verification call after DELETE (like official tool)
                 _remote_client.get_enabled_instances()
 
-                # Get entities for the restored instance
-                if restored_instance_id:
-                    entities = _remote_client.get_instance_entities(
+                _LOG.info(
+                    "Configuration restored successfully for %s", integration.driver_id
+                )
+
+                # Step 4: Register ALL entities before migration (only if migration is possible)
+                # Migration needs entities to exist on Remote to update activities
+                all_entities = []
+                if migration_possible and restored_instance_id:
+                    _remote_client.get_enabled_instances()
+
+                    all_entities = _remote_client.get_instance_entities(
                         restored_instance_id
                     )
                     _LOG.info(
-                        "Retrieved %d entities for instance %s",
-                        len(entities),
+                        "Retrieved %d total entities for instance %s",
+                        len(all_entities),
                         restored_instance_id,
                     )
 
-                    # Re-register previously configured entities if requested
-                    if register_entities and configured_entity_ids:
+                    # Register ALL entities (not just configured ones)
+                    # This ensures entities exist when migration runs
+                    if all_entities:
+                        all_entity_ids: list[str] = [
+                            str(e.get("entity_id"))
+                            for e in all_entities
+                            if e.get("entity_id")
+                        ]
                         time.sleep(API_DELAY * 5)
                         _LOG.info(
-                            "Re-registering %d previously configured entities for instance %s",
-                            len(configured_entity_ids),
+                            "Registering ALL %d entities before migration for instance %s",
+                            len(all_entity_ids),
+                            restored_instance_id,
+                        )
+                        _LOG.debug("All entity IDs: %s", all_entity_ids)
+
+                        try:
+                            _remote_client.register_entities(
+                                restored_instance_id, all_entity_ids
+                            )
+                            _LOG.info(
+                                "Successfully registered all %d entities",
+                                len(all_entity_ids),
+                            )
+                        except SyncAPIError as e:
+                            _LOG.warning(
+                                "Failed to register all entities for instance %s: %s",
+                                restored_instance_id,
+                                e,
+                            )
+
+                # Step 5: Execute migration if possible and not explicitly not required
+                # migration_required: None (unknown) or True = proceed, False = skip
+                if (
+                    migration_possible
+                    and migration_required is not False
+                    and previous_version
+                    and restored_instance_id
+                ):
+                    try:
+                        _LOG.info(
+                            "Migration flow starting for %s (previous_version: %s, migration_required: %s)",
+                            integration.driver_id,
+                            previous_version,
+                            migration_required
+                            if migration_required is not None
+                            else "to be determined",
+                        )
+
+                        # POST with reconfigure=true to get to the configuration mode screen
+                        _remote_client.start_setup(
+                            integration.driver_id, reconfigure=True
+                        )
+                        _LOG.info("Started setup mode for migration")
+
+                        time.sleep(API_DELAY)
+
+                        # GET to read the configuration mode screen
+                        setup_response = _remote_client.get_setup(integration.driver_id)
+                        _LOG.debug("Setup response for migration: %s", setup_response)
+
+                        # Extract the choice ID (current device)
+                        settings = (
+                            setup_response.get("require_user_action", {})
+                            .get("input", {})
+                            .get("settings", [])
+                        )
+                        choice_id = None
+                        for setting in settings:
+                            if setting.get("id") == "choice":
+                                dropdown = setting.get("field", {}).get("dropdown", {})
+                                choice_id = dropdown.get("value")
+                                break
+
+                        if not choice_id:
+                            _LOG.warning("No choice ID found for migration")
+                            raise ValueError("No device choice found")
+
+                        # Step 4a: Select "migrate" action with the choice
+                        _remote_client.send_setup_input(
+                            integration.driver_id,
+                            {"choice": choice_id, "action": "migrate"},
+                        )
+                        _LOG.debug(
+                            "Selected 'migrate' action for device: %s", choice_id
+                        )
+
+                        time.sleep(API_DELAY * 2)
+
+                        # Step 4b: GET the next setup page after selecting migrate
+                        setup_response = _remote_client.get_setup(integration.driver_id)
+                        _LOG.debug(
+                            "Setup response after selecting migrate: %s", setup_response
+                        )
+
+                        # Check if setup is in the right state
+                        setup_state = setup_response.get("state", "")
+                        if setup_state != "WAIT_USER_ACTION":
+                            _LOG.warning(
+                                "Setup not in WAIT_USER_ACTION after selecting migrate (state: %s)",
+                                setup_state,
+                            )
+                            raise ValueError(
+                                f"Unexpected setup state after migrate: {setup_state}"
+                            )
+
+                        # Step 4c: Send previous_version
+                        _remote_client.send_setup_input(
+                            integration.driver_id,
+                            {"previous_version": previous_version},
+                        )
+                        _LOG.debug("Sent previous_version: %s", previous_version)
+
+                        time.sleep(API_DELAY * 2)
+
+                        # GET the migration execution screen (asks for remote_url, pin, etc.)
+                        setup_response = _remote_client.get_setup(integration.driver_id)
+                        _LOG.debug("Migration execution screen: %s", setup_response)
+
+                        # Prepare migration data
+                        remote_url = _remote_client._address or "http://localhost"
+                        remote_api_key = _remote_client._api_key or ""
+
+                        _LOG.info(
+                            "Executing migration for %s (from %s to %s)",
+                            integration.driver_id,
+                            previous_version,
+                            current_version,
+                        )
+
+                        # Build migration input - only include fields that have values
+                        # The integration will try to fetch current_version from Remote API,
+                        # but if that fails, having it provided prevents errors
+                        migration_input = {
+                            "previous_version": previous_version,
+                            "current_version": current_version,
+                            "remote_url": remote_url,
+                            "pin": "",
+                            "automated": "true",
+                        }
+
+                        # Only include api_key if it's not empty (avoid sending empty form fields)
+                        if remote_api_key:
+                            migration_input["api_key"] = remote_api_key
+
+                        _LOG.info(
+                            "Sending migration data: remote_url=%s, api_key=%s, previous_version=%s, current_version=%s",
+                            remote_url,
+                            "****" if remote_api_key else "(not provided)",
+                            previous_version,
+                            current_version,
+                        )
+
+                        _remote_client.send_setup_input(
+                            integration.driver_id, migration_input
+                        )
+                        _LOG.debug("Migration execution data sent successfully")
+
+                        time.sleep(
+                            API_DELAY * 4
+                        )  # Give more time for migration to process
+
+                        # GET to read the migration mappings response
+                        setup_response = _remote_client.get_setup(integration.driver_id)
+                        _LOG.debug("Migration mappings response: %s", setup_response)
+
+                        # Check the state of the response
+                        setup_state = setup_response.get("state", "")
+                        _LOG.debug("Migration response state: %s", setup_state)
+
+                        if setup_state == "ERROR":
+                            error_type = setup_response.get("error", "UNKNOWN")
+                            _LOG.error(
+                                "Migration failed with error state: %s. This could mean:\n"
+                                "  - Integration couldn't connect to Remote at %s\n"
+                                "  - Invalid PIN provided\n"
+                                "  - Integration encountered an error during migration\n"
+                                "  - Check integration logs for more details",
+                                error_type,
+                                remote_url,
+                            )
+                            # Don't raise - try to extract any mappings that might be present
+
+                        # Extract migration mappings from the response
+                        migration_mappings = extract_migration_mappings(setup_response)
+
+                        _LOG.debug(
+                            "Found %d entity mappings: %s",
+                            len(migration_mappings),
+                            migration_mappings,
+                        )
+
+                        if migration_mappings:
+                            # Update configured_entity_ids list with migrated IDs
+                            # DON'T modify backup_data - keep it original for potential rollback
+                            _LOG.debug(
+                                "Updating configured_entity_ids with migration mappings. Original: %s",
+                                configured_entity_ids,
+                            )
+                            mapping_dict = {
+                                m["previous_entity_id"]: m["new_entity_id"]
+                                for m in migration_mappings
+                            }
+                            updated_entity_ids = []
+                            for entity_id in configured_entity_ids:
+                                if entity_id in mapping_dict:
+                                    updated_entity_ids.append(mapping_dict[entity_id])
+                                    _LOG.info(
+                                        "Mapped entity: %s -> %s",
+                                        entity_id,
+                                        mapping_dict[entity_id],
+                                    )
+                                else:
+                                    updated_entity_ids.append(entity_id)
+                            configured_entity_ids = updated_entity_ids
+                            _LOG.info(
+                                "Updated configured_entity_ids: %s",
+                                configured_entity_ids,
+                            )
+
+                            # Check final result - should be SETUP_COMPLETE or show mappings
+                            migration_state = setup_response.get("state", "")
+
+                            if migration_state == "SETUP_COMPLETE":
+                                _LOG.info(
+                                    "Migration completed successfully for %s",
+                                    integration.driver_id,
+                                )
+                            elif migration_state == "SETUP_ERROR":
+                                error_msg = setup_response.get("error", "Unknown error")
+                                _LOG.error(
+                                    "Migration failed for %s: %s",
+                                    integration.driver_id,
+                                    error_msg,
+                                )
+                            else:
+                                _LOG.info(
+                                    "Migration processing complete for %s",
+                                    integration.driver_id,
+                                )
+                        else:
+                            _LOG.warning(
+                                "No migration mappings found for %s",
+                                integration.driver_id,
+                            )
+
+                        # Complete migration setup flow
+                        _remote_client.complete_setup(integration.driver_id)
+
+                    except Exception as e:
+                        _LOG.warning(
+                            "Failed to execute migration for %s: %s",
+                            integration.driver_id,
+                            e,
+                        )
+
+                # Step 6: Register configured entities
+                if restored_instance_id and register_entities and configured_entity_ids:
+                    time.sleep(API_DELAY * 2)
+
+                    # If migration was possible, we registered ALL entities earlier
+                    # Now we need to clean up by deleting all and re-registering only configured ones
+                    if migration_possible:
+                        _LOG.info(
+                            "Cleaning up entities for %s - will keep only configured entities",
                             restored_instance_id,
                         )
 
                         try:
-                            # Register all entities in one API call
+                            # Delete ALL entities for this integration
+                            _LOG.info(
+                                "Deleting all entities for instance %s",
+                                restored_instance_id,
+                            )
+                            _remote_client.delete_all_entities(restored_instance_id)
+                            _LOG.info("All entities deleted")
+
+                            time.sleep(API_DELAY * 2)
+
+                            # Re-register only the configured entities (now with updated IDs from migration)
+                            _LOG.info(
+                                "Re-registering %d configured entities for instance %s",
+                                len(configured_entity_ids),
+                                restored_instance_id,
+                            )
+                            _LOG.info(
+                                "Configured entity IDs: %s", configured_entity_ids
+                            )
+
                             _remote_client.register_entities(
                                 restored_instance_id, configured_entity_ids
                             )
 
                             _LOG.info(
-                                "Successfully re-registered %d entities for instance %s",
+                                "Successfully registered %d configured entities",
                                 len(configured_entity_ids),
+                            )
+                        except SyncAPIError as e:
+                            _LOG.warning(
+                                "Failed to clean up entities for instance %s: %s",
                                 restored_instance_id,
+                                e,
+                            )
+                    else:
+                        # No migration possible - just register configured entities directly
+                        _LOG.info(
+                            "Registering %d configured entities for instance %s",
+                            len(configured_entity_ids),
+                            restored_instance_id,
+                        )
+                        _LOG.info("Configured entity IDs: %s", configured_entity_ids)
+
+                        try:
+                            _remote_client.register_entities(
+                                restored_instance_id, configured_entity_ids
+                            )
+
+                            _LOG.info(
+                                "Successfully registered %d configured entities",
+                                len(configured_entity_ids),
                             )
                         except SyncAPIError as e:
                             _LOG.warning(
@@ -1227,9 +1704,7 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
                                 e,
                             )
 
-                _LOG.info(
-                    "Configuration restored successfully for %s", integration.driver_id
-                )
+                _LOG.info("Update completed successfully for %s", integration.driver_id)
 
             except SyncAPIError as e:
                 _LOG.error(
@@ -2353,9 +2828,6 @@ def delete_backup_entry(driver_id: str):
 @app.route("/api/backups/download")
 def download_complete_backup():
     """Download complete backup file (all integrations + settings)."""
-    from flask import send_file
-    import io
-    from const import Settings
 
     try:
         # Get current settings
@@ -2386,14 +2858,11 @@ def download_complete_backup():
 @app.route("/api/backups/upload", methods=["POST"])
 def upload_complete_backup():
     """Upload and restore complete backup file (all integrations + settings)."""
-    from flask import request as flask_request
-    from const import Settings, INTEGRATION_BACKUPS_FILE
-
     try:
-        if "file" not in flask_request.files:
+        if "file" not in request.files:
             return jsonify({"status": "error", "message": "No file provided"}), 400
 
-        file = flask_request.files["file"]
+        file = request.files["file"]
         if file.filename == "":
             return jsonify({"status": "error", "message": "No file selected"}), 400
 
