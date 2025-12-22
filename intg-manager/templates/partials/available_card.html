@@ -23,12 +23,35 @@
                 <div class="min-w-0">
                     <h4 class="font-semibold text-white text-sm sm:text-base truncate">{{ integration.name }}</h4>
                     {% if integration.version %}
-                    <span class="text-xs text-gray-500">v{{ integration.version }}</span>
+                    {% if integration.home_page and 'github.com' in integration.home_page %}
+                    {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+                    {% set path_parts = repo_path.split('/') %}
+                    {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                    {% set owner = path_parts[0] %}
+                    {% set repo = path_parts[1] %}
+                    {% set release_url = "/api/release-notes/" ~ owner ~ "/" ~ repo ~ "/v" ~ integration.version %}
+                    {% else %}
+                    {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+                    {% endif %}
+                    {% else %}
+                    {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+                    {% endif %}
+                    <a href="#" 
+                       hx-get="{{ release_url }}"
+                       hx-target="#modal-content"
+                       hx-swap="innerHTML"
+                       hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
+                       onclick="event.preventDefault();"
+                       class="text-xs text-gray-500 hover:text-uc-primary transition-colors cursor-pointer" 
+                       title="View release notes for v{{ integration.version }}">
+                        v{{ integration.version }}
+                    </a>
                     {% endif %}
                 </div>
             </div>
             
             <!-- Status Badge -->
+            <div class="flex items-center flex-wrap gap-2 flex-shrink-0">
             {% if install_error %}
             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-300 flex-shrink-0" title="{{ install_error }}">
                 Failed
@@ -65,6 +88,7 @@
                 Installed
             </span>
             {% endif %}
+            </div>
         </div>
         
         <!-- Description -->
@@ -86,6 +110,19 @@
             </div>
             
             <div class="flex items-center flex-wrap gap-2" id="actions-{{ integration.driver_id }}">
+                {% if integration.driver_installed %}
+                <!-- Delete button for all installed drivers -->
+                <button
+                    hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
+                    hx-target="#modal-content"
+                    hx-swap="innerHTML"
+                    hx-on::before-request="openModal('Delete Integration')"
+                    class="p-1.5 text-gray-400 hover:text-red-400 hover:bg-uc-darker rounded transition-colors"
+                    title="Delete integration">
+                    <i class="fa-solid fa-trash-alt h-4 w-4"></i>
+                </button>
+                {% endif %}
+                
                 {% if integration.home_page %}
                 <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
                    class="p-1.5 text-gray-400 hover:text-white hover:bg-uc-darker rounded transition-colors"
@@ -102,7 +139,29 @@
                 <span class="text-xs text-blue-400 italic">Via Docker</span>
                 {% elif integration.update_available and integration.can_update %}
                 <!-- Update button for installed integrations with updates -->
-                <span class="text-xs text-gray-400">v{{ integration.version }}</span>
+                {% if integration.home_page and 'github.com' in integration.home_page %}
+                {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+                {% set path_parts = repo_path.split('/') %}
+                {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                {% set owner = path_parts[0] %}
+                {% set repo = path_parts[1] %}
+                {% set release_url = "/api/release-notes/" ~ owner ~ "/" ~ repo ~ "/v" ~ integration.version %}
+                {% else %}
+                {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+                {% endif %}
+                {% else %}
+                {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+                {% endif %}
+                <a href="#" 
+                   hx-get="{{ release_url }}"
+                   hx-target="#modal-content"
+                   hx-swap="innerHTML"
+                   hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
+                   onclick="event.preventDefault();"
+                   class="text-xs text-gray-400 hover:text-uc-primary transition-colors cursor-pointer" 
+                   title="View release notes for v{{ integration.version }}">
+                    v{{ integration.version }}
+                </a>
                 <span class="text-gray-500">→</span>
                 <button 
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-lg transition-colors"

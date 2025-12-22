@@ -17,7 +17,31 @@
             <div class="min-w-0">
                 <h4 class="text-base sm:text-lg font-semibold text-white truncate">{{ integration.name }}</h4>
                 <div class="flex items-center flex-wrap gap-x-2 sm:gap-x-3 mt-1 text-xs text-gray-500">
-                    <span>v{{ integration.version }}</span>
+                    {% if integration.version %}
+                    {% if integration.home_page and 'github.com' in integration.home_page %}
+                    {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+                    {% set path_parts = repo_path.split('/') %}
+                    {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                    {% set owner = path_parts[0] %}
+                    {% set repo = path_parts[1] %}
+                    {% set release_url = "/api/release-notes/" ~ owner ~ "/" ~ repo ~ "/v" ~ integration.version %}
+                    {% else %}
+                    {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+                    {% endif %}
+                    {% else %}
+                    {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+                    {% endif %}
+                    <a href="#" 
+                       hx-get="{{ release_url }}"
+                       hx-target="#modal-content"
+                       hx-swap="innerHTML"
+                       hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
+                       onclick="event.preventDefault();"
+                       class="hover:text-uc-primary transition-colors cursor-pointer" 
+                       title="View release notes for v{{ integration.version }}">
+                        v{{ integration.version }}
+                    </a>
+                    {% endif %}
                     {% if integration.developer %}
                     <span>•</span>
                     <span>{{ integration.developer }}</span>
@@ -94,10 +118,30 @@
             {% endif %}
             
             {% if integration.update_available and integration.can_update and not integration.official and not integration.external and (not integration.instance_id or integration.supports_backup) %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-300" title="Update available: {{ integration.latest_version }}">
+            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+            {% set path_parts = repo_path.split('/') %}
+            {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+            {% set owner = path_parts[0] %}
+            {% set repo = path_parts[1] %}
+            {% set release_url = "/api/release-notes/" ~ owner ~ "/" ~ repo ~ "/" ~ integration.latest_version %}
+            {% else %}
+            {% set release_url = "/api/release-notes/unavailable/" ~ integration.latest_version %}
+            {% endif %}
+            {% else %}
+            {% set release_url = "/api/release-notes/unavailable/" ~ integration.latest_version %}
+            {% endif %}
+            <a href="#" 
+               hx-get="{{ release_url }}"
+               hx-target="#modal-content"
+               hx-swap="innerHTML"
+               hx-on::before-request="openModal('Release Notes - {{ integration.latest_version }}')"
+               onclick="event.preventDefault();"
+               class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/40 transition-colors cursor-pointer" 
+               title="View release notes for {{ integration.latest_version }}">
                 <i class="fa-solid fa-arrow-up w-3 h-3 mr-1"></i>
                 {{ integration.latest_version }}
-            </span>
+            </a>
             {% endif %}
         </div>
         
@@ -105,6 +149,17 @@
         <div class="flex items-center flex-wrap gap-2 py-1">
             {% if integration.update_available and integration.can_update and not integration.official and not integration.external and (not integration.instance_id or integration.supports_backup) %}
             <!-- Update available - show update button (takes priority over configure link) -->
+            <!-- Delete button -->
+            <button
+                hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Delete Integration')"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Delete integration">
+                <i class="fa-solid fa-trash-alt h-4 w-4"></i>
+            </button>
+            
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
@@ -114,7 +169,29 @@
             {% endif %}
             
             <!-- Version upgrade display: current -> split button with new version -->
-            <span class="text-xs text-gray-400">v{{ integration.version }}</span>
+            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+            {% set path_parts = repo_path.split('/') %}
+            {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+            {% set owner = path_parts[0] %}
+            {% set repo = path_parts[1] %}
+            {% set release_url = "/api/release-notes/" ~ owner ~ "/" ~ repo ~ "/v" ~ integration.version %}
+            {% else %}
+            {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+            {% endif %}
+            {% else %}
+            {% set release_url = "/api/release-notes/unavailable/v" ~ integration.version %}
+            {% endif %}
+            <a href="#" 
+               hx-get="{{ release_url }}"
+               hx-target="#modal-content"
+               hx-swap="innerHTML"
+               hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
+               onclick="event.preventDefault();"
+               class="text-xs text-gray-400 hover:text-uc-primary transition-colors cursor-pointer" 
+               title="View release notes for v{{ integration.version }}">
+                v{{ integration.version }}
+            </a>
             <span class="text-gray-500">→</span>
             
             <!-- Split button: Main action + Dropdown for alternative -->
@@ -172,12 +249,47 @@
                             Backup Config
                         </button>
                         {% endif %}
+                        
+                        {% if integration.home_page and 'github.com' in integration.home_page %}
+                        {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+                        {% set path_parts = repo_path.split('/') %}
+                        {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                        {% set owner = path_parts[0] %}
+                        {% set repo = path_parts[1] %}
+                        {% set release_url = "/api/release-notes/" ~ owner ~ "/" ~ repo ~ "/" ~ integration.latest_version %}
+                        {% else %}
+                        {% set release_url = "/api/release-notes/unavailable/" ~ integration.latest_version %}
+                        {% endif %}
+                        {% else %}
+                        {% set release_url = "/api/release-notes/unavailable/" ~ integration.latest_version %}
+                        {% endif %}
+                        <button
+                            class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-uc-darker hover:text-white transition-colors flex items-center gap-2"
+                            hx-get="{{ release_url }}"
+                            hx-target="#modal-content"
+                            hx-swap="innerHTML"
+                            hx-on::before-request="toggleDropdown(event, 'dropdown-{{ integration.driver_id }}', true); openModal('Release Notes - {{ integration.latest_version }}');"
+                            title="View release notes for {{ integration.latest_version }}">
+                            <i class="fa-solid fa-file-lines h-4 w-4"></i>
+                            Release Notes
+                        </button>
                     </div>
                 </div>
             </div>
             
             {% elif integration.state == 'NOT_CONFIGURED' %}
             <!-- Unconfigured driver - link to remote configurator -->
+            <!-- Delete button -->
+            <button
+                hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Delete Integration')"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Delete integration">
+                <i class="fa-solid fa-trash-alt h-4 w-4"></i>
+            </button>
+            
             <a href="http://{{ remote_ip }}/configurator/#/integrations" 
                target="_blank" rel="noopener"
                class="text-xs text-yellow-400 hover:text-yellow-300 italic transition-colors">
@@ -185,6 +297,17 @@
             </a>
             {% elif integration.custom %}
             <!-- Custom integrations installed on the remote -->
+            <!-- Delete button for all integrations -->
+            <button
+                hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Delete Integration')"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Delete integration">
+                <i class="fa-solid fa-trash-alt h-4 w-4"></i>
+            </button>
+            
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
@@ -207,7 +330,18 @@
             </button>
             {% endif %}
             {% elif integration.external %}
-            <!-- External/Docker integrations - read-only -->
+            <!-- External/Docker integrations -->
+            <!-- Delete button -->
+            <button
+                hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Delete Integration')"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Delete integration">
+                <i class="fa-solid fa-trash-alt h-4 w-4"></i>
+            </button>
+            
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors"
@@ -218,6 +352,17 @@
             <span class="text-xs text-gray-500 italic">Managed via Docker</span>
             {% else %}
             <!-- Official integration - show info only -->
+            <!-- Delete button -->
+            <button
+                hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Delete Integration')"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Delete integration">
+                <i class="fa-solid fa-trash-alt h-4 w-4"></i>
+            </button>
+            
             <a href="http://{{ remote_ip }}/configurator/#/integrations" target="_blank" rel="noopener" class="text-xs text-teal-400 hover:text-teal-300 italic transition-colors" title="Manage in firmware settings">
                 Managed by firmware <i class="fas fa-external-link-alt ml-0.5"></i>
             </a>

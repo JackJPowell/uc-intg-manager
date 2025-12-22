@@ -492,6 +492,35 @@ class SyncGitHubClient:
             _LOG.warning("Failed to get release for %s/%s: %s", owner, repo, e)
             return None
 
+    def get_release_by_tag(
+        self, owner: str, repo: str, tag: str
+    ) -> dict[str, Any] | None:
+        """
+        Get a specific release by tag name.
+
+        :param owner: Repository owner
+        :param repo: Repository name
+        :param tag: Release tag (e.g., 'v1.0.0' or '1.0.0')
+        :return: Release data or None if not found
+        """
+        # GitHub API expects the tag as-is (with or without 'v' prefix)
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/releases/tags/{tag}"
+
+        try:
+            response = self._session.get(url, timeout=REQUEST_TIMEOUT)
+
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 404:
+                _LOG.debug("Release not found for %s/%s tag %s", owner, repo, tag)
+                return None
+            return None
+        except requests.RequestException as e:
+            _LOG.warning(
+                "Failed to get release for %s/%s tag %s: %s", owner, repo, tag, e
+            )
+            return None
+
     def download_release_asset(
         self, owner: str, repo: str, asset_pattern: str = ".tar.gz"
     ) -> tuple[bytes, str] | None:
