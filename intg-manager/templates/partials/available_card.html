@@ -170,7 +170,7 @@
                     <!-- Main Update Button -->
                     <button 
                         class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-500/30"
-                        hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                        hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
                         hx-target="#card-{{ integration.driver_id }}"
                         hx-swap="outerHTML"
                         hx-indicator="#overlay-{{ integration.driver_id }}"
@@ -208,7 +208,7 @@
                 <!-- Fallback for invalid GitHub URL -->
                 <button 
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-lg transition-colors"
-                    hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                    hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
                     hx-target="#card-{{ integration.driver_id }}"
                     hx-swap="outerHTML"
                     hx-indicator="#overlay-{{ integration.driver_id }}"

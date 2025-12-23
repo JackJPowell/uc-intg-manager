@@ -93,10 +93,10 @@
     
     <!-- Footer: Status & Actions -->
     {% if integration.update_available and integration.can_update and not integration.official and not integration.external and (not integration.instance_id or integration.supports_backup) %}
-    <!-- Two-row layout when update is available -->
-    <div class="pt-3 border-t border-uc-border space-y-2">
-        <!-- Row 1: Status badge centered -->
-        <div class="flex items-center justify-center gap-2">
+    <!-- Two-row layout on mobile (centered), single-row on desktop (split left/right) when update is available -->
+    <div class="pt-3 border-t border-uc-border">
+        <div class="flex flex-col sm:flex-row items-center justify-center sm:justify-between gap-2">
+            <!-- Status badge -->
             {% if integration.state == 'NOT_CONFIGURED' %}
             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-yellow-400 rounded-full"></span>
@@ -118,10 +118,9 @@
                 {{ integration.state }}
             </span>
             {% endif %}
-        </div>
-        
-        <!-- Row 2: Action buttons centered -->
-        <div class="flex items-center justify-center gap-2">
+            
+            <!-- Action buttons -->
+            <div class="flex items-center gap-2">
             <button
                 hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
                 hx-target="#modal-content"
@@ -172,7 +171,7 @@
                 <!-- Main Update Button -->
                 <button 
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-500/30"
-                    hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                    hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
                     hx-target="#card-{{ integration.driver_id }}"
                     hx-swap="outerHTML"
                     hx-indicator="#upgrade-overlay-{{ integration.driver_id }}"
@@ -195,7 +194,7 @@
                     <div class="py-1">
                         <button
                             class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-uc-darker hover:text-white transition-colors flex items-center gap-2 rounded-lg"
-                            hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update-alt{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                            hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update-alt?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
                             hx-target="#card-{{ integration.driver_id }}"
                             hx-swap="outerHTML"
                             hx-indicator="#upgrade-overlay-{{ integration.driver_id }}"
