@@ -21,7 +21,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import markdown
 from flask import Flask, render_template, jsonify, request, send_file
 from werkzeug.serving import make_server
 
@@ -148,6 +150,35 @@ class AvailableIntegration:
             self.categories = []
 
 
+def _get_latest_release_for_update(owner: str, repo: str) -> dict[str, Any] | None:
+    """
+    Get the latest release considering the show_beta_releases setting.
+
+    If show_beta_releases is enabled, returns the latest release (stable or beta).
+    If disabled, returns only the latest stable release.
+
+    :param owner: GitHub repository owner
+    :param repo: GitHub repository name
+    :return: Release data or None if not found
+    """
+    if not _github_client:
+        return None
+
+    settings = Settings.load()
+
+    if settings.show_beta_releases:
+        # Get recent releases and pick the first non-draft one (could be beta or stable)
+        releases = _github_client.get_releases(owner, repo, limit=5)
+        if releases:
+            for release in releases:
+                if not release.get("draft", False):
+                    return release
+        return None
+    else:
+        # Get latest stable release only (GitHub's /releases/latest excludes pre-releases)
+        return _github_client.get_latest_release(owner, repo)
+
+
 def _refresh_version_cache() -> None:
     """
     Refresh the cached version information for all installed integrations.
@@ -186,7 +217,7 @@ def _refresh_version_cache() -> None:
                     continue
 
                 owner, repo = parsed
-                release = _github_client.get_latest_release(owner, repo)
+                release = _get_latest_release_for_update(owner, repo)
                 if release:
                     latest_version = release.get("tag_name", "")
                     current_version = integration.version or ""
@@ -832,12 +863,17 @@ def get_integration_detail(instance_id: str):
 @app.route("/api/integration/<instance_id>/update", methods=["POST"])
 def update_integration(instance_id: str):
     """
-    Update an existing integration to the latest version using default settings.
+    Update an existing integration to the latest or specified version using default settings.
+
+    Accepts optional 'version' query parameter to update to a specific version.
 
     The register_entities behavior is determined by the user's auto_register_entities setting.
     """
     settings = Settings.load()
-    return _perform_update_integration(instance_id, settings.auto_register_entities)
+    version = request.args.get("version") or request.form.get("version")
+    return _perform_update_integration(
+        instance_id, settings.auto_register_entities, version
+    )
 
 
 @app.route("/api/integration/<instance_id>/update-alt", methods=["POST"])
@@ -845,31 +881,40 @@ def update_integration_alt(instance_id: str):
     """
     Update an existing integration with the opposite entity registration behavior.
 
+    Accepts optional 'version' query parameter to update to a specific version.
+
     If auto_register_entities is enabled, this will NOT register entities.
     If auto_register_entities is disabled, this WILL register entities.
     """
     settings = Settings.load()
-    return _perform_update_integration(instance_id, not settings.auto_register_entities)
+    version = request.args.get("version") or request.form.get("version")
+    return _perform_update_integration(
+        instance_id, not settings.auto_register_entities, version
+    )
 
 
-def _perform_update_integration(instance_id: str, register_entities: bool):
+def _perform_update_integration(
+    instance_id: str, register_entities: bool, version: str | None = None
+):
     """
-    Update an existing integration to the latest version.
+    Update an existing integration to the latest or specified version.
 
     Process:
     1. Fetch current version (for migration check)
-    2. Backup the current configuration
-    3. Find the integration's GitHub repo URL
-    4. Download the latest release tar.gz
-    5. Delete the existing driver (which cascades to delete instance)
-    6. Install the new version
-    7. Check if migration is required
-    8. Restore configuration (with updated entity IDs if migration needed)
-    9. Execute migration if required
-    10. Optionally register entities if register_entities=True
+    2. Validate version against migration boundary if specified
+    3. Backup the current configuration
+    4. Find the integration's GitHub repo URL
+    5. Download the specified or latest release tar.gz
+    6. Delete the existing driver (which cascades to delete instance)
+    7. Install the new version
+    8. Check if migration is required
+    9. Restore configuration (with updated entity IDs if migration needed)
+    10. Execute migration if required
+    11. Optionally register entities if register_entities=True
 
     :param instance_id: The integration instance ID to update
     :param register_entities: Whether to register entities after update
+    :param version: Optional specific version to update to (e.g., 'v1.2.3')
     """
     if not _remote_client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
@@ -954,6 +999,33 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
                     break
         except Exception as e:
             _LOG.warning("Failed to load registry for migration check: %s", e)
+
+        # Validate version against migration boundary if specified
+        if version and migration_required_at:
+            clean_version = version.lstrip("v")
+            try:
+                if Version(clean_version) <= Version(migration_required_at):
+                    with _operation_lock:
+                        _operation_in_progress = False
+                    _LOG.warning(
+                        "Update blocked for %s - version %s violates migration boundary %s",
+                        integration.driver_id,
+                        version,
+                        migration_required_at,
+                    )
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": f"Cannot downgrade to version {version} - requires version > {migration_required_at}",
+                        }
+                    ), 400
+            except InvalidVersion as e:
+                with _operation_lock:
+                    _operation_in_progress = False
+                _LOG.warning("Invalid version format %s: %s", version, e)
+                return jsonify(
+                    {"status": "error", "message": f"Invalid version format: {version}"}
+                ), 400
 
         # Step 1: Store current version for migration check
         previous_version = integration.version
@@ -1074,8 +1146,19 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
 
         owner, repo = parsed
 
-        # Download the latest release
-        download_result = _github_client.download_release_asset(owner, repo)
+        # Download the specified or latest release
+        if version:
+            _LOG.info(
+                "Updating integration %s to version %s", integration.driver_id, version
+            )
+            download_result = _github_client.download_release_asset(
+                owner, repo, version=version
+            )
+        else:
+            _LOG.info(
+                "Updating integration %s to latest version", integration.driver_id
+            )
+            download_result = _github_client.download_release_asset(owner, repo)
         if not download_result:
             with _operation_lock:
                 _operation_in_progress = False
@@ -1085,7 +1168,8 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
             return jsonify(
                 {
                     "status": "error",
-                    "message": f"No tar.gz release found for {owner}/{repo}",
+                    "message": f"No tar.gz release found for {owner}/{repo}"
+                    + (f" version {version}" if version else ""),
                 }
             ), 404
 
@@ -1838,7 +1922,9 @@ def _perform_update_integration(instance_id: str, register_entities: bool):
 @app.route("/api/driver/<driver_id>/update", methods=["POST"])
 def update_driver(driver_id: str):
     """
-    Update an unconfigured driver to the latest version.
+    Update an unconfigured driver to the latest or specified version.
+
+    Accepts optional 'version' query parameter to update to a specific version.
 
     This is used when a driver is installed but not configured (no instance exists).
     Since there's no instance, there's nothing to backup or restore - just download
@@ -1846,6 +1932,9 @@ def update_driver(driver_id: str):
     """
     if not _remote_client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
+
+    # Get optional version parameter from query string or form data
+    version = request.args.get("version") or request.form.get("version")
 
     # Check if another operation is in progress
     global _operation_in_progress
@@ -1896,6 +1985,42 @@ def update_driver(driver_id: str):
                 }
             ), 400
 
+        # Check migration boundary if version specified
+        if version:
+            try:
+                registry = load_registry()
+                for entry in registry:
+                    if (
+                        entry.get("id") == driver_id
+                        or entry.get("driver_id") == driver_id
+                    ):
+                        migration_required_at = entry.get("migration_required_at")
+                        if migration_required_at:
+                            clean_version = version.lstrip("v")
+                            if Version(clean_version) <= Version(migration_required_at):
+                                with _operation_lock:
+                                    _operation_in_progress = False
+                                _LOG.warning(
+                                    "Update blocked for %s - version %s violates migration boundary %s",
+                                    driver_id,
+                                    version,
+                                    migration_required_at,
+                                )
+                                return jsonify(
+                                    {
+                                        "status": "error",
+                                        "message": f"Cannot downgrade to version {version} - requires version > {migration_required_at}",
+                                    }
+                                ), 400
+                        break
+            except (InvalidVersion, Exception) as e:
+                with _operation_lock:
+                    _operation_in_progress = False
+                _LOG.warning("Version validation failed for %s: %s", version, e)
+                return jsonify(
+                    {"status": "error", "message": f"Invalid version: {version}"}
+                ), 400
+
         # Parse GitHub URL
         parsed = SyncGitHubClient.parse_github_url(integration.home_page)
         if not parsed:
@@ -1911,8 +2036,15 @@ def update_driver(driver_id: str):
 
         owner, repo = parsed
 
-        # Download the latest release
-        download_result = _github_client.download_release_asset(owner, repo)
+        # Download the specified or latest release
+        if version:
+            _LOG.info("Updating driver %s to version %s", driver_id, version)
+            download_result = _github_client.download_release_asset(
+                owner, repo, version=version
+            )
+        else:
+            _LOG.info("Updating driver %s to latest version", driver_id)
+            download_result = _github_client.download_release_asset(owner, repo)
         if not download_result:
             with _operation_lock:
                 _operation_in_progress = False
@@ -2122,6 +2254,124 @@ def update_driver(driver_id: str):
         )
 
 
+@app.route("/api/integration/<driver_id>/delete-confirm")
+def get_delete_confirmation(driver_id: str):
+    """
+    Get delete confirmation modal content for an integration.
+
+    Returns HTML to be displayed in the modal with delete options.
+    """
+    if not _remote_client:
+        return "<p class='text-red-400'>Service not initialized</p>"
+
+    try:
+        # Get integration name for display
+        integrations = _get_installed_integrations()
+        integration = next((i for i in integrations if i.driver_id == driver_id), None)
+
+        # Also check available list for unconfigured drivers
+        if not integration:
+            available = _get_available_integrations()
+            integration = next((i for i in available if i.driver_id == driver_id), None)
+
+        integration_name = integration.name if integration else driver_id
+
+        # Determine if integration is configured (has an instance)
+        is_configured = False
+        if integration:
+            # For IntegrationInfo, check if it has an instance_id and is not NOT_CONFIGURED
+            if hasattr(integration, "instance_id") and hasattr(integration, "state"):
+                is_configured = (
+                    bool(integration.instance_id)
+                    and integration.state != "NOT_CONFIGURED"
+                )
+            # For AvailableIntegration, check the installed flag
+            elif hasattr(integration, "installed"):
+                is_configured = integration.installed
+
+        return render_template(
+            "partials/modal_delete_confirm.html",
+            driver_id=driver_id,
+            integration_name=integration_name,
+            is_configured=is_configured,
+        )
+    except Exception as e:
+        _LOG.error("Error loading delete confirmation for %s: %s", driver_id, e)
+        return f"<p class='text-red-400'>Error: {str(e)}</p>"
+
+
+@app.route("/api/integration/<driver_id>/delete", methods=["DELETE"])
+def delete_integration(driver_id: str):
+    """
+    Delete an integration - either just the configuration or the entire integration.
+
+    Query parameters:
+    - type: 'configuration' or 'full'
+    """
+    if not _remote_client:
+        return jsonify({"status": "error", "message": "Service not initialized"}), 500
+
+    delete_type = request.args.get("type", "configuration")
+    _LOG.info("Delete request for %s: type=%s", driver_id, delete_type)
+
+    try:
+        # Build the instance_id (driver_id + ".main")
+        instance_id = f"{driver_id}.main"
+
+        # Delete the instance/configuration
+        try:
+            _remote_client.delete_instance(instance_id)
+            _LOG.info("Deleted instance: %s", instance_id)
+        except SyncAPIError as e:
+            # If instance doesn't exist, that's okay - might be unconfigured
+            _LOG.warning("Failed to delete instance %s: %s", instance_id, e)
+
+        # If full delete, also delete the driver
+        if delete_type == "full":
+            # Small delay to let instance deletion complete
+            time.sleep(API_DELAY * 2)
+
+            try:
+                _remote_client.delete_driver(driver_id)
+                _LOG.info("Deleted driver: %s", driver_id)
+            except SyncAPIError as e:
+                _LOG.error("Failed to delete driver %s: %s", driver_id, e)
+                return jsonify(
+                    {"status": "error", "message": f"Failed to delete driver: {e}"}
+                ), 500
+
+        # Small delay to ensure remote has processed
+        time.sleep(API_DELAY)
+
+        # Return updated card or empty response
+        if delete_type == "full":
+            # Full delete - return empty (card will be removed)
+            return "", 200
+        else:
+            # Configuration delete - return updated card showing unconfigured state
+            integrations = _get_installed_integrations()
+            integration = next(
+                (i for i in integrations if i.driver_id == driver_id), None
+            )
+
+            if integration:
+                settings = Settings.load()
+                remote_ip = _remote_client._address if _remote_client else None
+                return render_template(
+                    "partials/integration_card.html",
+                    integration=integration,
+                    remote_ip=remote_ip,
+                    settings=settings,
+                )
+            else:
+                # Driver might have been removed, return empty
+                return "", 200
+
+    except Exception as e:
+        _LOG.error("Unexpected error during delete for %s: %s", driver_id, e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 def _build_error_card(driver_id: str, registry: list, error_msg: str) -> str:
     """Build an error card HTML for a failed install."""
     registry_item = next((item for item in registry if item.get("id") == driver_id), {})
@@ -2163,14 +2413,20 @@ def install_integration(driver_id: str):
     """
     Install a new integration from the registry.
 
+    Accepts optional 'version' query parameter to install a specific version.
+
     Process:
     1. Look up the integration in the registry by driver_id
     2. Get the GitHub repo URL
-    3. Download the latest release tar.gz
-    4. Upload and install on the remote
+    3. Download the specified (or latest) release tar.gz
+    4. Validate against migration boundary if version specified
+    5. Upload and install on the remote
     """
     if not _remote_client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
+
+    # Get optional version parameter from query string or form data
+    version = request.args.get("version") or request.form.get("version")
 
     # Check if another operation is in progress
     global _operation_in_progress
@@ -2205,6 +2461,35 @@ def install_integration(driver_id: str):
                 {"status": "error", "message": "Integration not found in registry"}
             ), 404
 
+        # Check migration boundary if version specified
+        migration_required_at = integration.get("migration_required_at")
+        if version and migration_required_at:
+            # Clean version string
+            clean_version = version.lstrip("v")
+            try:
+                if Version(clean_version) <= Version(migration_required_at):
+                    with _operation_lock:
+                        _operation_in_progress = False
+                    _LOG.warning(
+                        "Install blocked for %s - version %s violates migration boundary %s",
+                        driver_id,
+                        version,
+                        migration_required_at,
+                    )
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": f"Cannot install version {version} - requires version > {migration_required_at}",
+                        }
+                    ), 400
+            except InvalidVersion as e:
+                with _operation_lock:
+                    _operation_in_progress = False
+                _LOG.warning("Invalid version format %s: %s", version, e)
+                return jsonify(
+                    {"status": "error", "message": f"Invalid version format: {version}"}
+                ), 400
+
         repo_url = integration.get("repository", "")
         if not repo_url or "github.com" not in repo_url:
             with _operation_lock:
@@ -2232,8 +2517,15 @@ def install_integration(driver_id: str):
 
         owner, repo = parsed
 
-        # Download the latest release
-        download_result = _github_client.download_release_asset(owner, repo)
+        # Download the specified or latest release
+        if version:
+            _LOG.info("Installing %s version %s", driver_id, version)
+            download_result = _github_client.download_release_asset(
+                owner, repo, version=version
+            )
+        else:
+            _LOG.info("Installing latest version of %s", driver_id)
+            download_result = _github_client.download_release_asset(owner, repo)
         if not download_result:
             with _operation_lock:
                 _operation_in_progress = False
@@ -2411,6 +2703,274 @@ def list_integration_backups():
     return jsonify(backups)
 
 
+@app.route("/api/release-notes/unavailable/<version>")
+def get_release_notes_unavailable(version: str):
+    """
+    Return a user-friendly message when release notes cannot be fetched.
+
+    Used when GitHub URL cannot be parsed or release info is unavailable.
+    """
+    return render_template(
+        "partials/modal_release_notes.html",
+        error="Release notes are not available for this integration",
+        version=version,
+        github_url=None,
+    )
+
+
+@app.route("/api/release-notes/<owner>/<repo>/<version>")
+def get_release_notes(owner: str, repo: str, version: str):
+    """
+    Get release notes for a specific version and return HTML for modal.
+
+    Renders markdown release notes as HTML.
+    """
+    if not _github_client:
+        return render_template(
+            "partials/modal_release_notes.html",
+            error="GitHub client not available",
+            version=version,
+        )
+
+    try:
+        # Fetch release info from GitHub
+        release = _github_client.get_release_by_tag(owner, repo, version)
+
+        if not release:
+            return render_template(
+                "partials/modal_release_notes.html",
+                error=f"Release notes not found for {version}",
+                version=version,
+                github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
+            )
+
+        # Get release body (markdown)
+        release_body = release.get("body", "")
+
+        # Convert markdown to HTML with comprehensive extensions
+        md = markdown.Markdown(
+            extensions=[
+                "markdown.extensions.fenced_code",  # ```code blocks```
+                "markdown.extensions.tables",  # Tables
+                "markdown.extensions.nl2br",  # Newline to <br>
+                "markdown.extensions.sane_lists",  # Better list handling
+                "markdown.extensions.codehilite",  # Code highlighting
+                "markdown.extensions.attr_list",  # Add attributes to elements
+                "markdown.extensions.def_list",  # Definition lists
+                "markdown.extensions.abbr",  # Abbreviations
+                "markdown.extensions.footnotes",  # Footnotes
+                "markdown.extensions.md_in_html",  # Markdown in HTML
+                "markdown.extensions.toc",  # Table of contents
+            ],
+            extension_configs={
+                "markdown.extensions.codehilite": {
+                    "css_class": "highlight",
+                    "linenums": False,
+                },
+            },
+        )
+        release_notes_html = md.convert(release_body) if release_body else ""
+
+        # Format the published date
+        published_at = release.get("published_at", "")
+        if published_at:
+            try:
+                dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                release_date = dt.strftime("%B %d, %Y")
+            except (ValueError, AttributeError):
+                release_date = published_at
+        else:
+            release_date = "Unknown"
+
+        # Check if this is a pre-release (beta)
+        is_beta = release.get("prerelease", False)
+        
+        # Create modal title with Beta prefix if needed
+        modal_title = f"{'Beta ' if is_beta else ''}Release Notes - {version}"
+
+        # Render the release notes template
+        return render_template(
+            "partials/modal_release_notes.html",
+            version=version,
+            release_date=release_date,
+            release_notes=release_notes_html,
+            release_name=release.get("name", ""),
+            github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
+            author=release.get("author", {}).get("login", ""),
+            is_beta=is_beta,
+            modal_title=modal_title,
+        )
+    except Exception as e:
+        _LOG.error(
+            "Error loading release notes for %s/%s %s: %s", owner, repo, version, e
+        )
+        return render_template(
+            "partials/modal_release_notes.html",
+            error=f"Error loading release notes: {str(e)}",
+            version=version,
+            github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
+        )
+
+
+@app.route("/api/version-selector/<owner>/<repo>/<driver_id>")
+def get_version_selector(owner: str, repo: str, driver_id: str):
+    """
+    Get version selector modal content with available releases.
+
+    Fetches recent releases and filters by migration boundary from registry.
+    Shows beta releases if enabled in settings.
+    """
+    if not _github_client:
+        return render_template(
+            "partials/modal_version_selector.html",
+            error="GitHub client not available",
+        )
+
+    try:
+        # Load settings to check show_beta_releases
+        settings = Settings.load()
+        show_beta_releases = settings.show_beta_releases
+
+        # Load registry to get migration_required_at
+        migration_required_at = None
+        is_update = False
+        instance_id = None
+
+        try:
+            registry = load_registry()
+            for entry in registry:
+                if entry.get("id") == driver_id or entry.get("driver_id") == driver_id:
+                    migration_required_at = entry.get("migration_required_at")
+                    break
+        except Exception as e:
+            _LOG.warning("Failed to load registry for migration check: %s", e)
+
+        # Check if this is an update (driver installed) or fresh install
+        integrations = _get_installed_integrations()
+        integration = next((i for i in integrations if i.driver_id == driver_id), None)
+
+        if integration:
+            is_update = True
+            instance_id = integration.instance_id
+
+        # Fetch releases from GitHub
+        releases_data = _github_client.get_releases(owner, repo, limit=20)
+
+        if not releases_data:
+            return render_template(
+                "partials/modal_version_selector.html",
+                error="No releases found for this integration",
+            )
+
+        # Filter and organize releases
+        beta_releases = []
+        stable_releases = []
+        found_first_stable = False
+
+        for release in releases_data:
+            tag_name = release.get("tag_name", "")
+            if not tag_name:
+                continue
+
+            # Skip drafts always
+            if release.get("draft", False):
+                continue
+
+            # Check if this is a pre-release (beta)
+            is_prerelease = release.get("prerelease", False)
+
+            # Parse version for comparison
+            clean_version = tag_name.lstrip("v")
+
+            # Check migration boundary
+            if migration_required_at:
+                try:
+                    if Version(clean_version) <= Version(migration_required_at):
+                        _LOG.debug(
+                            "Filtering out %s (≤ %s migration boundary)",
+                            tag_name,
+                            migration_required_at,
+                        )
+                        continue
+                except InvalidVersion:
+                    _LOG.warning("Invalid version format: %s", tag_name)
+                    continue
+
+            # Format published date
+            published_at = release.get("published_at", "")
+            if published_at:
+                try:
+                    dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                    formatted_date = dt.strftime("%B %d, %Y")
+                except (ValueError, AttributeError):
+                    formatted_date = published_at
+            else:
+                formatted_date = ""
+
+            release_info = {
+                "tag_name": tag_name,
+                "name": release.get("name", ""),
+                "published_at": formatted_date,
+                "is_beta": is_prerelease,
+            }
+
+            if is_prerelease:
+                # Only add beta releases if:
+                # 1. User has enabled show_beta_releases setting
+                # 2. We haven't found the first stable release yet
+                if show_beta_releases and not found_first_stable:
+                    beta_releases.append(release_info)
+            else:
+                # This is a stable release
+                found_first_stable = True
+                stable_releases.append(release_info)
+
+            # Stop when we have enough stable releases
+            if len(stable_releases) >= 4:
+                break
+
+        # Combine lists: beta releases first, then stable releases
+        # This ensures: beta, beta, latest, previous (good)
+        # Not: beta, latest, beta (bad)
+        filtered_releases = beta_releases + stable_releases
+
+        # Limit to 4 total
+        filtered_releases = filtered_releases[:4]
+
+        # Determine the install/update URL
+        if is_update and instance_id:
+            install_url = f"/api/integration/{instance_id}/update"
+            hx_target = f"#card-{driver_id}"
+            hx_indicator = f"#upgrade-overlay-{driver_id}"
+        elif is_update:
+            # Driver installed but no instance
+            install_url = f"/api/driver/{driver_id}/update"
+            hx_target = f"#card-{driver_id}"
+            hx_indicator = f"#upgrade-overlay-{driver_id}"
+        else:
+            # Fresh install
+            install_url = f"/api/integration/{driver_id}/install"
+            hx_target = f"#card-{driver_id}"
+            hx_indicator = f"#overlay-{driver_id}"
+
+        return render_template(
+            "partials/modal_version_selector.html",
+            releases=filtered_releases,
+            migration_required_at=migration_required_at,
+            install_url=install_url,
+            hx_target=hx_target,
+            hx_indicator=hx_indicator,
+            driver_id=driver_id,
+        )
+
+    except Exception as e:
+        _LOG.error("Error loading version selector for %s/%s: %s", owner, repo, e)
+        return render_template(
+            "partials/modal_version_selector.html",
+            error=f"Error loading versions: {str(e)}",
+        )
+
+
 @app.route("/api/versions/check", methods=["POST"])
 def check_versions():
     """
@@ -2442,7 +3002,7 @@ def check_versions():
                     continue
 
                 owner, repo = parsed
-                release = _github_client.get_latest_release(owner, repo)
+                release = _get_latest_release_for_update(owner, repo)
                 if release:
                     latest_version = release.get("tag_name", "")
                     current_version = integration.version or ""
@@ -2560,6 +3120,7 @@ def save_settings():
         settings.auto_register_entities = (
             request.form.get("auto_register_entities") == "on"
         )
+        settings.show_beta_releases = request.form.get("show_beta_releases") == "on"
 
         backup_time = request.form.get("backup_time")
         if backup_time:
@@ -2610,38 +3171,13 @@ def logs_page():
 def get_logs_entries():
     """Get log entries as HTML partial for HTMX."""
     entries = get_log_entries()
+    return render_template("partials/log_entries.html", entries=entries)
 
-    if not entries:
-        return """
-        <div class="p-8 text-center text-gray-400">
-            <i class="fa-regular fa-file-lines w-12 h-12 mx-auto mb-3 opacity-50"></i>
-            <p>No log entries yet</p>
-        </div>
-        """
 
-    html_parts = []
-    for entry in entries:
-        level_color = "bg-blue-500"
-        bg_class = ""
-        if entry.level == "ERROR":
-            level_color = "bg-red-500"
-            bg_class = "bg-red-900/20"
-        elif entry.level == "WARNING":
-            level_color = "bg-yellow-500"
-            bg_class = "bg-yellow-900/20"
-
-        html_parts.append(f"""
-        <div class="p-3 hover:bg-gray-750 {bg_class}">
-            <div class="flex items-start gap-3">
-                <span class="w-2 h-2 mt-1.5 rounded-full flex-shrink-0 {level_color}"></span>
-                <span class="text-gray-500 flex-shrink-0 w-36">{entry.timestamp}</span>
-                <span class="text-purple-400 flex-shrink-0 w-32 truncate" title="{entry.logger}">{entry.logger}</span>
-                <span class="text-gray-300 break-all">{entry.message}</span>
-            </div>
-        </div>
-        """)
-
-    return "\n".join(html_parts)
+@app.route("/api/logs/clear-confirm")
+def get_clear_logs_confirm():
+    """Get confirmation modal for clearing logs."""
+    return render_template("partials/modal_clear_logs.html")
 
 
 @app.route("/api/logs/clear", methods=["POST"])
@@ -2765,10 +3301,10 @@ def list_backups():
                     <div class="text-xs text-gray-400">{formatted_time}</div>
                 </button>
                 <button class="text-red-400 hover:text-red-300 text-sm ml-3"
-                        hx-delete="/api/backups/{driver_id}"
-                        hx-target="#backup-list"
+                        hx-get="/api/backups/{driver_id}/delete-confirm"
+                        hx-target="#modal-content"
                         hx-swap="innerHTML"
-                        hx-confirm="Delete backup for {driver_id}?">
+                        hx-on::before-request="openModal('Delete Backup')">
                     Delete
                 </button>
             </div>
@@ -2779,6 +3315,36 @@ def list_backups():
     except Exception as e:
         _LOG.error("Failed to list backups: %s", e)
         return f"<div class='text-red-400'>Error: {e}</div>"
+
+
+@app.route("/api/backups/<driver_id>/delete-confirm")
+def get_delete_backup_confirm(driver_id: str):
+    """Get confirmation modal for deleting a backup."""
+    try:
+        backups_data = get_all_backups()
+        backup_info = backups_data.get("integrations", {}).get(driver_id, {})
+        timestamp = backup_info.get("timestamp", "Unknown")
+        
+        # Format the timestamp nicely
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            formatted_time = timestamp
+        
+        return render_template(
+            "partials/modal_delete_backup.html",
+            driver_id=driver_id,
+            timestamp=formatted_time
+        )
+    except Exception as e:
+        _LOG.error("Failed to get backup info: %s", e)
+        return render_template(
+            "partials/modal_delete_backup.html",
+            driver_id=driver_id,
+            timestamp="Unknown"
+        )
+
 
 
 @app.route("/api/backups/<driver_id>/view")

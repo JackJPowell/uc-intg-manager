@@ -58,6 +58,9 @@ class Settings:
     auto_register_entities: bool = True
     """Automatically re-register previously configured entities after integration updates."""
 
+    show_beta_releases: bool = False
+    """Show pre-release (beta) versions in version selector."""
+
     @classmethod
     def load(cls) -> "Settings":
         """Load settings from file or return defaults."""

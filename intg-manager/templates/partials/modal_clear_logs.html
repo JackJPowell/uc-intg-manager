@@ -1,0 +1,36 @@
+<!-- Confirmation Modal Content for Clearing Logs -->
+<div class="space-y-4" data-modal-title="Clear Logs">
+    <!-- Warning Icon and Message -->
+    <div class="flex items-start gap-4">
+        <div class="flex-shrink-0">
+            <i class="fas fa-exclamation-triangle text-yellow-400 text-3xl"></i>
+        </div>
+        <div>
+            <h3 class="text-lg font-semibold text-white mb-2">Clear All Logs?</h3>
+            <p class="text-gray-300 text-sm">
+                This will permanently delete all log entries from the application log.
+                This action cannot be undone.
+            </p>
+        </div>
+    </div>
+    
+    <!-- Action Buttons -->
+    <div class="flex items-center justify-end gap-3 pt-4 border-t border-uc-border">
+        <button
+            type="button"
+            onclick="closeModal()"
+            class="px-4 py-2 bg-uc-card hover:bg-uc-darker text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+            Cancel
+        </button>
+        <button
+            type="button"
+            hx-post="/api/logs/clear"
+            hx-target="#log-entries"
+            hx-swap="innerHTML"
+            hx-on::before-request="closeModal()"
+            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">
+            <i class="fas fa-trash mr-2"></i>
+            Clear All Logs
+        </button>
+    </div>
+</div>

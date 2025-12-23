@@ -1,0 +1,153 @@
+<!-- Reusable Modal Component -->
+<!-- Usage: Include this partial in your base template, then trigger it via JavaScript or HTMX -->
+<div id="modal-overlay" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 transition-opacity duration-300" 
+     onclick="closeModal(event)">
+    <div class="fixed inset-0 flex items-center justify-center p-4">
+        <div id="modal-container" 
+             class="bg-uc-card border border-uc-border rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden transform transition-all duration-300 scale-95 opacity-0"
+             onclick="event.stopPropagation()">
+            
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-uc-border">
+                <h2 id="modal-title" class="text-xl font-semibold text-white">Modal Title</h2>
+                <button 
+                    onclick="closeModal()"
+                    class="text-gray-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-uc-darker"
+                    aria-label="Close modal">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <!-- Modal Content (Dynamic) -->
+            <div id="modal-content" class="px-6 py-4 overflow-y-auto max-h-[calc(90vh-8rem)]">
+                <!-- Content will be loaded here dynamically -->
+                <div class="flex items-center justify-center py-12">
+                    <svg class="animate-spin h-8 w-8 text-uc-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </div>
+            </div>
+            
+            <!-- Modal Footer (Optional) -->
+            <div id="modal-footer" class="hidden px-6 py-4 border-t border-uc-border bg-uc-darker/50">
+                <!-- Footer content can be added dynamically if needed -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Open modal with optional title and content
+    function openModal(title = 'Modal', content = null) {
+        const overlay = document.getElementById('modal-overlay');
+        const container = document.getElementById('modal-container');
+        const titleElement = document.getElementById('modal-title');
+        const contentElement = document.getElementById('modal-content');
+        
+        // Set title
+        titleElement.textContent = title;
+        
+        // Set content if provided, otherwise show loading spinner
+        if (content) {
+            contentElement.innerHTML = content;
+        } else {
+            contentElement.innerHTML = `
+                <div class="flex items-center justify-center py-12">
+                    <svg class="animate-spin h-8 w-8 text-uc-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </div>
+            `;
+        }
+        
+        // Show overlay
+        overlay.classList.remove('hidden');
+        
+        // Trigger animation after a brief delay
+        setTimeout(() => {
+            overlay.classList.add('opacity-100');
+            container.classList.remove('scale-95', 'opacity-0');
+            container.classList.add('scale-100', 'opacity-100');
+        }, 10);
+        
+        // Prevent body scroll
+        document.body.style.overflow = 'hidden';
+        
+        // Add escape key listener
+        document.addEventListener('keydown', handleEscapeKey);
+    }
+    
+    // Close modal with animation
+    function closeModal(event) {
+        // If event is provided and it's not from clicking the overlay, ignore
+        if (event && event.target.id !== 'modal-overlay') {
+            return;
+        }
+        
+        const overlay = document.getElementById('modal-overlay');
+        const container = document.getElementById('modal-container');
+        
+        // Trigger close animation
+        overlay.classList.remove('opacity-100');
+        container.classList.remove('scale-100', 'opacity-100');
+        container.classList.add('scale-95', 'opacity-0');
+        
+        // Hide after animation
+        setTimeout(() => {
+            overlay.classList.add('hidden');
+            // Clear content
+            document.getElementById('modal-content').innerHTML = '';
+            // Reset footer
+            document.getElementById('modal-footer').classList.add('hidden');
+        }, 300);
+        
+        // Restore body scroll
+        document.body.style.overflow = '';
+        
+        // Remove escape key listener
+        document.removeEventListener('keydown', handleEscapeKey);
+    }
+    
+    // Handle escape key
+    function handleEscapeKey(event) {
+        if (event.key === 'Escape') {
+            closeModal();
+        }
+    }
+    
+    // Update modal content (useful for HTMX responses)
+    function updateModalContent(content) {
+        document.getElementById('modal-content').innerHTML = content;
+    }
+    
+    // Update modal title
+    function updateModalTitle(title) {
+        document.getElementById('modal-title').textContent = title;
+    }
+    
+    // Show modal footer
+    function showModalFooter(content) {
+        const footer = document.getElementById('modal-footer');
+        footer.innerHTML = content;
+        footer.classList.remove('hidden');
+    }
+    
+    // Hide modal footer
+    function hideModalFooter() {
+        document.getElementById('modal-footer').classList.add('hidden');
+    }
+    
+    // Listen for HTMX afterSwap to update modal title if data attribute exists
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        // Check if the swap target was the modal content
+        if (event.target && event.target.id === 'modal-content') {
+            // Look for data-modal-title attribute in the swapped content
+            const content = event.target.querySelector('[data-modal-title]');
+            if (content && content.dataset.modalTitle) {
+                updateModalTitle(content.dataset.modalTitle);
+            }
+        }
+    });
+</script>

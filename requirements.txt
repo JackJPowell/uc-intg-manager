@@ -13,3 +13,4 @@ requests>=2.31.0
 
 #Other dependencies
 packaging>=25.0
+markdown>=3.5.0
