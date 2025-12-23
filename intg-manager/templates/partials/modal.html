@@ -138,4 +138,16 @@
     function hideModalFooter() {
         document.getElementById('modal-footer').classList.add('hidden');
     }
+    
+    // Listen for HTMX afterSwap to update modal title if data attribute exists
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        // Check if the swap target was the modal content
+        if (event.target && event.target.id === 'modal-content') {
+            // Look for data-modal-title attribute in the swapped content
+            const content = event.target.querySelector('[data-modal-title]');
+            if (content && content.dataset.modalTitle) {
+                updateModalTitle(content.dataset.modalTitle);
+            }
+        }
+    });
 </script>

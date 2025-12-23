@@ -1,0 +1,44 @@
+<!-- Confirmation Modal Content for Deleting Backup -->
+<div class="space-y-4" data-modal-title="Delete Backup">
+    <!-- Warning Icon and Message -->
+    <div class="flex items-start gap-4">
+        <div class="flex-shrink-0">
+            <i class="fas fa-exclamation-triangle text-yellow-400 text-3xl"></i>
+        </div>
+        <div>
+            <h3 class="text-lg font-semibold text-white mb-2">Delete Backup?</h3>
+            <p class="text-gray-300 text-sm mb-3">
+                Are you sure you want to delete the backup for:
+            </p>
+            <div class="bg-uc-darker rounded-lg p-3 border border-uc-border">
+                <p class="text-white font-mono text-sm">{{ driver_id }}</p>
+                {% if timestamp %}
+                <p class="text-xs text-gray-400 mt-1">{{ timestamp }}</p>
+                {% endif %}
+            </div>
+            <p class="text-gray-400 text-sm mt-3">
+                This action cannot be undone.
+            </p>
+        </div>
+    </div>
+    
+    <!-- Action Buttons -->
+    <div class="flex items-center justify-end gap-3 pt-4 border-t border-uc-border">
+        <button
+            type="button"
+            onclick="closeModal()"
+            class="px-4 py-2 bg-uc-card hover:bg-uc-darker text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+            Cancel
+        </button>
+        <button
+            type="button"
+            hx-delete="/api/backups/{{ driver_id }}"
+            hx-target="#backup-list"
+            hx-swap="innerHTML"
+            hx-on::before-request="closeModal()"
+            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">
+            <i class="fas fa-trash mr-2"></i>
+            Delete Backup
+        </button>
+    </div>
+</div>

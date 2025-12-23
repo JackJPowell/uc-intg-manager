@@ -68,6 +68,19 @@
                        class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
                        {% if settings.auto_register_entities %}checked{% endif %}>
             </label>
+            
+            <label class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-700">
+                <div>
+                    <div class="text-white font-medium">Show Beta Releases</div>
+                    <div class="text-sm text-gray-400">
+                        Show pre-release (beta) versions in the version selector.
+                        Beta versions appear above the latest stable release with an orange badge.
+                    </div>
+                </div>
+                <input type="checkbox" name="show_beta_releases" 
+                       class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
+                       {% if settings.show_beta_releases %}checked{% endif %}>
+            </label>
         </div>
     </div>
 

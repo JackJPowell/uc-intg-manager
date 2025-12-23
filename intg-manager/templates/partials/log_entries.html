@@ -1,0 +1,24 @@
+{% if entries %}
+    {% for entry in entries %}
+    <div class="p-3 sm:p-4 hover:bg-gray-750 {% if entry.level == 'ERROR' %}bg-red-900/20{% elif entry.level == 'WARNING' %}bg-yellow-900/20{% endif %}">
+        <div class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3">
+            <!-- Level indicator -->
+            <span class="w-2 h-2 mt-1 sm:mt-1.5 rounded-full flex-shrink-0 {% if entry.level == 'ERROR' %}bg-red-500{% elif entry.level == 'WARNING' %}bg-yellow-500{% else %}bg-blue-500{% endif %}"></span>
+            
+            <!-- Timestamp -->
+            <span class="text-gray-500 flex-shrink-0 text-xs">{{ entry.timestamp }}</span>
+            
+            <!-- Logger name -->
+            <span class="text-purple-400 flex-shrink-0 truncate text-xs" title="{{ entry.logger }}">{{ entry.logger }}</span>
+            
+            <!-- Message -->
+            <span class="text-gray-300 break-all">{{ entry.message }}</span>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="p-8 text-center text-gray-400">
+        <i class="fa-regular fa-file-lines w-12 h-12 mx-auto mb-3 opacity-50"></i>
+        <p>No log entries yet</p>
+    </div>
+{% endif %}

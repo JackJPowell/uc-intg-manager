@@ -1,6 +1,6 @@
 <!-- Release Notes Content for Modal -->
 <!-- Displays GitHub release notes with markdown rendered as HTML -->
-<div class="prose prose-invert prose-sm max-w-none">
+<div class="prose prose-invert prose-sm max-w-none" {% if modal_title %}data-modal-title="{{ modal_title }}"{% endif %}>
     {% if error %}
     <!-- Error State -->
     <div class="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
@@ -17,23 +17,37 @@
                 {% if release_name %}
                 <h3 class="text-xl font-semibold text-white mb-2">{{ release_name }}</h3>
                 {% endif %}
-                <div class="flex items-center gap-3 flex-wrap">
-                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-500/20 text-green-300">
-                        <i class="fas fa-tag mr-1.5"></i>
-                        {{ version }}
-                    </span>
-                    {% if release_date %}
-                    <span class="text-gray-400 text-sm">
-                        <i class="far fa-calendar mr-1.5"></i>
-                        {{ release_date }}
-                    </span>
-                    {% endif %}
-                    {% if author %}
-                    <span class="text-gray-400 text-sm">
-                        <i class="fab fa-github mr-1.5"></i>
-                        {{ author }}
-                    </span>
-                    {% endif %}
+                <div class="flex flex-col gap-2">
+                    <div class="flex items-center gap-3 flex-wrap">
+                        {% if is_beta %}
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-orange-500/20 text-orange-300">
+                            <i class="fas fa-flask mr-1.5"></i>
+                            {{ version }}
+                        </span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-500/20 text-orange-300">
+                            Beta
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-500/20 text-green-300">
+                            <i class="fas fa-tag mr-1.5"></i>
+                            {{ version }}
+                        </span>
+                        {% endif %}
+                    </div>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        {% if release_date %}
+                        <span class="text-gray-400 text-sm">
+                            <i class="far fa-calendar mr-1.5"></i>
+                            {{ release_date }}
+                        </span>
+                        {% endif %}
+                        {% if author %}
+                        <span class="text-gray-400 text-sm">
+                            <i class="fab fa-github mr-1.5"></i>
+                            {{ author }}
+                        </span>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>

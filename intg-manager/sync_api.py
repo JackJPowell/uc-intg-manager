@@ -492,6 +492,41 @@ class SyncGitHubClient:
             _LOG.warning("Failed to get release for %s/%s: %s", owner, repo, e)
             return None
 
+    def get_releases(
+        self, owner: str, repo: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """
+        Get multiple releases for a repository.
+
+        :param owner: Repository owner
+        :param repo: Repository name
+        :param limit: Maximum number of releases to return (default 10)
+        :return: List of release data dictionaries
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/releases"
+        params = {"per_page": limit}
+
+        try:
+            response = self._session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+            # Check for rate limiting
+            rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
+            if response.status_code == 403 and rate_limit_remaining == "0":
+                _LOG.warning(
+                    "GitHub API rate limit exceeded for %s/%s releases", owner, repo
+                )
+                return []
+
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 404:
+                _LOG.debug("No releases found for %s/%s", owner, repo)
+                return []
+            return []
+        except requests.RequestException as e:
+            _LOG.warning("Failed to get releases for %s/%s: %s", owner, repo, e)
+            return []
+
     def get_release_by_tag(
         self, owner: str, repo: str, tag: str
     ) -> dict[str, Any] | None:
@@ -522,20 +557,28 @@ class SyncGitHubClient:
             return None
 
     def download_release_asset(
-        self, owner: str, repo: str, asset_pattern: str = ".tar.gz"
+        self, owner: str, repo: str, asset_pattern: str = ".tar.gz", version: str | None = None
     ) -> tuple[bytes, str] | None:
         """
-        Download a release asset (tar.gz file) from the latest release.
+        Download a release asset (tar.gz file) from a release.
 
         :param owner: GitHub repository owner
         :param repo: GitHub repository name
         :param asset_pattern: Pattern to match asset filename (default .tar.gz)
+        :param version: Specific version tag to download (e.g., 'v1.0.0'). If None, downloads latest.
         :return: Tuple of (file bytes, filename) or None if not found
         """
-        release = self.get_latest_release(owner, repo)
-        if not release:
-            _LOG.warning("No release found for %s/%s", owner, repo)
-            return None
+        # Get the appropriate release
+        if version:
+            release = self.get_release_by_tag(owner, repo, version)
+            if not release:
+                _LOG.warning("No release found for %s/%s version %s", owner, repo, version)
+                return None
+        else:
+            release = self.get_latest_release(owner, repo)
+            if not release:
+                _LOG.warning("No release found for %s/%s", owner, repo)
+                return None
 
         assets = release.get("assets", [])
         if not assets:

@@ -19,10 +19,10 @@
                 <span class="hidden sm:inline">Refresh</span>
             </button>
             <button type="button"
-                    hx-post="/api/logs/clear"
-                    hx-target="#log-entries"
+                    hx-get="/api/logs/clear-confirm"
+                    hx-target="#modal-content"
                     hx-swap="innerHTML"
-                    hx-confirm="Are you sure you want to clear all logs?"
+                    hx-on::before-request="openModal('Clear Logs')"
                     class="px-3 sm:px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
                 <i class="fa-solid fa-trash w-4 h-4"></i>
                 <span class="hidden sm:inline">Clear</span>
@@ -50,30 +50,7 @@
 <!-- Log Entries Container -->
 <div class="bg-gray-800 rounded-lg overflow-hidden">
     <div id="log-entries" class="divide-y divide-gray-700 max-h-[70vh] overflow-auto font-mono text-xs sm:text-sm">
-        {% if entries %}
-            {% for entry in entries %}
-            <div class="p-3 sm:p-4 hover:bg-gray-750 {% if entry.level == 'ERROR' %}bg-red-900/20{% elif entry.level == 'WARNING' %}bg-yellow-900/20{% endif %}">
-                <div class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3">
-                    <!-- Level indicator -->
-                    <span class="w-2 h-2 mt-1 sm:mt-1.5 rounded-full flex-shrink-0 {% if entry.level == 'ERROR' %}bg-red-500{% elif entry.level == 'WARNING' %}bg-yellow-500{% else %}bg-blue-500{% endif %}"></span>
-                    
-                    <!-- Timestamp -->
-                    <span class="text-gray-500 flex-shrink-0 text-xs">{{ entry.timestamp }}</span>
-                    
-                    <!-- Logger name -->
-                    <span class="text-purple-400 flex-shrink-0 truncate text-xs" title="{{ entry.logger }}">{{ entry.logger }}</span>
-                    
-                    <!-- Message -->
-                    <span class="text-gray-300 break-all">{{ entry.message }}</span>
-                </div>
-            </div>
-            {% endfor %}
-        {% else %}
-            <div class="p-8 text-center text-gray-400">
-                <i class="fa-regular fa-file-lines w-12 h-12 mx-auto mb-3 opacity-50"></i>
-                <p>No log entries yet</p>
-            </div>
-        {% endif %}
+        {% include 'partials/log_entries.html' %}
     </div>
 </div>
 

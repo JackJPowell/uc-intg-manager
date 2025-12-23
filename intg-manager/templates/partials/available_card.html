@@ -97,19 +97,19 @@
         </p>
         
         <!-- Footer -->
-        <div class="flex items-center justify-between gap-2 pt-3 border-t border-uc-border">
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-3 border-t border-uc-border">
             <div class="flex items-center flex-wrap gap-2 text-xs text-gray-500 min-w-0">
                 {% if integration.developer %}
-                <span>{{ integration.developer }}</span>
+                <span class="truncate">{{ integration.developer }}</span>
                 {% endif %}
                 {% if integration.category %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded bg-uc-darker text-gray-400">
+                <span class="inline-flex items-center px-2 py-0.5 rounded bg-uc-darker text-gray-400 flex-shrink-0">
                     {{ integration.category }}
                 </span>
                 {% endif %}
             </div>
             
-            <div class="flex items-center flex-wrap gap-2" id="actions-{{ integration.driver_id }}">
+            <div class="flex items-center justify-end flex-wrap gap-2 flex-shrink-0" id="actions-{{ integration.driver_id }}">
                 {% if integration.driver_installed %}
                 <!-- Delete button for all installed drivers -->
                 <button
@@ -163,6 +163,49 @@
                     v{{ integration.version }}
                 </a>
                 <span class="text-gray-500">→</span>
+                
+                <!-- Split button: Main update + Dropdown for version selection -->
+                {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                <div class="relative inline-flex rounded-lg shadow-sm">
+                    <!-- Main Update Button -->
+                    <button 
+                        class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-500/30"
+                        hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
+                        hx-target="#card-{{ integration.driver_id }}"
+                        hx-swap="outerHTML"
+                        hx-indicator="#overlay-{{ integration.driver_id }}"
+                        title="Update to {{ integration.latest_version }}">
+                        <i class="fa-solid fa-upload h-3 w-3 mr-1"></i>
+                        {{ integration.latest_version }}
+                    </button>
+                    
+                    <!-- Dropdown Toggle Button -->
+                    <button 
+                        type="button"
+                        class="inline-flex items-center px-2 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-r-lg transition-colors"
+                        onclick="toggleDropdown(event, 'update-dropdown-{{ integration.driver_id }}')"
+                        title="More options">
+                        <i id="update-chevron-{{ integration.driver_id }}" class="fa-solid fa-chevron-down h-3 w-3 transition-transform duration-200"></i>
+                    </button>
+                    
+                    <!-- Dropdown Menu -->
+                    <div id="update-dropdown-{{ integration.driver_id }}" class="hidden absolute right-0 top-full mt-1 w-48 rounded-lg shadow-lg bg-uc-card border border-uc-border z-[9999]">
+                        <div class="py-1">
+                            <button
+                                class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-uc-darker hover:text-white transition-colors flex items-center gap-2 rounded-lg"
+                                hx-get="/api/version-selector/{{ owner }}/{{ repo }}/{{ integration.driver_id }}"
+                                hx-target="#modal-content"
+                                hx-swap="innerHTML"
+                                hx-on::before-request="toggleDropdown(event, 'update-dropdown-{{ integration.driver_id }}', true); openModal('Select Version');"
+                                title="Choose a specific version to install">
+                                <i class="fa-solid fa-list-ul h-4 w-4"></i>
+                                Select Version
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <!-- Fallback for invalid GitHub URL -->
                 <button 
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-lg transition-colors"
                     hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update{% else %}/api/driver/{{ integration.driver_id }}/update{% endif %}"
@@ -173,6 +216,7 @@
                     <i class="fa-solid fa-upload h-3 w-3 mr-1"></i>
                     {{ integration.latest_version }}
                 </button>
+                {% endif %}
                 {% elif just_updated %}
                 <!-- Just updated indicator -->
                 <span class="inline-flex items-center text-xs text-green-400">
@@ -200,6 +244,53 @@
                 {% elif integration.installed or integration.driver_installed %}
                 <!-- Status shown in badge above -->
                 {% else %}
+                <!-- Install button with dropdown for version selection -->
+                {% if integration.home_page and 'github.com' in integration.home_page %}
+                {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+                {% set path_parts = repo_path.split('/') %}
+                {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                {% set owner = path_parts[0] %}
+                {% set repo = path_parts[1] %}
+                <div class="relative inline-flex rounded-lg shadow-sm">
+                    <!-- Main Install Button -->
+                    <button 
+                        class="install-btn inline-flex items-center px-3 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-l-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border-r border-uc-secondary"
+                        hx-post="/api/integration/{{ integration.driver_id }}/install"
+                        hx-target="#card-{{ integration.driver_id }}"
+                        hx-swap="outerHTML"
+                        hx-indicator="#overlay-{{ integration.driver_id }}"
+                        title="Install latest version">
+                        <i class="fa-solid fa-download h-3 w-3 mr-1"></i>
+                        Install
+                    </button>
+                    
+                    <!-- Dropdown Toggle Button -->
+                    <button 
+                        type="button"
+                        class="inline-flex items-center px-2 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-r-lg transition-colors"
+                        onclick="toggleDropdown(event, 'install-dropdown-{{ integration.driver_id }}')"
+                        title="More options">
+                        <i id="install-chevron-{{ integration.driver_id }}" class="fa-solid fa-chevron-down h-3 w-3 transition-transform duration-200"></i>
+                    </button>
+                    
+                    <!-- Dropdown Menu -->
+                    <div id="install-dropdown-{{ integration.driver_id }}" class="hidden absolute right-0 top-full mt-1 w-48 rounded-lg shadow-lg bg-uc-card border border-uc-border z-[9999]">
+                        <div class="py-1">
+                            <button
+                                class="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-uc-darker hover:text-white transition-colors flex items-center gap-2 rounded-lg"
+                                hx-get="/api/version-selector/{{ owner }}/{{ repo }}/{{ integration.driver_id }}"
+                                hx-target="#modal-content"
+                                hx-swap="innerHTML"
+                                hx-on::before-request="toggleDropdown(event, 'install-dropdown-{{ integration.driver_id }}', true); openModal('Select Version');"
+                                title="Choose a specific version to install">
+                                <i class="fa-solid fa-list-ul h-4 w-4"></i>
+                                Select Version
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <!-- Fallback for invalid GitHub URL parsing -->
                 <button 
                     class="install-btn inline-flex items-center px-3 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     hx-post="/api/integration/{{ integration.driver_id }}/install"
@@ -210,6 +301,20 @@
                     <i class="fa-solid fa-download h-3 w-3 mr-1"></i>
                     Install
                 </button>
+                {% endif %}
+                {% else %}
+                <!-- Fallback for non-GitHub integrations -->
+                <button 
+                    class="install-btn inline-flex items-center px-3 py-1.5 bg-uc-primary hover:bg-uc-secondary text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    hx-post="/api/integration/{{ integration.driver_id }}/install"
+                    hx-target="#card-{{ integration.driver_id }}"
+                    hx-swap="outerHTML"
+                    hx-indicator="#overlay-{{ integration.driver_id }}"
+                    title="Install integration">
+                    <i class="fa-solid fa-download h-3 w-3 mr-1"></i>
+                    Install
+                </button>
+                {% endif %}
                 {% endif %}
             </div>
         </div>

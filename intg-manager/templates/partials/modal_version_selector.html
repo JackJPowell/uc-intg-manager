@@ -1,0 +1,134 @@
+<!-- Version Selector Content for Modal -->
+<!-- Allows selection of specific version to install/upgrade -->
+<div class="space-y-4">
+    {% if error %}
+    <!-- Error State -->
+    <div class="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+        <i class="fas fa-exclamation-circle text-red-400 text-xl"></i>
+        <div>
+            <p class="text-red-300 font-medium">{{ error }}</p>
+        </div>
+    </div>
+    {% else %}
+    
+    <!-- Migration Warning (if applicable) -->
+    {% if migration_required_at %}
+    <div class="flex items-start gap-3 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+        <i class="fas fa-exclamation-triangle text-yellow-400 text-xl mt-0.5"></i>
+        <div>
+            <p class="text-yellow-300 font-medium mb-1">Migration Boundary</p>
+            <p class="text-gray-300 text-sm">
+                Versions older than <span class="font-mono font-semibold">{{ migration_required_at }}</span> require manual migration and cannot be installed automatically.
+            </p>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Available Releases Section -->
+    {% if releases %}
+    <div>
+        <h4 class="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <i class="fas fa-clock-rotate-left"></i>
+            Recent Releases
+        </h4>
+        
+        <div class="space-y-2">
+            {% for release in releases %}
+            <button
+                class="w-full text-left p-3 rounded-lg border transition-colors {% if release.is_beta %}bg-orange-500/10 border-orange-500/30 hover:bg-orange-500/20{% elif loop.first or (loop.index == (releases|selectattr('is_beta')|list|length + 1)) %}bg-green-500/10 border-green-500/30 hover:bg-green-500/20{% else %}bg-uc-card border-uc-border hover:bg-uc-darker{% endif %}"
+                hx-post="{{ install_url }}?version={{ release.tag_name }}"
+                hx-target="{{ hx_target }}"
+                hx-swap="outerHTML"
+                hx-indicator="{{ hx_indicator }}"
+                hx-on::before-request="closeModal()"
+                title="Install {{ release.tag_name }}">
+                
+                <div class="flex items-start justify-between gap-3">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="font-mono font-semibold {% if release.is_beta %}text-orange-300{% elif loop.first or (loop.index == (releases|selectattr('is_beta')|list|length + 1)) %}text-green-300{% else %}text-white{% endif %}">
+                                {{ release.tag_name }}
+                            </span>
+                            {% if release.is_beta %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-500/20 text-orange-300">
+                                <i class="fas fa-flask text-xs mr-1"></i>
+                                Beta
+                            </span>
+                            {% elif loop.index == (releases|selectattr('is_beta')|list|length + 1) %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-300">
+                                <i class="fas fa-star text-xs mr-1"></i>
+                                Latest
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% if release.name and release.name != release.tag_name %}
+                        <p class="text-sm text-gray-400 truncate">{{ release.name }}</p>
+                        {% endif %}
+                        {% if release.published_at %}
+                        <p class="text-xs text-gray-500 mt-1">
+                            <i class="far fa-calendar mr-1"></i>
+                            {{ release.published_at }}
+                        </p>
+                        {% endif %}
+                    </div>
+                    <i class="fas fa-download text-gray-400 mt-1"></i>
+                </div>
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="p-4 bg-uc-card border border-uc-border rounded-lg text-center">
+        <i class="fas fa-inbox text-gray-500 text-2xl mb-2"></i>
+        <p class="text-gray-400 text-sm">No releases available</p>
+    </div>
+    {% endif %}
+    
+    <!-- Manual Version Input Section -->
+    <div>
+        <h4 class="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <i class="fas fa-keyboard"></i>
+            Specify Version
+        </h4>
+        
+        <form 
+            hx-post="{{ install_url }}"
+            hx-target="{{ hx_target }}"
+            hx-swap="outerHTML"
+            hx-indicator="{{ hx_indicator }}"
+            hx-on::before-request="closeModal()"
+            class="space-y-3">
+            
+            <div class="flex gap-2">
+                <input
+                    type="text"
+                    name="version"
+                    placeholder="e.g., v1.2.3 or 1.2.3"
+                    class="flex-1 px-3 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-uc-primary focus:ring-1 focus:ring-uc-primary text-sm font-mono"
+                    pattern="^v?[0-9]+\.[0-9]+\.[0-9]+.*$"
+                    title="Enter a version number (e.g., v1.2.3 or 1.2.3)"
+                    required>
+                <button
+                    type="submit"
+                    class="px-4 py-2 bg-uc-primary hover:bg-uc-secondary text-white text-sm font-medium rounded-lg transition-colors">
+                    <i class="fas fa-download mr-1.5"></i>
+                    Install
+                </button>
+            </div>
+            
+            <p class="text-xs text-gray-500">
+                <i class="fas fa-info-circle mr-1"></i>
+                Enter the exact version tag from GitHub (with or without 'v' prefix)
+                {% if migration_required_at %}
+                <br>
+                <span class="text-yellow-400">
+                    <i class="fas fa-exclamation-triangle mr-1"></i>
+                    Versions ≤ {{ migration_required_at }} will be rejected
+                </span>
+                {% endif %}
+            </p>
+        </form>
+    </div>
+    
+    {% endif %}
+</div>
