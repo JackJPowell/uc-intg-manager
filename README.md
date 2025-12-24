@@ -15,6 +15,15 @@ A web-based integration manager for [Unfolded Circle Remote Two/3](https://www.u
 
 ## Features
 
+### Release Notes and Version Management
+
+Access comprehensive release information directly from the web interface.
+
+- **Release Notes Viewer**: Click on any version number to view detailed release notes from GitHub
+- **Beta Release Support**: Enable beta releases in settings to see and install pre-release versions
+- **Version Selection**: Choose specific versions to install instead of only the latest
+- **Rollback Capability**: Install previous versions if needed (respecting migration boundaries)
+
 ### Automatic Updates with Configuration Preservation
 
 The Integration Manager can automatically detect when newer versions of your custom integrations are available on GitHub and update them while preserving your existing configuration.
@@ -23,9 +32,19 @@ The Integration Manager can automatically detect when newer versions of your cus
 - **One-Click Updates**: Update integrations directly from the web interface
 - **Configuration Backup & Restore**: Automatically backs up integration settings before updating and restores them after installation (for integrations that support the backup feature)
 - **Version Tracking**: View current and available versions for all installed integrations
+- **Beta Update Options**: Receive update notifications for beta releases when enabled in settings
 
 > [!IMPORTANT]
 > Configuration preservation depends on the integration implementing the backup/restore API. Check the integration's documentation to confirm support. If not supported, an upgrade button will not be shown.
+
+### Integration Management
+
+Full lifecycle management for your custom integrations.
+
+- **Delete Integrations**: Remove installed integrations directly from the web interface
+- **One-Click Installation**: Install new integrations from the community registry
+- **Update Control**: Update to latest, select specific versions, or choose beta releases
+- **Safe Uninstall**: Clean removal of integration drivers and configurations
 
 ### Available Integration Registry
 
@@ -56,6 +75,7 @@ Customize the Integration Manager's behavior through the Settings page:
 
 - **Shutdown on Battery**: Automatically stop the web server when the Remote is on battery power to conserve energy (default: enabled)
 - **Automatic Updates**: Enable automatic installation of integration updates when detected (default: disabled - manual confirmation required)
+- **Show Beta Releases**: Display and allow installation of pre-release versions from GitHub (default: disabled)
 - **Automatic Backups**: Enable scheduled daily backups of integration configurations (default: disabled)
 - **Backup Time**: Set the time of day for automatic backups (24-hour format, e.g., "02:00")
   
@@ -167,10 +187,13 @@ volumes:
 
 1. Navigate to **Your Integrations**
 2. If an update is available, you'll see an "Update Available" badge
-3. Click the **Update** button
+3. Click the **Update** button to install the latest version, or use the dropdown to:
+   - Select a specific version to install
+   - View release notes for any version
+   - Choose an alternate update method (with or without entity re-registration)
 4. The manager will:
    - Backup the current configuration
-   - Download the latest release from GitHub
+   - Download the selected release from GitHub
    - Uninstall the old version
    - Install the new version
    - Restore the configuration
@@ -179,9 +202,16 @@ volumes:
 
 1. Navigate to **Available Integrations**
 2. Browse or search for the integration you want
-3. Click the **Install** button
+3. Click the **Install** button to install the latest version, or use the dropdown to select a specific version
 4. The integration will be downloaded from GitHub and installed
 5. Configure it through the Remote's normal integration setup
+
+### Deleting an Integration
+
+1. Navigate to **Your Integrations** or **Available Integrations**
+2. Click the trash icon on any installed integration
+3. Confirm the deletion in the modal dialog
+4. The integration driver will be removed from your Remote
 
 ### Managing Backups
 
