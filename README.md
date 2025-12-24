@@ -9,8 +9,9 @@
 
 A web-based integration manager for [Unfolded Circle Remote Two/3](https://www.unfoldedcircle.com/). This integration provides a convenient web interface to manage your custom integrations, automatically check for updates, install new integrations, and backup integration config files. And it runs directly on your remote.
 
+<img width="800" height="694" alt="manager" src="https://github.com/user-attachments/assets/9f51dc19-4acd-457d-9591-ed62e4415a7a" />
 
-<img width="1583" height="1142" alt="dashboard" src="https://github.com/user-attachments/assets/4d573636-0a5a-4d24-9f61-a43127d08b34" />
+
 
 
 ## Features
