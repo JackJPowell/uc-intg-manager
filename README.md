@@ -22,7 +22,13 @@ Access comprehensive release information directly from the web interface.
 - **Release Notes Viewer**: Click on any version number to view detailed release notes from GitHub
 - **Beta Release Support**: Enable beta releases in settings to see and install pre-release versions
 - **Version Selection**: Choose specific versions to install instead of only the latest
-- **Rollback Capability**: Install previous versions if needed (respecting migration boundaries)
+- **Rollback Capability**: Install previous versions if needed
+
+<img width="500" alt="release" src="https://github.com/user-attachments/assets/1fcf8253-b1f1-468d-9894-4e4493680bce" /> <img width="500" height="257" alt="version" src="https://github.com/user-attachments/assets/bf4aaf89-e96e-4a82-9aa3-d9a5591d0862" />
+
+
+
+
 
 ### Automatic Updates with Configuration Preservation
 
@@ -45,6 +51,8 @@ Full lifecycle management for your custom integrations.
 - **One-Click Installation**: Install new integrations from the community registry
 - **Update Control**: Update to latest, select specific versions, or choose beta releases
 - **Safe Uninstall**: Clean removal of integration drivers and configurations
+
+<img width="500" alt="delete" src="https://github.com/user-attachments/assets/dd7b0604-09d8-4647-9b24-be69cb99df2c" />
 
 ### Available Integration Registry
 
