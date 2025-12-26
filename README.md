@@ -161,9 +161,6 @@ services:
     volumes:
       - uc-intg-manager-data:/data
     restart: unless-stopped
-
-volumes:
-  uc-intg-manager-data:
 ```
 
 #### Environment Variables
