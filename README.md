@@ -141,7 +141,7 @@ You can run the Integration Manager as a Docker container on an external server 
 docker run -d \\
   --name uc-intg-manager \\
   -p 8088:8088 \\
-  -e UC_INTEGRATION_HTTP_PORT=8088
+  -e UC_INTG_MANAGER_HTTP_PORT=8088
   -v uc-intg-manager-data:/data \\
   ghcr.io/jackjpowell/uc-intg-manager:latest
 ```
@@ -155,10 +155,9 @@ services:
   uc-intg-manager:
     image: ghcr.io/jackjpowell/uc-intg-manager:latest
     container_name: uc-intg-manager
-    ports:
-      - "8088:8088"
+    network_mode: host
     environment:
-      - UC_INTEGRATION_HTTP_PORT=8088
+      - UC_INTG_MANAGER_HTTP_PORT=8088
     volumes:
       - uc-intg-manager-data:/data
     restart: unless-stopped
