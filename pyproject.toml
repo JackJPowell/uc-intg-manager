@@ -1,6 +1,6 @@
 [project]
 name = "uc-intg-manager"
-version = "1.2.0"
+version = "1.2.1"
 description = "Unfolded Circle Integration Manager - Web interface for managing custom integrations"
 readme = "README.md"
 requires-python = ">=3.11"

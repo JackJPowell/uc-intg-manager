@@ -142,24 +142,30 @@ class RemoteAPIClient:
 
     async def get_power_status(self) -> dict[str, Any]:
         """
-        Get the current power status of the remote.
+        Get the current power/charger status of the remote.
 
-        :return: Power status dictionary with power_supply flag
+        :return: Charger status dictionary with power_supply and wireless_charging flags
         """
 
-        return await self._request("GET", "/system/power")
+        return await self._request("GET", "/system/power/charger")
 
     async def is_docked(self) -> bool:
         """
-        Check if the remote is currently docked (on power supply).
+        Check if the remote is currently charging (docked or wireless).
 
-        :return: True if the remote is docked/on power supply
+        For R3 remotes, this checks both dock charging (power_supply) and wireless charging.
+        The remote is considered "docked" if either charging method is active.
+
+        :return: True if the remote is on dock or wireless charging
         """
         try:
             status = await self.get_power_status()
-            return status.get("power_supply", False)
+            # Check if either dock charging or wireless charging is active
+            power_supply = status.get("power_supply", False)
+            wireless_charging = status.get("wireless_charging", False)
+            return power_supply or wireless_charging
         except RemoteAPIError as e:
-            _LOG.warning("Failed to check dock status: %s", e)
+            _LOG.warning("Failed to check charging status: %s", e)
             return False
 
     async def get_version(self) -> dict[str, Any]:
