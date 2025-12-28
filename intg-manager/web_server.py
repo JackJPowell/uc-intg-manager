@@ -331,7 +331,7 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
             driver.get("name", {}).get("en", driver_id) if driver else driver_id
         )
 
-        # Map driver_type to our flags
+        # Map driver_type to our flags (official = LOCAL firmware integrations)
         is_official = driver_type == "LOCAL"
         is_external = driver_type == "EXTERNAL"
         is_custom = driver_type == "CUSTOM"
@@ -436,6 +436,7 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
         home_page = driver.get("developer", {}).get("url", "")
         driver_name = driver.get("name", {}).get("en", driver_id)
 
+        # Map driver_type to our flags (official = LOCAL firmware integrations)
         is_official = driver_type == "LOCAL"
         is_external = driver_type == "EXTERNAL"
         is_custom = driver_type == "CUSTOM"
@@ -600,7 +601,8 @@ def _get_available_integrations() -> list[AvailableIntegration]:
 
     available = []
     for item in registry:
-        is_official = item.get("official", False) or not item.get("custom", True)
+        # Derive official status from custom field (official = not custom)
+        is_official = not item.get("custom", True)
         driver_id = item.get("id", "")
         name = item.get("name", "")
         home_page = item.get("repository", "")
