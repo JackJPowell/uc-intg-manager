@@ -168,6 +168,8 @@
                 {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
                 <div class="relative inline-flex rounded-lg shadow-sm">
                     <!-- Main Update Button -->
+                    {% if integration.can_auto_update %}
+                    {# Can do automated backup/restore - direct update #}
                     <button 
                         class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-500/30"
                         hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
@@ -178,6 +180,19 @@
                         <i class="fa-solid fa-upload h-3 w-3 mr-1"></i>
                         {{ integration.latest_version }}
                     </button>
+                    {% else %}
+                    {# Cannot do automated backup - show warning modal first #}
+                    <button 
+                        class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-500/30"
+                        hx-get="/api/integration/{{ integration.driver_id }}/update-confirm"
+                        hx-target="#modal-content"
+                        hx-swap="innerHTML"
+                        hx-on::before-request="openModal('Update Confirmation')"
+                        title="Update to {{ integration.latest_version }} (requires reconfiguration)">
+                        <i class="fa-solid fa-exclamation-triangle h-3 w-3 mr-1"></i>
+                        {{ integration.latest_version }}
+                    </button>
+                    {% endif %}
                     
                     <!-- Dropdown Toggle Button -->
                     <button 
@@ -206,6 +221,8 @@
                 </div>
                 {% else %}
                 <!-- Fallback for invalid GitHub URL -->
+                {% if integration.can_auto_update %}
+                {# Can do automated backup/restore - direct update #}
                 <button 
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-lg transition-colors"
                     hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
@@ -213,6 +230,22 @@
                     hx-swap="outerHTML"
                     hx-indicator="#overlay-{{ integration.driver_id }}"
                     title="Update to {{ integration.latest_version }}">
+                    <i class="fa-solid fa-upload h-3 w-3 mr-1"></i>
+                    {{ integration.latest_version }}
+                </button>
+                {% else %}
+                {# Cannot do automated backup - show warning modal first #}
+                <button 
+                    class="inline-flex items-center px-3 py-1.5 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 text-xs font-medium rounded-lg transition-colors"
+                    hx-get="/api/integration/{{ integration.driver_id }}/update-confirm"
+                    hx-target="#modal-content"
+                    hx-swap="innerHTML"
+                    hx-on::before-request="openModal('Update Confirmation')"
+                    title="Update to {{ integration.latest_version }} (requires reconfiguration)">
+                    <i class="fa-solid fa-exclamation-triangle h-3 w-3 mr-1"></i>
+                    {{ integration.latest_version }}
+                </button>
+                {% endif %}
                     <i class="fa-solid fa-upload h-3 w-3 mr-1"></i>
                     {{ integration.latest_version }}
                 </button>

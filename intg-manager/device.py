@@ -122,21 +122,30 @@ class IntegrationManagerDevice(PollingDevice):
             if await self._client.test_connection():
                 self._connected = True
                 _LOG.info("[%s] Connected to remote", self.log_id)
-                
+
                 # Check initial dock state and start web server if charging
                 # This handles the case where the remote is already docked at startup
                 try:
                     self._is_docked = await self._client.is_docked()
                     if self._is_docked:
-                        _LOG.info("[%s] Remote is charging at startup (dock or wireless)", self.log_id)
+                        _LOG.info(
+                            "[%s] Remote is charging at startup (dock or wireless)",
+                            self.log_id,
+                        )
                         await self._on_docked()
                     else:
                         _LOG.info("[%s] Remote is on battery at startup", self.log_id)
                 except RemoteAPIError as e:
-                    _LOG.warning("[%s] Failed to check initial charging status: %s", self.log_id, e)
+                    _LOG.warning(
+                        "[%s] Failed to check initial charging status: %s",
+                        self.log_id,
+                        e,
+                    )
                 except Exception as e:
                     # This catches web server startup failures
-                    _LOG.error("[%s] Error during startup initialization: %s", self.log_id, e)
+                    _LOG.error(
+                        "[%s] Error during startup initialization: %s", self.log_id, e
+                    )
             else:
                 raise RemoteAPIError("Connection test failed")
 
@@ -241,26 +250,34 @@ class IntegrationManagerDevice(PollingDevice):
 
             if not self._web_server.is_running:
                 self._web_server.start()
-                
+
                 # Give the server thread a moment to start and verify it didn't fail
                 # The server sets _running = True immediately, but actual startup happens in background
                 import asyncio
+
                 await asyncio.sleep(0.5)
-                
+
                 if self._web_server.is_running:
                     _LOG.info("[%s] Web server started successfully", self.log_id)
-                    
+
                     # Trigger initial version check on startup
                     _LOG.info("[%s] Triggering initial version check...", self.log_id)
                     try:
                         self._web_server.refresh_integration_versions()
                     except Exception as e:
-                        _LOG.warning("[%s] Initial version check failed: %s", self.log_id, e)
+                        _LOG.warning(
+                            "[%s] Initial version check failed: %s", self.log_id, e
+                        )
                 else:
-                    _LOG.error("[%s] Web server failed to start (check logs for port conflicts)", self.log_id)
+                    _LOG.error(
+                        "[%s] Web server failed to start (check logs for port conflicts)",
+                        self.log_id,
+                    )
                     self._web_server = None
         except Exception as e:
-            _LOG.error("[%s] Failed to start web server: %s", self.log_id, e, exc_info=True)
+            _LOG.error(
+                "[%s] Failed to start web server: %s", self.log_id, e, exc_info=True
+            )
             self._web_server = None
 
     async def _on_undocked(self) -> None:
