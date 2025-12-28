@@ -1,0 +1,83 @@
+<!-- Confirmation Modal for Update Without Backup Support -->
+<div class="space-y-4" data-modal-title="Update Without Configuration Backup">
+    <!-- Warning Icon -->
+    <div class="flex justify-center mb-4">
+        <div class="w-16 h-16 rounded-full bg-yellow-500/20 flex items-center justify-center">
+            <i class="fa-solid fa-exclamation-triangle text-yellow-400 text-3xl"></i>
+        </div>
+    </div>
+
+    <!-- Warning Message -->
+        <div class="text-center space-y-3">
+            <h3 class="text-lg font-semibold text-white">Configuration Cannot Be Preserved</h3>
+            <hr class="border-gray-600" />
+        </div>
+        <p class="text-gray-300">
+            This integration update cannot preserve your current configuration automatically because:
+        </p>
+        <div class="text-left">
+            <ul class="text-left text-sm text-gray-400">
+                {% if reason == 'no_backup_support' %}
+                <li class="flex items-start gap-2">
+                    <span>The integration does not support automatic configuration backup</span>
+                </li>
+                {% elif reason == 'version_too_old' %}
+                <li class="flex items-start gap-2">
+                    <span>Current version ({{ current_version }}) is below the minimum required version ({{ min_version }}) for automatic updates</span>
+                </li>
+                {% else %}
+                <li class="flex items-start gap-2">
+                    <span>Automatic configuration backup is not available</span>
+                </li>
+                {% endif %}
+            </ul>
+        </div>
+
+    <!-- Important Notice -->
+    <div class="bg-uc-darker border border-yellow-500/30 rounded-lg p-4 space-y-2">
+        <div class="flex items-start gap-3">
+            <i class="fa-solid fa-info-circle text-yellow-400 mt-0.5"></i>
+            <div class="flex-1 text-sm text-gray-300">
+                <p class="font-medium mb-2">After the update:</p>
+                <ul class="space-y-1 text-gray-400">
+                    <li>• You will need to reconfigure the integration in the Remote's web configurator</li>
+                    <li>• All current settings and entity configurations will be lost</li>
+                    <li>• The integration will appear as "Not Configured" until setup is complete</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Integration Info -->
+    <div class="bg-uc-card rounded-lg p-3 text-sm">
+        <div class="grid grid-cols-2 gap-2 text-gray-400">
+            <div>
+                <span class="text-gray-500">Integration:</span>
+                <span class="text-white ml-2">{{ integration_name }}</span>
+            </div>
+            <div>
+                <span class="text-gray-500">Update:</span>
+                <span class="text-white ml-2">{{ current_version }} → {{ new_version }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="flex gap-3 pt-2">
+        <button
+            onclick="closeModal()"
+            class="flex-1 px-4 py-2 bg-uc-card hover:bg-uc-darker text-white rounded-lg transition-colors border border-uc-border">
+            Cancel
+        </button>
+        <button
+            hx-post="{{ update_url }}"
+            hx-target="{{ update_target }}"
+            hx-swap="outerHTML"
+            hx-indicator="{{ update_indicator }}"
+            onclick="closeModal()"
+            class="flex-1 px-4 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 rounded-lg transition-colors font-medium border border-yellow-500/30">
+            <i class="fa-solid fa-exclamation-triangle mr-2"></i>
+            Proceed with Update
+        </button>
+    </div>
+</div>

@@ -557,7 +557,11 @@ class SyncGitHubClient:
             return None
 
     def download_release_asset(
-        self, owner: str, repo: str, asset_pattern: str = ".tar.gz", version: str | None = None
+        self,
+        owner: str,
+        repo: str,
+        asset_pattern: str = ".tar.gz",
+        version: str | None = None,
     ) -> tuple[bytes, str] | None:
         """
         Download a release asset (tar.gz file) from a release.
@@ -572,7 +576,9 @@ class SyncGitHubClient:
         if version:
             release = self.get_release_by_tag(owner, repo, version)
             if not release:
-                _LOG.warning("No release found for %s/%s version %s", owner, repo, version)
+                _LOG.warning(
+                    "No release found for %s/%s version %s", owner, repo, version
+                )
                 return None
         else:
             release = self.get_latest_release(owner, repo)

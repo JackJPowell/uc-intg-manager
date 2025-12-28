@@ -106,7 +106,8 @@ class IntegrationInfo:
     external: bool = False  # Running externally (Docker/network)
     configured_entities: int = 0
     supports_backup: bool = False  # Uses ucapi-framework with backup support
-    can_update: bool = False  # Version meets minimum requirement for updates
+    can_update: bool = False  # Show update button (always true if update available for custom integrations)
+    can_auto_update: bool = False  # Can do automated backup/restore (requires supports_backup and min version)
 
 
 @dataclass
@@ -130,7 +131,9 @@ class AvailableIntegration:
     update_available: bool = False
     latest_version: str = ""
     instance_id: str = ""  # Instance ID if configured
-    can_update: bool = False  # Version meets minimum requirement for updates
+    can_update: bool = False  # Show update button (always true if update available for custom integrations)
+    can_auto_update: bool = False  # Can do automated backup/restore (requires supports_backup and min version)
+    supports_backup: bool = False  # Uses ucapi-framework with backup support
 
     @property
     def install_status(self) -> str:
@@ -386,21 +389,32 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
                     info.latest_version,
                 )
 
-                # Check if current version meets minimum version requirement for updates
-                min_version = registry_item.get("backup_min_version")
+                # Show update button for all custom integrations with updates
                 info.can_update = True
-                if min_version:
+                _LOG.debug(
+                    "Update button enabled for %s (can_update=True, can_auto_update will be determined)",
+                    driver_id,
+                )
+
+                # Check if automated backup/restore is possible
+                # Requires: supports_backup AND version >= backup_min_version (if specified)
+                min_version = registry_item.get("backup_min_version")
+                info.can_auto_update = supports_backup
+
+                if min_version and supports_backup:
                     try:
                         if Version(info.version) < Version(min_version):
-                            info.can_update = False
+                            info.can_auto_update = False
                             _LOG.debug(
-                                "Update button hidden for %s: current version %s is below minimum %s",
+                                "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
                                 driver_id,
+                                info.version,
+                                info.latest_version,
                                 info.version,
                                 min_version,
                             )
                     except (InvalidVersion, TypeError):
-                        # If version parsing fails, allow update
+                        # If version parsing fails, allow auto update if supports_backup
                         pass
 
         integrations.append(info)
@@ -473,21 +487,32 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
                 info.update_available = True
                 info.latest_version = version_info.get("latest", "")
 
-                # Check if current version meets minimum version requirement for updates
-                min_version = registry_item.get("backup_min_version")
+                # Show update button for all custom integrations with updates
                 info.can_update = True
-                if min_version:
+                _LOG.debug(
+                    "Update button enabled for unconfigured %s (can_update=True)",
+                    driver_id,
+                )
+
+                # Check if automated backup/restore is possible
+                # Requires: supports_backup AND version >= backup_min_version (if specified)
+                min_version = registry_item.get("backup_min_version")
+                info.can_auto_update = supports_backup
+
+                if min_version and supports_backup:
                     try:
                         if Version(info.version) < Version(min_version):
-                            info.can_update = False
+                            info.can_auto_update = False
                             _LOG.debug(
-                                "Update button hidden for %s: current version %s is below minimum %s",
+                                "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
                                 driver_id,
+                                info.version,
+                                info.latest_version,
                                 info.version,
                                 min_version,
                             )
                     except (InvalidVersion, TypeError):
-                        # If version parsing fails, allow update
+                        # If version parsing fails, allow auto update if supports_backup
                         pass
 
         integrations.append(info)
@@ -594,6 +619,9 @@ def _get_available_integrations() -> list[AvailableIntegration]:
         update_available = False
         latest_version = ""
         can_update = False
+        can_auto_update = False
+        supports_backup = item.get("supports_backup", False)
+
         if is_installed and not is_official and not is_external:
             # Use the actual driver_id from the remote (not registry id) for cache lookup
             if actual_driver_id and actual_driver_id in _cached_version_data:
@@ -603,21 +631,28 @@ def _get_available_integrations() -> list[AvailableIntegration]:
                     update_available = True
                     latest_version = version_info.get("latest", "")
 
-                    # Check if current version meets minimum version requirement for updates
-                    min_version = item.get("backup_min_version")
+                    # Show update button for all custom integrations with updates
                     can_update = True
-                    if min_version and version:
+
+                    # Check if automated backup/restore is possible
+                    # Requires: supports_backup AND version >= backup_min_version (if specified)
+                    min_version = item.get("backup_min_version")
+                    can_auto_update = supports_backup
+
+                    if min_version and supports_backup and version:
                         try:
                             if Version(version) < Version(min_version):
-                                can_update = False
+                                can_auto_update = False
                                 _LOG.debug(
-                                    "Update button hidden for %s: current version %s is below minimum %s",
+                                    "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
                                     actual_driver_id,
+                                    version,
+                                    latest_version,
                                     version,
                                     min_version,
                                 )
                         except (InvalidVersion, TypeError):
-                            # If version parsing fails, allow update
+                            # If version parsing fails, allow auto update if supports_backup
                             pass
 
         categories_list = item.get("categories", [])
@@ -640,6 +675,8 @@ def _get_available_integrations() -> list[AvailableIntegration]:
             latest_version=latest_version,
             instance_id=instance_id,
             can_update=can_update,
+            can_auto_update=can_auto_update,
+            supports_backup=supports_backup,
         )
         available.append(avail)
 
@@ -1063,46 +1100,71 @@ def _perform_update_integration(
                 )
 
         # Step 1: Backup current configuration before updating (only for configured instances)
-        # For integrations that support backup, we REQUIRE a successful backup before proceeding
+        # For integrations that support backup AND meet minimum version, we REQUIRE a successful backup
+        # For integrations without backup support or below minimum version, we proceed without backup
         if is_configured:
-            _LOG.info(
-                "Backing up configuration before update: %s", integration.driver_id
-            )
-            try:
-                backup_data = backup_integration(
-                    _remote_client, integration.driver_id, save_to_file=True
+            # Check if this integration can actually do automated backup/restore
+            # It requires supports_backup AND version >= backup_min_version
+            can_backup = integration.supports_backup
+            if can_backup:
+                # Check if current version meets minimum version requirement
+                min_version = None
+                try:
+                    registry = load_registry()
+                    for entry in registry:
+                        if entry.get("driver_id") == integration.driver_id:
+                            min_version = entry.get("backup_min_version")
+                            break
+                except Exception:
+                    pass
+
+                if min_version and integration.version:
+                    try:
+                        if Version(integration.version) < Version(min_version):
+                            can_backup = False
+                            _LOG.info(
+                                "Backup not available for %s: current version %s is below minimum %s",
+                                integration.driver_id,
+                                integration.version,
+                                min_version,
+                            )
+                    except (InvalidVersion, TypeError):
+                        pass
+
+            if can_backup:
+                # This integration SHOULD support backup - require it
+                _LOG.info(
+                    "Backing up configuration before update: %s", integration.driver_id
                 )
-                if backup_data:
-                    _LOG.info(
-                        "Successfully backed up configuration for %s",
-                        integration.driver_id,
+                try:
+                    backup_data = backup_integration(
+                        _remote_client, integration.driver_id, save_to_file=True
                     )
-                elif integration.supports_backup:
-                    # Integration supports backup but backup failed - don't proceed
-                    _LOG.error(
-                        "Backup required for %s but no data was retrieved",
-                        integration.driver_id,
-                    )
-                    with _operation_lock:
-                        _operation_in_progress = False
+                    if backup_data:
                         _LOG.info(
-                            "Lock released - backup failed for integration %s",
-                            instance_id,
+                            "Successfully backed up configuration for %s",
+                            integration.driver_id,
                         )
-                    return jsonify(
-                        {
-                            "status": "error",
-                            "message": "Backup failed - cannot update without successful backup for this integration",
-                        }
-                    ), 400
-                else:
-                    _LOG.warning(
-                        "No backup data retrieved for %s - integration may not support backup",
-                        integration.driver_id,
-                    )
-            except Exception as e:
-                if integration.supports_backup:
-                    # Integration supports backup but backup failed - don't proceed
+                    else:
+                        # Integration should support backup but backup failed - don't proceed
+                        _LOG.error(
+                            "Backup required for %s but no data was retrieved",
+                            integration.driver_id,
+                        )
+                        with _operation_lock:
+                            _operation_in_progress = False
+                            _LOG.info(
+                                "Lock released - backup failed for integration %s",
+                                instance_id,
+                            )
+                        return jsonify(
+                            {
+                                "status": "error",
+                                "message": "Backup failed - cannot update without successful backup for this integration",
+                            }
+                        ), 400
+                except Exception as e:
+                    # Integration should support backup but backup failed - don't proceed
                     _LOG.error(
                         "Backup required for %s but failed: %s",
                         integration.driver_id,
@@ -1120,12 +1182,17 @@ def _perform_update_integration(
                             "message": f"Backup failed - cannot update: {e}",
                         }
                     ), 400
-                else:
-                    _LOG.warning(
-                        "Failed to backup %s, continuing with update: %s",
-                        integration.driver_id,
-                        e,
-                    )
+            else:
+                # Integration doesn't support backup or version too old - proceed without backup
+                _LOG.info(
+                    "Skipping backup for %s: supports_backup=%s, can_backup=%s",
+                    integration.driver_id,
+                    integration.supports_backup,
+                    can_backup,
+                )
+                _LOG.info(
+                    "Configuration will NOT be preserved - user will need to reconfigure"
+                )
         else:
             _LOG.info(
                 "Skipping backup for unconfigured driver: %s", integration.driver_id
@@ -2254,6 +2321,71 @@ def update_driver(driver_id: str):
         )
 
 
+@app.route("/api/integration/<driver_id>/update-confirm")
+def get_update_confirmation(driver_id: str):
+    """
+    Get update confirmation modal for integrations without backup support.
+
+    Returns HTML warning that configuration cannot be preserved.
+    """
+    if not _remote_client:
+        return "<p class='text-red-400'>Service not initialized</p>"
+
+    try:
+        # Get integration details
+        integrations = _get_installed_integrations()
+        integration = next((i for i in integrations if i.driver_id == driver_id), None)
+
+        if not integration:
+            return "<p class='text-red-400'>Integration not found</p>"
+
+        # Load registry to check backup requirements
+        registry = load_registry()
+        registry_item = None
+        for entry in registry:
+            if entry.get("driver_id") == driver_id or entry.get("id") == driver_id:
+                registry_item = entry
+                break
+
+        # Determine the reason for no backup
+        reason = "no_backup_support"
+        min_version = None
+        if registry_item:
+            min_version = registry_item.get("backup_min_version")
+            if min_version and integration.version:
+                try:
+                    if Version(integration.version) < Version(min_version):
+                        reason = "version_too_old"
+                except (InvalidVersion, TypeError):
+                    pass
+
+        # Determine update URL based on whether there's an instance
+        if integration.instance_id:
+            update_url = f"/api/integration/{integration.instance_id}/update?version={integration.latest_version}"
+            update_target = f"#card-{driver_id}"
+        else:
+            update_url = (
+                f"/api/driver/{driver_id}/update?version={integration.latest_version}"
+            )
+            update_target = f"#card-{driver_id}"
+
+        return render_template(
+            "partials/modal_update_no_backup.html",
+            driver_id=driver_id,
+            integration_name=integration.name,
+            current_version=integration.version,
+            new_version=integration.latest_version,
+            min_version=min_version,
+            reason=reason,
+            update_url=update_url,
+            update_target=update_target,
+            update_indicator=f"#upgrade-overlay-{driver_id}",
+        )
+    except Exception as e:
+        _LOG.error("Error loading update confirmation for %s: %s", driver_id, e)
+        return f"<p class='text-red-400'>Error: {str(e)}</p>"
+
+
 @app.route("/api/integration/<driver_id>/delete-confirm")
 def get_delete_confirmation(driver_id: str):
     """
@@ -2784,7 +2916,7 @@ def get_release_notes(owner: str, repo: str, version: str):
 
         # Check if this is a pre-release (beta)
         is_beta = release.get("prerelease", False)
-        
+
         # Create modal title with Beta prefix if needed
         modal_title = f"{'Beta ' if is_beta else ''}Release Notes - {version}"
 
@@ -3324,27 +3456,26 @@ def get_delete_backup_confirm(driver_id: str):
         backups_data = get_all_backups()
         backup_info = backups_data.get("integrations", {}).get(driver_id, {})
         timestamp = backup_info.get("timestamp", "Unknown")
-        
+
         # Format the timestamp nicely
         try:
             dt = datetime.fromisoformat(timestamp)
             formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError):
             formatted_time = timestamp
-        
+
         return render_template(
             "partials/modal_delete_backup.html",
             driver_id=driver_id,
-            timestamp=formatted_time
+            timestamp=formatted_time,
         )
     except Exception as e:
         _LOG.error("Failed to get backup info: %s", e)
         return render_template(
             "partials/modal_delete_backup.html",
             driver_id=driver_id,
-            timestamp="Unknown"
+            timestamp="Unknown",
         )
-
 
 
 @app.route("/api/backups/<driver_id>/view")
