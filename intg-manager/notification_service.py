@@ -194,7 +194,7 @@ class NotificationService:
             config: ntfy configuration
             title: Notification title
             message: Notification message
-            priority: Priority level (1-5, default 3)
+            priority: Priority level (1-5, default 3 = default priority)
             tags: Optional list of tags/emojis
 
         Returns:
@@ -205,6 +205,10 @@ class NotificationService:
             return False
 
         url = f"{config.server.rstrip('/')}/{config.topic}"
+        
+        # Ensure priority is valid (1-5)
+        priority = max(1, min(5, priority))
+        
         headers = {
             "Title": title,
             "Priority": str(priority),
@@ -219,7 +223,7 @@ class NotificationService:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    url, headers=headers, data=message, timeout=10
+                    url, headers=headers, data=message.encode("utf-8"), timeout=10
                 ) as resp:
                     if resp.status == 200:
                         _LOG.info("Notification sent via ntfy successfully")

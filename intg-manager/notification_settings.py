@@ -134,9 +134,12 @@ class NotificationSettings:
     triggers: NotificationTriggers = field(default_factory=NotificationTriggers)
     """Notification trigger preferences."""
 
-    # Track registry count for new integration detection
+    # Track registry for new integration detection
     _last_registry_count: int = 0
     """Internal: Last known count of integrations in registry."""
+
+    _known_integration_ids: list[str] = field(default_factory=list)
+    """Internal: List of known integration IDs from registry."""
 
     @classmethod
     def load(cls) -> NotificationSettings:

@@ -36,7 +36,11 @@ class NotificationManager:
         return settings.is_any_enabled()
 
     async def notify_integration_update_available(
-        self, driver_id: str, integration_name: str, current_version: str, latest_version: str
+        self,
+        driver_id: str,
+        integration_name: str,
+        current_version: str,
+        latest_version: str,
     ) -> None:
         """
         Notify when an integration update is available.
@@ -46,21 +50,41 @@ class NotificationManager:
         :param current_version: Current installed version
         :param latest_version: Latest available version
         """
+        _LOG.debug(
+            "notify_integration_update_available called: driver_id=%s, name=%s, current=%s, latest=%s",
+            driver_id,
+            integration_name,
+            current_version,
+            latest_version,
+        )
         settings = self._load_settings()
+        _LOG.debug(
+            "Settings loaded: any_enabled=%s, trigger_enabled=%s",
+            self._should_notify(settings),
+            settings.triggers.integration_update_available,
+        )
         if (
             not self._should_notify(settings)
             or not settings.triggers.integration_update_available
         ):
+            _LOG.info("Notification skipped: provider or trigger not enabled")
             return
 
         # Only notify once per version
         notification_key = f"{driver_id}:{latest_version}"
+        _LOG.debug(
+            "Checking notification key: %s, already notified: %s",
+            notification_key,
+            notification_key in self._notified_updates,
+        )
         if notification_key in self._notified_updates:
+            _LOG.info("Notification already sent for this version")
             return
 
         title = "Integration Update Available"
         message = f"{integration_name} can be updated from {current_version} to {latest_version}"
 
+        _LOG.info("Sending notification: title='%s', message='%s'", title, message)
         try:
             await self._service.send_all(settings, title, message)
             self._notified_updates.add(notification_key)
@@ -85,11 +109,7 @@ class NotificationManager:
 
         count = len(integration_names)
         title = f"{count} New Integration{'s' if count > 1 else ''} Available"
-
-        if count <= 3:
-            message = f"New integrations available: {', '.join(integration_names)}"
-        else:
-            message = f"{count} new integrations are now available in the registry"
+        message = f"{', '.join(integration_names)}"
 
         try:
             await self._service.send_all(settings, title, message)
@@ -121,6 +141,9 @@ class NotificationManager:
         title = "Integration Error"
         message = f"{integration_name} has entered an error state: {state}"
 
+        _LOG.debug(
+            "Sending error notification: title='%s', message='%s'", title, message
+        )
         try:
             await self._service.send_all(settings, title, message, priority=1)
             self._notified_errors[driver_id] = state
@@ -131,9 +154,9 @@ class NotificationManager:
     def clear_error_state(self, driver_id: str) -> None:
         """
         Clear the error state tracking for an integration.
-        
+
         Call this when an integration recovers from an error state.
-        
+
         :param driver_id: Driver ID of the integration
         """
         self._notified_errors.pop(driver_id, None)
@@ -141,42 +164,58 @@ class NotificationManager:
     def clear_update_notification(self, driver_id: str, version: str) -> None:
         """
         Clear the update notification tracking for an integration.
-        
+
         Call this when a user updates an integration to a new version.
-        
+
         :param driver_id: Driver ID of the integration
         :param version: Version that was updated to
         """
         notification_key = f"{driver_id}:{version}"
         self._notified_updates.discard(notification_key)
 
-    def update_registry_count(self, current_count: int) -> list[str]:
+    def update_registry_count(
+        self, integration_data: list[tuple[str, str]]
+    ) -> list[str]:
         """
-        Update the registry count and return new integrations if count increased.
+        Update the registry tracking and return new integrations if any detected.
 
-        :param current_count: Current number of integrations in registry
-        :return: List of integration names that are new (empty if none or count decreased)
+        :param integration_data: List of tuples (integration_id, integration_name)
+        :return: List of integration names that are new (empty if none)
         """
         settings = self._load_settings()
-        last_count = settings._last_registry_count
+        current_ids = {item[0] for item in integration_data}
+        known_ids = set(settings._known_integration_ids)
 
-        if last_count > 0 and current_count > last_count:
-            # Registry count increased - new integrations available
-            # Note: We can't easily determine which specific integrations are new
-            # without tracking individual integration IDs, so return count difference
-            diff = current_count - last_count
-            _LOG.info("Detected %d new integration(s) in registry", diff)
+        # Find new integrations - but only notify if we had known integrations before
+        # (skip notification on first run when known_ids is empty)
+        new_ids = current_ids - known_ids
 
-            # Update the stored count
-            settings._last_registry_count = current_count
+        if (
+            new_ids and known_ids
+        ):  # Only notify if we have a baseline to compare against
+            _LOG.info("Detected %d new integration(s) in registry", len(new_ids))
+
+            # Get the names of the new integrations
+            id_to_name = {item[0]: item[1] for item in integration_data}
+            new_names = [id_to_name[new_id] for new_id in new_ids]
+
+            # Update the stored list of known IDs
+            settings._known_integration_ids = list(current_ids)
+            settings._last_registry_count = len(current_ids)
             settings.save()
 
-            return [f"Integration {i}" for i in range(1, diff + 1)]
+            return new_names
 
-        # Update count (first run or count decreased/same)
-        if settings._last_registry_count != current_count:
-            settings._last_registry_count = current_count
+        # Update tracking (first run or no new integrations)
+        if known_ids != current_ids:
+            settings._known_integration_ids = list(current_ids)
+            settings._last_registry_count = len(current_ids)
             settings.save()
+            if not known_ids:
+                _LOG.debug(
+                    "First run: initialized registry tracking with %d integrations",
+                    len(current_ids),
+                )
 
         return []
 
@@ -202,6 +241,13 @@ def send_notification_sync(coro_func, *args: Any, **kwargs: Any) -> None:
     :param kwargs: Keyword arguments
     """
     try:
-        asyncio.run(coro_func(*args, **kwargs))
+        # Try to get the current event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, create a task
+            loop.create_task(coro_func(*args, **kwargs))
+        except RuntimeError:
+            # No running loop, use asyncio.run()
+            asyncio.run(coro_func(*args, **kwargs))
     except Exception as e:
         _LOG.error("Failed to send notification: %s", e)

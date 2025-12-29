@@ -128,7 +128,8 @@ class RemoteConfig:
 WEB_SERVER_PORT = int(os.environ.get("UC_INTG_MANAGER_HTTP_PORT", "8088"))
 
 # Known integrations registry URL (local for development, will be GitHub URL in production)
-KNOWN_INTEGRATIONS_URL = "https://raw.githubusercontent.com/JackJPowell/uc-intg-list/refs/heads/main/registry.json"
+# KNOWN_INTEGRATIONS_URL = "https://raw.githubusercontent.com/JackJPowell/uc-intg-list/refs/heads/main/registry.json"
+KNOWN_INTEGRATIONS_URL = os.path.join(os.path.dirname(__file__), "registry.json")
 
 # Polling interval in seconds for checking remote power status
 POWER_POLL_INTERVAL = 30

@@ -242,6 +242,36 @@ def _refresh_version_cache() -> None:
                         "latest": latest_version,
                         "has_update": has_update,
                     }
+
+                    # Send notification for update available
+                    if has_update:
+                        _LOG.info(
+                            "Update available for %s: %s -> %s (cache refresh)",
+                            integration.name,
+                            current_version,
+                            latest_version,
+                        )
+                        try:
+                            nm = get_notification_manager()
+                            _LOG.debug(
+                                "Sending notification for %s",
+                                integration.name,
+                            )
+                            send_notification_sync(
+                                nm.notify_integration_update_available,
+                                integration.driver_id,
+                                integration.name,
+                                current_version,
+                                latest_version,
+                            )
+                            _LOG.debug(
+                                "send_notification_sync completed for %s",
+                                integration.name,
+                            )
+                        except Exception as notify_error:
+                            _LOG.error(
+                                "Failed to send update notification: %s", notify_error
+                            )
             except Exception as e:
                 _LOG.debug(
                     "Failed to check version for %s: %s", integration.driver_id, e
@@ -430,14 +460,18 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
         integrations.append(info)
 
         # Check for error states and send notification
-        if info.state and "ERROR" in info.state.upper():
+        # Notify for ERROR or DISCONNECTED states (both indicate problems)
+        state_upper = info.state.upper() if info.state else ""
+        if state_upper and ("ERROR" in state_upper or state_upper == "DISCONNECTED"):
+            _LOG.info("Integration %s in problem state: %s", info.name, info.state)
             try:
                 nm = get_notification_manager()
+                _LOG.debug("Sending notification for error state: %s", info.name)
                 send_notification_sync(
                     nm.notify_integration_error_state, driver_id, info.name, info.state
                 )
             except Exception as notify_error:
-                _LOG.debug("Failed to send error state notification: %s", notify_error)
+                _LOG.error("Failed to send error state notification: %s", notify_error)
         else:
             # Integration is not in error state - clear any previous error notification
             try:
@@ -712,7 +746,9 @@ def _get_available_integrations() -> list[AvailableIntegration]:
     # Check for new integrations in registry and send notification
     try:
         nm = get_notification_manager()
-        new_integrations = nm.update_registry_count(len(available))
+        # Create list of (id, name) tuples for tracking
+        integration_data = [(item.driver_id, item.name) for item in available]
+        new_integrations = nm.update_registry_count(integration_data)
         if new_integrations:
             send_notification_sync(
                 nm.notify_new_integration_in_registry, new_integrations
@@ -3259,16 +3295,31 @@ def check_versions():
                     if has_update:
                         updates_available += 1
                         # Send notification for update available
+                        _LOG.info(
+                            "Update available for %s: %s -> %s",
+                            integration.name,
+                            current_version,
+                            latest_version,
+                        )
                         try:
                             nm = get_notification_manager()
+                            _LOG.info(
+                                "Calling send_notification_sync for %s",
+                                integration.name,
+                            )
                             send_notification_sync(
                                 nm.notify_integration_update_available,
+                                integration.driver_id,
                                 integration.name,
                                 current_version,
                                 latest_version,
                             )
+                            _LOG.info(
+                                "send_notification_sync completed for %s",
+                                integration.name,
+                            )
                         except Exception as notify_error:
-                            _LOG.debug(
+                            _LOG.error(
                                 "Failed to send update notification: %s", notify_error
                             )
             except Exception as e:

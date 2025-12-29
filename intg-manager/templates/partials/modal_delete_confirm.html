@@ -18,6 +18,7 @@
             hx-delete="/api/integration/{{ driver_id }}/delete?type=configuration"
             hx-target="#card-{{ driver_id }}"
             hx-swap="outerHTML"
+            hx-indicator="#delete-overlay-{{ driver_id }}"
             onclick="closeModal()">
             <div class="flex items-start gap-3">
                 <div class="flex-shrink-0 w-10 h-10 bg-orange-500/20 rounded-lg flex items-center justify-center group-hover:bg-orange-500/30 transition-colors">
@@ -37,6 +38,7 @@
             hx-delete="/api/integration/{{ driver_id }}/delete?type=full"
             hx-target="#card-{{ driver_id }}"
             hx-swap="outerHTML"
+            hx-indicator="#delete-overlay-{{ driver_id }}"
             onclick="closeModal()">
             <div class="flex items-start gap-3">
                 <div class="flex-shrink-0 w-10 h-10 bg-red-500/20 rounded-lg flex items-center justify-center group-hover:bg-red-500/30 transition-colors">
