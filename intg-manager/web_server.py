@@ -1339,6 +1339,45 @@ def _perform_update_integration(
 
         # Restore configuration if backup data exists (only for configured instances)
         if backup_data and is_configured:
+            # Check if the new version supports backup/restore before attempting restore
+            can_restore = True
+            
+            # Reuse registry loaded earlier to get backup_min_version
+            min_backup_version = next(
+                (entry.get("backup_min_version") 
+                 for entry in registry 
+                 if entry.get("driver_id") == integration.driver_id),
+                None
+            )
+
+            if min_backup_version and current_version:
+                try:
+                    if Version(current_version) < Version(min_backup_version):
+                        can_restore = False
+                        _LOG.warning(
+                            "Cannot restore configuration for %s: installed version %s is below minimum backup version %s",
+                            integration.driver_id,
+                            current_version,
+                            min_backup_version,
+                        )
+                        _LOG.info(
+                            "User will need to manually reconfigure %s",
+                            integration.driver_id,
+                        )
+                except (InvalidVersion, TypeError) as e:
+                    _LOG.warning(
+                        "Failed to compare versions for restore check: %s", e
+                    )
+
+            if not can_restore:
+                _LOG.info(
+                    "Skipping restore for %s - version too old to support backup/restore",
+                    integration.driver_id,
+                )
+                # Don't attempt restore, user will need to reconfigure
+                backup_data = None
+
+        if backup_data and is_configured:
             try:
                 _LOG.info(
                     "Starting configuration restore for %s", integration.driver_id
@@ -2782,9 +2821,12 @@ def backup_single(driver_id: str):
     if not _remote_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
+    _LOG.info("Starting backup for integration: %s", driver_id)
+
     try:
         backup_data = backup_integration(_remote_client, driver_id, save_to_file=True)
         if backup_data:
+            _LOG.info("Backup completed successfully for integration: %s", driver_id)
             return jsonify(
                 {
                     "status": "ok",
@@ -2793,6 +2835,7 @@ def backup_single(driver_id: str):
                 }
             )
         else:
+            _LOG.warning("No backup data retrieved for integration: %s", driver_id)
             return jsonify(
                 {
                     "status": "warning",

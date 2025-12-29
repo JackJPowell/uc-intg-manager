@@ -228,7 +228,10 @@ def backup_integration(
 
         # Save to file if requested
         if save_to_file:
-            save_backup(driver_id, backup_data)
+            if save_backup(driver_id, backup_data):
+                _LOG.info("Backup for '%s' completed successfully", driver_id)
+            else:
+                _LOG.warning("Backup for '%s' extracted but failed to save to file", driver_id)
 
         return backup_data
 
@@ -284,13 +287,16 @@ def save_backup(driver_id: str, backup_data: str) -> bool:
     clean_data = _clean_backup_data(backup_data)
 
     backups = _load_backups()
+    timestamp = datetime.now().isoformat()
     backups["integrations"][driver_id] = {
         "data": clean_data,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": timestamp,
     }
     success = _save_backups(backups)
     if success:
-        _LOG.info("Saved backup for %s to file", driver_id)
+        _LOG.info("Successfully saved backup for integration '%s' at %s", driver_id, timestamp)
+    else:
+        _LOG.error("Failed to save backup for integration '%s'", driver_id)
     return success
 
 

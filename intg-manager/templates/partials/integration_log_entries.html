@@ -1,6 +1,6 @@
 {% if entries %}
     {% for entry in entries %}
-    {% set priority = entry.p if entry.p is defined else (entry.priority if entry.priority is defined else 6) %}
+    {% set priority = entry.prio if entry.prio is defined else (entry.p if entry.p is defined else (entry.priority if entry.priority is defined else 6)) %}
     {% set timestamp = entry.ts if entry.ts is defined else (entry.timestamp if entry.timestamp is defined else '') %}
     {% set service = entry.s if entry.s is defined else (entry.service if entry.service is defined else '') %}
     {% set message = entry.m if entry.m is defined else (entry.msg if entry.msg is defined else '') %}

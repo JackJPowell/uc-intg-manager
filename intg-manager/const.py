@@ -113,6 +113,16 @@ class RemoteConfig:
     api_key: str = ""
     """API key for authentication (preferred over PIN)."""
 
+    def __repr__(self) -> str:
+        """Return string representation with masked credentials."""
+        return (
+            f"RemoteConfig(identifier={self.identifier!r}, "
+            f"name={self.name!r}, "
+            f"address={self.address!r}, "
+            f"pin='****', "
+            f"api_key='****')"
+        )
+
 
 # Web server port - read from environment variable or default to 8088
 WEB_SERVER_PORT = int(os.environ.get("UC_INTG_MANAGER_HTTP_PORT", "8088"))
