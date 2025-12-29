@@ -9,8 +9,7 @@ Uses synchronous HTTP clients (requests) to avoid aiohttp async context issues.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
-import re
-
+import asyncio
 import io
 import json
 import logging
@@ -22,6 +21,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from notification_settings import (
+    DiscordNotificationConfig,
+    HomeAssistantNotificationConfig,
+    WebhookNotificationConfig,
+    PushoverNotificationConfig,
+    NtfyNotificationConfig,
+)
+from notification_settings import NotificationSettings, NotificationTriggers
+from notification_service import NotificationService
+from notification_manager import send_notification_sync, get_notification_manager
 
 import markdown
 from flask import Flask, render_template, jsonify, request, send_file, Response
@@ -419,6 +429,23 @@ def _get_installed_integrations() -> list[IntegrationInfo]:
 
         integrations.append(info)
 
+        # Check for error states and send notification
+        if info.state and "ERROR" in info.state.upper():
+            try:
+                nm = get_notification_manager()
+                send_notification_sync(
+                    nm.notify_integration_error_state, driver_id, info.name, info.state
+                )
+            except Exception as notify_error:
+                _LOG.debug("Failed to send error state notification: %s", notify_error)
+        else:
+            # Integration is not in error state - clear any previous error notification
+            try:
+                nm = get_notification_manager()
+                nm.clear_error_state(driver_id)
+            except Exception as notify_error:
+                _LOG.debug("Failed to clear error state: %s", notify_error)
+
     # Now add drivers without instances (but NOT LOCAL ones - they're firmware-only)
     for driver in drivers:
         driver_id = driver.get("driver_id", "")
@@ -681,6 +708,19 @@ def _get_available_integrations() -> list[AvailableIntegration]:
             supports_backup=supports_backup,
         )
         available.append(avail)
+
+    # Check for new integrations in registry and send notification
+    try:
+        nm = get_notification_manager()
+        new_integrations = nm.update_registry_count(len(available))
+        if new_integrations:
+            send_notification_sync(
+                nm.notify_new_integration_in_registry, new_integrations
+            )
+    except Exception as notify_error:
+        _LOG.debug(
+            "Failed to check/send new integration notification: %s", notify_error
+        )
 
     return available
 
@@ -1341,13 +1381,15 @@ def _perform_update_integration(
         if backup_data and is_configured:
             # Check if the new version supports backup/restore before attempting restore
             can_restore = True
-            
+
             # Reuse registry loaded earlier to get backup_min_version
             min_backup_version = next(
-                (entry.get("backup_min_version") 
-                 for entry in registry 
-                 if entry.get("driver_id") == integration.driver_id),
-                None
+                (
+                    entry.get("backup_min_version")
+                    for entry in registry
+                    if entry.get("driver_id") == integration.driver_id
+                ),
+                None,
             )
 
             if min_backup_version and current_version:
@@ -1365,9 +1407,7 @@ def _perform_update_integration(
                             integration.driver_id,
                         )
                 except (InvalidVersion, TypeError) as e:
-                    _LOG.warning(
-                        "Failed to compare versions for restore check: %s", e
-                    )
+                    _LOG.warning("Failed to compare versions for restore check: %s", e)
 
             if not can_restore:
                 _LOG.info(
@@ -1939,6 +1979,18 @@ def _perform_update_integration(
                 "Updated cache for %s: marked as current version", integration.driver_id
             )
 
+            # Clear the notified update state since user has updated
+            try:
+                nm = get_notification_manager()
+                nm.clear_update_notification(
+                    integration.driver_id,
+                    _cached_version_data[integration.driver_id]["latest"],
+                )
+            except Exception as notify_error:
+                _LOG.debug(
+                    "Failed to clear update notification state: %s", notify_error
+                )
+
         # Release operation lock
         with _operation_lock:
             _operation_in_progress = False
@@ -2236,6 +2288,17 @@ def update_driver(driver_id: str):
                 driver_id
             ]["latest"]
             _LOG.debug("Updated cache for %s: marked as current version", driver_id)
+
+            # Clear the notified update state since user has updated
+            try:
+                nm = get_notification_manager()
+                nm.clear_update_notification(
+                    driver_id, _cached_version_data[driver_id]["latest"]
+                )
+            except Exception as notify_error:
+                _LOG.debug(
+                    "Failed to clear update notification state: %s", notify_error
+                )
 
         # Release operation lock
         with _operation_lock:
@@ -3195,6 +3258,19 @@ def check_versions():
                     checked += 1
                     if has_update:
                         updates_available += 1
+                        # Send notification for update available
+                        try:
+                            nm = get_notification_manager()
+                            send_notification_sync(
+                                nm.notify_integration_update_available,
+                                integration.name,
+                                current_version,
+                                latest_version,
+                            )
+                        except Exception as notify_error:
+                            _LOG.debug(
+                                "Failed to send update notification: %s", notify_error
+                            )
             except Exception as e:
                 _LOG.debug(
                     "Failed to check version for %s: %s", integration.driver_id, e
@@ -3326,6 +3402,341 @@ def get_settings():
     """Get current settings as JSON."""
     settings = Settings.load()
     return jsonify(settings.to_dict())
+
+
+# ============================================================================
+# Notification Routes
+# ============================================================================
+
+
+@app.route("/notifications")
+def notifications_page():
+    """Render the notifications settings page."""
+
+    notification_settings = NotificationSettings.load()
+    return render_template(
+        "notifications.html",
+        notification_settings=notification_settings,
+    )
+
+
+@app.route("/api/notifications/home-assistant", methods=["POST"])
+def save_home_assistant_settings():
+    """Save Home Assistant notification settings."""
+
+    try:
+        data = request.get_json()
+        settings = NotificationSettings.load()
+
+        settings.home_assistant = HomeAssistantNotificationConfig(
+            enabled=data.get("enabled", False),
+            url=data.get("url", ""),
+            token=data.get("token", ""),
+        )
+
+        settings.save()
+        _LOG.info("Home Assistant notification settings saved")
+        return jsonify({"success": True})
+    except Exception as e:
+        _LOG.error("Failed to save Home Assistant settings: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/notifications/home-assistant/test", methods=["POST"])
+def test_home_assistant_notification():
+    """Send a test notification to Home Assistant."""
+
+    try:
+        settings = NotificationSettings.load()
+
+        # Temporarily enable for testing
+        test_config = HomeAssistantNotificationConfig(
+            enabled=True,
+            url=settings.home_assistant.url,
+            token=settings.home_assistant.token,
+        )
+
+        async def send_test():
+            return await NotificationService.send_home_assistant(
+                test_config,
+                "Integration Manager",
+                "Test notification from Integration Manager",
+            )
+
+        success = asyncio.run(send_test())
+
+        if success:
+            return jsonify({"success": True})
+        return jsonify(
+            {
+                "success": False,
+                "error": "Failed to send notification. Check logs for details.",
+            }
+        ), 400
+    except Exception as e:
+        _LOG.error("Failed to send test notification: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/notifications/webhook", methods=["POST"])
+def save_webhook_settings():
+    """Save webhook notification settings."""
+
+    try:
+        data = request.get_json()
+        settings = NotificationSettings.load()
+
+        settings.webhook = WebhookNotificationConfig(
+            enabled=data.get("enabled", False),
+            url=data.get("url", ""),
+            headers=data.get("headers", {}),
+        )
+
+        settings.save()
+        _LOG.info("Webhook notification settings saved")
+        return jsonify({"success": True})
+    except Exception as e:
+        _LOG.error("Failed to save webhook settings: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/notifications/webhook/test", methods=["POST"])
+def test_webhook_notification():
+    """Send a test notification via webhook."""
+
+    try:
+        settings = NotificationSettings.load()
+
+        # Temporarily enable for testing
+        test_config = WebhookNotificationConfig(
+            enabled=True,
+            url=settings.webhook.url,
+            headers=settings.webhook.headers,
+        )
+
+        async def send_test():
+            return await NotificationService.send_webhook(
+                test_config,
+                "Integration Manager",
+                "Test notification from Integration Manager",
+                {"source": "test"},
+            )
+
+        success = asyncio.run(send_test())
+
+        if success:
+            return jsonify({"success": True})
+        return jsonify(
+            {
+                "success": False,
+                "error": "Failed to send notification. Check logs for details.",
+            }
+        ), 400
+    except Exception as e:
+        _LOG.error("Failed to send test notification: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/notifications/pushover", methods=["POST"])
+def save_pushover_settings():
+    """Save Pushover notification settings."""
+
+    try:
+        data = request.get_json()
+        settings = NotificationSettings.load()
+
+        settings.pushover = PushoverNotificationConfig(
+            enabled=data.get("enabled", False),
+            user_key=data.get("user_key", ""),
+            app_token=data.get("app_token", ""),
+        )
+
+        settings.save()
+        _LOG.info("Pushover notification settings saved")
+        return jsonify({"success": True})
+    except Exception as e:
+        _LOG.error("Failed to save Pushover settings: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/notifications/pushover/test", methods=["POST"])
+def test_pushover_notification():
+    """Send a test notification via Pushover."""
+
+    try:
+        settings = NotificationSettings.load()
+
+        # Temporarily enable for testing
+        test_config = PushoverNotificationConfig(
+            enabled=True,
+            user_key=settings.pushover.user_key,
+            app_token=settings.pushover.app_token,
+        )
+
+        async def send_test():
+            return await NotificationService.send_pushover(
+                test_config,
+                "Integration Manager",
+                "Test notification from Integration Manager",
+            )
+
+        success = asyncio.run(send_test())
+
+        if success:
+            return jsonify({"success": True})
+        return jsonify(
+            {
+                "success": False,
+                "error": "Failed to send notification. Check logs for details.",
+            }
+        ), 400
+    except Exception as e:
+        _LOG.error("Failed to send test notification: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/notifications/ntfy", methods=["POST"])
+def save_ntfy_settings():
+    """Save ntfy notification settings."""
+
+    try:
+        data = request.get_json()
+        settings = NotificationSettings.load()
+
+        settings.ntfy = NtfyNotificationConfig(
+            enabled=data.get("enabled", False),
+            server=data.get("server", "https://ntfy.sh"),
+            topic=data.get("topic", ""),
+            token=data.get("token", ""),
+        )
+
+        settings.save()
+        _LOG.info("ntfy notification settings saved")
+        return jsonify({"success": True})
+    except Exception as e:
+        _LOG.error("Failed to save ntfy settings: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/notifications/ntfy/test", methods=["POST"])
+def test_ntfy_notification():
+    """Send a test notification via ntfy."""
+
+    try:
+        settings = NotificationSettings.load()
+
+        # Temporarily enable for testing
+        test_config = NtfyNotificationConfig(
+            enabled=True,
+            server=settings.ntfy.server,
+            topic=settings.ntfy.topic,
+            token=settings.ntfy.token,
+        )
+
+        async def send_test():
+            return await NotificationService.send_ntfy(
+                test_config,
+                "Integration Manager",
+                "Test notification from Integration Manager",
+                tags=["white_check_mark"],
+            )
+
+        success = asyncio.run(send_test())
+
+        if success:
+            return jsonify({"success": True})
+        return jsonify(
+            {
+                "success": False,
+                "error": "Failed to send notification. Check logs for details.",
+            }
+        ), 400
+    except Exception as e:
+        _LOG.error("Failed to send test notification: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/notifications/discord", methods=["POST"])
+def save_discord_settings():
+    """Save Discord notification settings."""
+
+    try:
+        data = request.get_json()
+        settings = NotificationSettings.load()
+
+        settings.discord = DiscordNotificationConfig(
+            enabled=data.get("enabled", False),
+            webhook_url=data.get("webhook_url", ""),
+        )
+
+        settings.save()
+        _LOG.info("Discord notification settings saved")
+        return jsonify({"success": True})
+    except Exception as e:
+        _LOG.error("Failed to save Discord settings: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/notifications/discord/test", methods=["POST"])
+def test_discord_notification():
+    """Send a test notification via Discord."""
+
+    try:
+        settings = NotificationSettings.load()
+
+        # Temporarily enable for testing
+        test_config = DiscordNotificationConfig(
+            enabled=True,
+            webhook_url=settings.discord.webhook_url,
+        )
+
+        async def send_test():
+            return await NotificationService.send_discord(
+                test_config,
+                "Integration Manager",
+                "Test notification from Integration Manager",
+            )
+
+        success = asyncio.run(send_test())
+
+        if success:
+            return jsonify({"success": True})
+        return jsonify(
+            {
+                "success": False,
+                "error": "Failed to send notification. Check logs for details.",
+            }
+        ), 400
+    except Exception as e:
+        _LOG.error("Failed to send test notification: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/notifications/triggers", methods=["POST"])
+def save_notification_triggers():
+    """Save notification trigger preferences."""
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "No data provided"}), 400
+
+        settings = NotificationSettings.load()
+
+        # Update trigger settings
+        settings.triggers = NotificationTriggers(
+            integration_update_available=data.get("integration_update_available", True),
+            new_integration_in_registry=data.get("new_integration_in_registry", False),
+            integration_error_state=data.get("integration_error_state", True),
+        )
+
+        settings.save()
+
+        _LOG.info("Notification trigger preferences saved")
+        return jsonify({"success": True})
+    except Exception as e:
+        _LOG.error("Failed to save notification triggers: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 # ============================================================================
@@ -3752,6 +4163,9 @@ def download_complete_backup():
         # Ensure settings are included
         backups_data["settings"] = settings.to_dict()
 
+        notification_settings = NotificationSettings.load()
+        backups_data["notification_settings"] = notification_settings.to_dict()
+
         # Create in-memory file for download
         backup_json = json.dumps(backups_data, indent=2)
         backup_bytes = backup_json.encode("utf-8")
@@ -3806,6 +4220,44 @@ def upload_complete_backup():
             except Exception as e:
                 _LOG.warning("Failed to restore settings: %s", e)
 
+        # Restore notification settings if present
+        if (
+            "notification_settings" in backup_data
+            and backup_data["notification_settings"]
+        ):
+            try:
+                notification_settings = NotificationSettings.load()
+
+                # Update from backup data
+
+                if "home_assistant" in backup_data["notification_settings"]:
+                    notification_settings.home_assistant = (
+                        HomeAssistantNotificationConfig(
+                            **backup_data["notification_settings"]["home_assistant"]
+                        )
+                    )
+                if "webhook" in backup_data["notification_settings"]:
+                    notification_settings.webhook = WebhookNotificationConfig(
+                        **backup_data["notification_settings"]["webhook"]
+                    )
+                if "pushover" in backup_data["notification_settings"]:
+                    notification_settings.pushover = PushoverNotificationConfig(
+                        **backup_data["notification_settings"]["pushover"]
+                    )
+                if "ntfy" in backup_data["notification_settings"]:
+                    notification_settings.ntfy = NtfyNotificationConfig(
+                        **backup_data["notification_settings"]["ntfy"]
+                    )
+                if "discord" in backup_data["notification_settings"]:
+                    notification_settings.discord = DiscordNotificationConfig(
+                        **backup_data["notification_settings"]["discord"]
+                    )
+
+                notification_settings.save()
+                _LOG.info("Restored notification settings from backup")
+            except Exception as e:
+                _LOG.warning("Failed to restore notification settings: %s", e)
+
         # Save the complete backup file (includes all integrations)
         try:
             with open(INTEGRATION_BACKUPS_FILE, "w", encoding="utf-8") as f:
@@ -3818,10 +4270,18 @@ def upload_complete_backup():
 
         integration_count = len(backup_data.get("integrations", {}))
         settings_restored = "settings" in backup_data and backup_data["settings"]
+        notification_settings_restored = (
+            "notification_settings" in backup_data
+            and backup_data["notification_settings"]
+        )
 
         message = f"Successfully restored {integration_count} integration backup(s)"
-        if settings_restored:
+        if settings_restored and notification_settings_restored:
+            message += ", settings, and notification settings"
+        elif settings_restored:
             message += " and settings"
+        elif notification_settings_restored:
+            message += " and notification settings"
 
         return jsonify({"status": "ok", "message": message})
     except Exception as e:
