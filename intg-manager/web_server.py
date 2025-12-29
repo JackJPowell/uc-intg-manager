@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import markdown
-from flask import Flask, render_template, jsonify, request, send_file
+from flask import Flask, render_template, jsonify, request, send_file, Response
 from werkzeug.serving import make_server
 
 from backup_service import (
@@ -3327,6 +3327,177 @@ def clear_logs():
         <p>Logs cleared</p>
     </div>
     """
+
+
+# ============================================================================
+# Integration Logs Routes (Remote logs)
+# ============================================================================
+
+
+@app.route("/integration-logs")
+def integration_logs_page():
+    """Render the integration logs page."""
+    if not _remote_client:
+        return render_template(
+            "integration_logs.html",
+            services=[],
+            entries=[],
+            selected_service="",
+        )
+
+    try:
+        # Get available log services from the remote
+        services = _remote_client.get_log_services()
+
+        _LOG.debug("Fetched %d total log services from remote", len(services))
+
+        # Filter to only active services
+        active_services = [
+            s for s in services if s.get("service") and s.get("active") is True
+        ]
+
+        _LOG.debug(
+            "Found %d active services out of %d total services",
+            len(active_services),
+            len(services),
+        )
+
+        # Get integrations to match driver names for custom services
+        integrations = _remote_client.get_integrations()
+        integration_map = {
+            intg.get("driver_id"): intg.get("name", {}).get("en", "")
+            for intg in integrations
+            if intg.get("driver_id")
+        }
+
+        # Enrich custom services with driver names
+        for service in active_services:
+            service_id = service.get("service", "")
+            # Check if it's a custom integration (starts with "custom-intg-")
+            if service_id.startswith("custom-intg-"):
+                # Remove "custom-intg-" prefix to get driver_id
+                driver_id = service_id.replace("custom-intg-", "", 1)
+                # Look up the driver name from integrations
+                if driver_id in integration_map:
+                    service["display_name"] = integration_map[driver_id]
+                else:
+                    service["display_name"] = service.get("name", service_id)
+            else:
+                # Use the original name for non-custom services
+                service["display_name"] = service.get("name", service_id)
+
+        # Sort by display name
+        active_services.sort(key=lambda x: x.get("display_name", ""))
+
+        return render_template(
+            "integration_logs.html",
+            services=active_services,
+            entries=[],
+            selected_service="",
+        )
+    except SyncAPIError as e:
+        _LOG.error("Failed to fetch log services: %s", e)
+        return render_template(
+            "integration_logs.html",
+            services=[],
+            entries=[],
+            selected_service="",
+        )
+
+
+@app.route("/api/integration-logs/entries")
+def get_integration_logs_entries():
+    """Get integration log entries as HTML partial for HTMX."""
+    if not _remote_client:
+        return render_template("partials/integration_log_entries.html", entries=[])
+
+    service = request.args.get("service", "")
+    if not service:
+        return render_template("partials/integration_log_entries.html", entries=[])
+
+    # Get priority filter from request, default to 7 (all levels)
+    priority_str = request.args.get("priority", "7")
+    try:
+        priority = int(priority_str)
+        # Ensure priority is in valid range (0-7)
+        priority = max(0, min(7, priority))
+    except (ValueError, TypeError):
+        priority = 7  # Default to all levels if invalid
+
+    try:
+        # Fetch logs from the remote for the specified service and priority
+        logs = _remote_client.get_logs(
+            priority=priority,
+            service=service,
+            limit=1000,
+            as_text=False,  # Get as JSON
+        )
+
+        return render_template("partials/integration_log_entries.html", entries=logs)
+    except SyncAPIError as e:
+        _LOG.error("Failed to fetch integration logs: %s", e)
+        return render_template("partials/integration_log_entries.html", entries=[])
+
+
+@app.route("/api/integration-logs/download")
+def download_integration_logs():
+    """Download integration logs as a text file."""
+    if not _remote_client:
+        return "Not connected to remote", 500
+
+    service = request.args.get("service", "")
+    if not service:
+        return "No service specified", 400
+
+    # Get priority filter from request, default to 7 (all levels)
+    priority_str = request.args.get("priority", "7")
+    try:
+        priority = int(priority_str)
+        # Ensure priority is in valid range (0-7)
+        priority = max(0, min(7, priority))
+    except (ValueError, TypeError):
+        priority = 7  # Default to all levels if invalid
+
+    try:
+        # Fetch logs as text export with specified priority
+        log_text = _remote_client.get_logs(
+            priority=priority,
+            service=service,
+            limit=10000,  # Maximum allowed
+            as_text=True,  # Get as text export
+        )
+
+        # Ensure we got a string response
+        if not isinstance(log_text, str):
+            return "Failed to retrieve logs as text", 500
+
+        # Create filename from service name and priority level
+        # Remove "custom-intg-" prefix for cleaner filename
+        base_name = service.replace("custom-intg-", "").replace("intg-", "")
+
+        # Add priority level to filename for clarity
+        priority_labels = {
+            0: "emergency",
+            1: "alert",
+            2: "critical",
+            3: "error",
+            4: "warning",
+            5: "notice",
+            6: "info",
+            7: "debug",
+        }
+        priority_label = priority_labels.get(priority, "all")
+        filename = f"{base_name}_logs_{priority_label}+.txt"
+
+        # Return as downloadable file
+        return Response(
+            log_text,
+            mimetype="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except SyncAPIError as e:
+        _LOG.error("Failed to download integration logs: %s", e)
+        return f"Failed to download logs: {e}", 500
 
 
 @app.route("/api/backups/create", methods=["POST"])
