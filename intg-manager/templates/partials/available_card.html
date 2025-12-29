@@ -275,7 +275,27 @@
                     Retry
                 </button>
                 {% elif integration.installed or integration.driver_installed %}
-                <!-- Status shown in badge above -->
+                <!-- Already installed - show Select Version for custom integrations -->
+                {% if not integration.official and not integration.external %}
+                {% if integration.home_page and 'github.com' in integration.home_page %}
+                {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+                {% set path_parts = repo_path.split('/') %}
+                {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+                {% set owner = path_parts[0] %}
+                {% set repo = path_parts[1] %}
+                <button 
+                    class="inline-flex items-center px-3 py-1.5 bg-uc-darker hover:bg-uc-card text-gray-400 hover:text-white text-xs font-medium rounded-lg transition-colors"
+                    hx-get="/api/version-selector/{{ owner }}/{{ repo }}/{{ integration.driver_id }}"
+                    hx-target="#modal-content"
+                    hx-swap="innerHTML"
+                    hx-on::before-request="openModal('Select Version');"
+                    title="Choose a specific version to install">
+                    <i class="fa-solid fa-list-ul h-3 w-3 mr-1"></i>
+                    Select Version
+                </button>
+                {% endif %}
+                {% endif %}
+                {% endif %}
                 {% else %}
                 <!-- Install button with dropdown for version selection -->
                 {% if integration.home_page and 'github.com' in integration.home_page %}
@@ -353,7 +373,7 @@
         </div>
     </div>
     <!-- Overlay for install/update - positioned as direct child of card for proper centering -->
-    {% if not integration.official and not integration.external and (not integration.installed or (integration.update_available and integration.can_update)) %}
+    {% if not integration.official and not integration.external and (not integration.installed or integration.driver_installed or (integration.update_available and integration.can_update)) %}
     <div id="overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
             <svg class="animate-spin h-8 w-8 text-uc-primary mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -361,6 +381,19 @@
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
             <span class="text-sm text-gray-300">{% if integration.update_available %}Updating...{% else %}Installing...{% endif %}</span>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Upgrade overlay - always present for installed integrations so HTMX can find it during version selector requests -->
+    {% if integration.driver_installed and not integration.official and not integration.external %}
+    <div id="upgrade-overlay-{{ integration.driver_id }}" class="hidden absolute inset-0 bg-uc-darker/90 rounded-xl z-10 pointer-events-none">
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+            <svg class="animate-spin h-8 w-8 text-yellow-400 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="text-sm text-gray-300">Upgrading...</span>
         </div>
     </div>
     {% endif %}
