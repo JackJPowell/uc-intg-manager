@@ -746,8 +746,11 @@ def _get_available_integrations() -> list[AvailableIntegration]:
     # Check for new integrations in registry and send notification
     try:
         nm = get_notification_manager()
-        # Create list of (id, name) tuples for tracking
-        integration_data = [(item.driver_id, item.name) for item in available]
+        # Use registry IDs (not actual_driver_ids) for tracking to avoid false positives
+        # when installing integrations (actual_driver_id can differ from registry id)
+        integration_data = [
+            (item.get("id", ""), item.get("name", "")) for item in registry
+        ]
         new_integrations = nm.update_registry_count(integration_data)
         if new_integrations:
             send_notification_sync(
@@ -2587,16 +2590,23 @@ def delete_integration(driver_id: str):
     _LOG.info("Delete request for %s: type=%s", driver_id, delete_type)
 
     try:
-        # Build the instance_id (driver_id + ".main")
+        # Check if integration is configured by checking for instances
+        is_configured = False
         instance_id = f"{driver_id}.main"
-
-        # Delete the instance/configuration
+        
         try:
-            _remote_client.delete_instance(instance_id)
-            _LOG.info("Deleted instance: %s", instance_id)
-        except SyncAPIError as e:
-            # If instance doesn't exist, that's okay - might be unconfigured
-            _LOG.warning("Failed to delete instance %s: %s", instance_id, e)
+            instances = _remote_client.get_integrations()
+            is_configured = any(i.get("integration_id") == instance_id for i in instances)
+        except SyncAPIError:
+            pass
+
+        # Only delete instance if it's actually configured
+        if is_configured:
+            try:
+                _remote_client.delete_instance(instance_id)
+                _LOG.info("Deleted instance: %s", instance_id)
+            except SyncAPIError as e:
+                _LOG.warning("Failed to delete instance %s: %s", instance_id, e)
 
         # If full delete, also delete the driver
         if delete_type == "full":
@@ -2617,7 +2627,47 @@ def delete_integration(driver_id: str):
 
         # Return updated card or empty response
         if delete_type == "full":
-            # Full delete - return empty (card will be removed)
+            # Full delete - check if this driver exists in the registry (available list)
+            # If it does, return updated available_card showing uninstalled state
+            # If not, return empty (card will be removed from integration_list)
+            registry = load_registry()
+            registry_item = next((r for r in registry if r.get("driver_id") == driver_id), None)
+            
+            if registry_item:
+                # Driver is in registry - construct available_card showing uninstalled state
+                # Build AvailableIntegration from registry data
+                settings = Settings.load()
+                remote_ip = _remote_client._address if _remote_client else None
+                
+                available_integration = AvailableIntegration(
+                    driver_id=registry_item.get("driver_id", ""),
+                    name=registry_item.get("name", ""),
+                    description=registry_item.get("description", {}),
+                    developer=registry_item.get("developer", ""),
+                    home_page=registry_item.get("home_page", ""),
+                    version="",  # Not installed, so no version
+                    icon=registry_item.get("icon", "puzzle-piece"),
+                    official=registry_item.get("official", False),
+                    category=registry_item.get("category", ""),
+                    installed=False,  # Just deleted
+                    driver_installed=False,
+                    update_available=False,
+                    latest_version="",
+                    can_update=False,
+                    can_auto_update=False,
+                    supports_backup=registry_item.get("supports_backup", False),
+                    external=False,
+                    instance_id="",
+                )
+                
+                return render_template(
+                    "partials/available_card.html",
+                    integration=available_integration,
+                    remote_ip=remote_ip,
+                    settings=settings,
+                )
+            
+            # Not in registry or not found - return empty (card will be removed)
             return "", 200
         else:
             # Configuration delete - return updated card showing unconfigured state
@@ -4458,6 +4508,37 @@ class WebServer:
         version data used by the UI.
         """
         _refresh_version_cache()
+
+    def check_error_states(self) -> None:
+        """
+        Check all integrations for error states and send notifications.
+
+        This is called periodically to detect integrations that have entered
+        error or disconnected states.
+        """
+        if not _remote_client:
+            return
+
+        try:
+            # This will trigger error state notifications automatically
+            _get_installed_integrations()
+            _LOG.debug("Error state check complete")
+        except Exception as e:
+            _LOG.warning("Failed to check error states: %s", e)
+
+    def check_new_integrations(self) -> None:
+        """
+        Check registry for new integrations and send notifications.
+
+        This is called periodically to detect when new integrations are
+        added to the registry.
+        """
+        try:
+            # This will trigger new integration notifications automatically
+            _get_available_integrations()
+            _LOG.debug("New integration check complete")
+        except Exception as e:
+            _LOG.warning("Failed to check for new integrations: %s", e)
 
     def perform_scheduled_backup(self) -> bool:
         """

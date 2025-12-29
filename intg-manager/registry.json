@@ -706,19 +706,6 @@
       "driver_id": "uc-intg-hubitat"
     },
     {
-      "id": "uc-intg-newintg4",
-      "name": "My Test Integration 4",
-      "description": "My Test Integration for Unfolded Circle Remotes",
-      "author": "Jack Powell",
-      "repository": "https://github.com/jackjpowell/uc-intg-newintg",
-      "categories": ["home-automation"],
-      "features": ["light", "switch", "climate", "sensor"],
-      "official": false,
-      "custom": true,
-      "supports_backup": false,
-      "driver_id": "uc-intg-newintg"
-    },
-    {
       "id": "uc-intg-hass",
       "name": "Home Assistant",
       "description": "Integration for the Home Assistant smart home platform",

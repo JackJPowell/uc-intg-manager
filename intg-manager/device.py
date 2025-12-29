@@ -308,13 +308,18 @@ class IntegrationManagerDevice(PollingDevice):
         _LOG.info("[%s] Checking for integration updates...", self.log_id)
         try:
             # Trigger the web server to refresh version data
-            # This updates the cached update availability info
+            # This updates the cached update availability info and sends update notifications
             self._web_server.refresh_integration_versions()
-            _LOG.debug("[%s] Integration version check complete", self.log_id)
+
+            # Check for error states (disconnected, error, etc.)
+            self._web_server.check_error_states()
+
+            # Check for new integrations in registry
+            self._web_server.check_new_integrations()
+
+            _LOG.debug("[%s] Integration checks complete", self.log_id)
         except Exception as e:
-            _LOG.warning(
-                "[%s] Failed to check integration versions: %s", self.log_id, e
-            )
+            _LOG.warning("[%s] Failed to check integrations: %s", self.log_id, e)
 
     def _is_backup_time(self, backup_time_str: str) -> bool:
         """

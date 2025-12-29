@@ -119,8 +119,9 @@
             </span>
             {% endif %}
             
-            <!-- Action buttons -->
+            <!-- Action buttons and version upgrade -->
             <div class="flex items-center gap-2">
+            <!-- Action icons first -->
             {% if integration.home_page and 'github.com' in integration.home_page %}
             {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
             {% set path_parts = repo_path.split('/') %}
@@ -158,7 +159,6 @@
             {% endif %}
             
             <!-- Version upgrade display: current -> split button with new version -->
-            <div class="flex items-center gap-2">
             {% if integration.home_page and 'github.com' in integration.home_page %}
             {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
             {% set path_parts = repo_path.split('/') %}
@@ -297,7 +297,7 @@
                     </div>
                 </div>
             </div>
-            </div>
+        </div>
         </div>
     </div>
     {% else %}

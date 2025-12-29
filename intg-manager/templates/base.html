@@ -96,9 +96,9 @@
                 <div class="flex items-center justify-between h-16">
                     <div class="flex items-center space-x-2 sm:space-x-3">
                         <!-- Mobile menu button -->
-            <button id="mobile-menu-button" type="button" class="lg:hidden p-2 text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors focus:outline-none" onclick="toggleMobileMenu()">
-                <i class="fa-solid fa-bars h-6 w-6"></i>
-            </button>
+                        <button id="mobile-menu-button" type="button" class="lg:hidden p-2 text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors focus:outline-none" onclick="toggleMobileMenu()">
+                            <i class="fa-solid fa-bars h-6 w-6"></i>
+                        </button>
                         
                         <div class="flex-shrink-0 flex items-center space-x-2 sm:space-x-3">
                             <svg class="h-6 sm:h-8 w-6 sm:w-8 text-uc-primary" viewBox="0 0 24 24" fill="currentColor">
@@ -168,9 +168,9 @@
                         </a>
                         
                         <a href="/logs" 
-                           class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/logs' %}bg-uc-card text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
-                            <i class="fa-regular fa-file-lines mr-3 text-lg"></i>
-                            App Logs
+                           class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/logs' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
+                            <i class="fa-solid fa-clipboard-list mr-3 text-lg"></i>
+                            Manager Logs
                         </a>
                         
                         <a href="/integration-logs" 

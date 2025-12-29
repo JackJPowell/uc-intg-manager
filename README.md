@@ -22,8 +22,9 @@ Access comprehensive release information directly from the web interface.
 
 - **Release Notes Viewer**: Click on any version number to view detailed release notes from GitHub
 - **Beta Release Support**: Enable beta releases in settings to see and install pre-release versions
-- **Version Selection**: Choose specific versions to install instead of only the latest
-- **Rollback Capability**: Install previous versions if needed
+- **Version Selection**: Choose specific versions to install or downgrade to any previous version
+- **Rollback Capability**: Install previous versions if needed, with full downgrade support
+- **Flexible Version Management**: Select any available version from the dropdown menu, not just the latest
 
 <img width="500" alt="release" src="https://github.com/user-attachments/assets/1fcf8253-b1f1-468d-9894-4e4493680bce" /> <img width="500" height="257" alt="version" src="https://github.com/user-attachments/assets/bf4aaf89-e96e-4a82-9aa3-d9a5591d0862" />
 
@@ -38,11 +39,12 @@ The Integration Manager can automatically detect when newer versions of your cus
 - **Automatic Update Detection**: Periodically checks GitHub releases for new versions
 - **One-Click Updates**: Update integrations directly from the web interface
 - **Configuration Backup & Restore**: Automatically backs up integration settings before updating and restores them after installation (for integrations that support the backup feature)
+- **Universal Update Support**: Update any integration, even those without backup/restore support (will require reconfiguration)
 - **Version Tracking**: View current and available versions for all installed integrations
 - **Beta Update Options**: Receive update notifications for beta releases when enabled in settings
 
-> [!IMPORTANT]
-> Configuration preservation depends on the integration implementing the backup/restore API. Check the integration's documentation to confirm support. If not supported, an upgrade button will not be shown.
+> [!NOTE]
+> For integrations that support the backup/restore API, configuration is automatically preserved during updates. Integrations without this support can still be updated, but will require manual reconfiguration afterward. The update button indicates which method applies.
 
 ### Integration Management
 
@@ -94,12 +96,39 @@ Customize the Integration Manager's behavior through the Settings page:
 
 View real-time logs directly in the web interface.
 
-- **Live Log Streaming**: See integration manager logs in real-time
-- **Log Filtering**: Filter by log level (INFO, WARNING, ERROR)
+- **Manager Logs**: View Integration Manager logs in real-time with filtering by log level (INFO, WARNING, ERROR)
+- **Integration Logs**: Access individual integration logs from the main integration list for easier debugging
+- **Live Log Streaming**: Logs update automatically as new entries are added
 - **Clear Logs**: Clear the current log buffer with one click
 - **Diagnostic Information**: Helpful for troubleshooting issues
   
 <img width="800" alt="logs" src="https://github.com/user-attachments/assets/f09bb6ff-8974-4715-8c66-f5b402c83fca" />
+
+### Notifications
+
+Stay informed about integration updates, errors, and new integrations with multiple notification options.
+
+- **Multiple Notification Services**: Choose from Discord, Home Assistant, ntfy, Pushover, or generic Webhooks
+- **Update Notifications**: Get notified when updates are available for your integrations
+- **Error Notifications**: Receive alerts when integrations enter an error state
+- **New Integration Alerts**: Be informed when new integrations are added to the registry
+- **Customizable Options**: Enable/disable specific notification types based on your preferences
+- **Test Notifications**: Verify your notification service configuration with a test message
+
+#### Setting Up Notifications
+
+1. Navigate to **Notifications** in the sidebar
+2. Click **Configure Services** to add a notification service:
+   - **Discord**: Enter your webhook URL from Discord server settings
+   - **Home Assistant**: Provide your Home Assistant URL and long-lived access token
+   - **ntfy**: Configure your ntfy server URL and topic (supports self-hosted or ntfy.sh)
+   - **Pushover**: Enter your user key and application token
+   - **Webhook**: Set up a custom webhook URL with optional authentication
+3. Configure **Notification Options**:
+   - Enable/disable notifications for updates, errors, and new integrations
+   - Multiple services can be enabled simultaneously
+4. Use **Test Notification** to verify your configuration
+5. Backups are automatically included when exporting settings
 
 ### Power-Aware Operation
 
