@@ -1,0 +1,711 @@
+{% extends "base.html" %}
+
+{% block title %}Notifications{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-8 max-w-6xl">
+    <div class="mb-6 sm:mb-8">
+        <h1 class="text-2xl sm:text-3xl font-bold text-white mb-2">Notification Settings</h1>
+        <p class="text-gray-400">Configure how you want to be notified about integration updates, errors, and events.</p>
+    </div>
+
+    <!-- Success/Error Messages - Fixed at top -->
+    <div id="notification-message" class="hidden fixed top-2 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-50 sm:max-w-md sm:w-full shadow-2xl transition-all duration-300"></div>
+
+    <!-- Notification Providers Cards -->
+    <div class="space-y-6">
+        
+        <!-- Home Assistant Card -->
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-solid fa-house-signal text-blue-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-white">Home Assistant</h2>
+                        <p class="text-sm text-gray-400">Send notifications to Home Assistant</p>
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="ha-enabled" class="sr-only peer" {% if notification_settings and notification_settings.home_assistant and notification_settings.home_assistant.enabled %}checked{% endif %}>
+                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+            </div>
+            
+            <form id="ha-form" class="space-y-4">
+                <div>
+                    <label for="ha-url" class="block text-sm font-medium text-gray-300 mb-2">
+                        Home Assistant URL
+                    </label>
+                    <input type="url" id="ha-url" name="url" 
+                           value="{{ notification_settings.home_assistant.url if notification_settings and notification_settings.home_assistant else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           placeholder="http://homeassistant.local:8123">
+                    <p class="mt-1 text-xs text-gray-500">The URL of your Home Assistant instance</p>
+                </div>
+                
+                <div>
+                    <label for="ha-token" class="block text-sm font-medium text-gray-300 mb-2">
+                        Long-Lived Access Token
+                    </label>
+                    <input type="password" id="ha-token" name="token"
+                           value="{{ notification_settings.home_assistant.token if notification_settings and notification_settings.home_assistant else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           placeholder="eyJ0eXAiOiJKV1QiLCJhbGc...">
+                    <p class="mt-1 text-xs text-gray-500">Create a token in Home Assistant: Profile → Security → Long-Lived Access Tokens</p>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <button type="submit" 
+                            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+                        <i class="fa-solid fa-save mr-2"></i>Save
+                    </button>
+                    <button type="button" id="ha-test"
+                            class="px-4 py-2 bg-uc-darker hover:bg-uc-card text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+                        <i class="fa-solid fa-paper-plane mr-2"></i>Send Test
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Webhook Card -->
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-solid fa-arrow-up-right-from-square text-green-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-white">Webhook</h2>
+                        <p class="text-sm text-gray-400">Send HTTP POST requests to a custom endpoint</p>
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="webhook-enabled" class="sr-only peer" {% if notification_settings and notification_settings.webhook and notification_settings.webhook.enabled %}checked{% endif %}>
+                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-green-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                </label>
+            </div>
+            
+            <form id="webhook-form" class="space-y-4">
+                <div>
+                    <label for="webhook-url" class="block text-sm font-medium text-gray-300 mb-2">
+                        Webhook URL
+                    </label>
+                    <input type="url" id="webhook-url" name="url"
+                           value="{{ notification_settings.webhook.url if notification_settings and notification_settings.webhook else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                           placeholder="https://example.com/webhook">
+                    <p class="mt-1 text-xs text-gray-500">The endpoint that will receive POST requests with notification data</p>
+                </div>
+                
+                <div>
+                    <label for="webhook-headers" class="block text-sm font-medium text-gray-300 mb-2">
+                        Custom Headers (Optional)
+                    </label>
+                    <textarea id="webhook-headers" name="headers" rows="3"
+                              class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
+                              placeholder='{"Authorization": "Bearer token", "X-Custom-Header": "value"}'>{{ notification_settings.webhook.headers | tojson if notification_settings and notification_settings.webhook and notification_settings.webhook.headers else '' }}</textarea>
+                    <p class="mt-1 text-xs text-gray-500">JSON object with custom HTTP headers</p>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <button type="submit" 
+                            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors">
+                        <i class="fa-solid fa-save mr-2"></i>Save
+                    </button>
+                    <button type="button" id="webhook-test"
+                            class="px-4 py-2 bg-uc-darker hover:bg-uc-card text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+                        <i class="fa-solid fa-paper-plane mr-2"></i>Send Test
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Discord Card -->
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-indigo-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-brands fa-discord text-indigo-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-white">Discord</h2>
+                        <p class="text-sm text-gray-400">Send notifications to Discord channels via webhooks</p>
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="discord-enabled" class="sr-only peer" {% if notification_settings and notification_settings.discord and notification_settings.discord.enabled %}checked{% endif %}>
+                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+            </div>
+            
+            <form id="discord-form" class="space-y-4">
+                <div>
+                    <label for="discord-webhook-url" class="block text-sm font-medium text-gray-300 mb-2">
+                        Webhook URL
+                    </label>
+                    <input type="url" id="discord-webhook-url" name="webhook_url"
+                           value="{{ notification_settings.discord.webhook_url if notification_settings and notification_settings.discord else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-sm"
+                           placeholder="https://discord.com/api/webhooks/123456789/abcdef...">
+                    <p class="mt-1 text-xs text-gray-500">Create a webhook in Discord: Server Settings → Integrations → Webhooks</p>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <button type="submit" 
+                            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors">
+                        <i class="fa-solid fa-save mr-2"></i>Save
+                    </button>
+                    <button type="button" id="discord-test"
+                            class="px-4 py-2 bg-uc-darker hover:bg-uc-card text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+                        <i class="fa-solid fa-paper-plane mr-2"></i>Send Test
+                    </button>
+                </div>
+            </form>
+        </div>
+        <!-- End Discord Card -->
+
+        <!-- ntfy Card -->
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-regular fa-message text-purple-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-white">ntfy</h2>
+                        <p class="text-sm text-gray-400">Self-hosted or cloud push notifications</p>
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="ntfy-enabled" class="sr-only peer" {% if notification_settings and notification_settings.ntfy and notification_settings.ntfy.enabled %}checked{% endif %}>
+                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                </label>
+            </div>
+            
+            <form id="ntfy-form" class="space-y-4">
+                <div>
+                    <label for="ntfy-server" class="block text-sm font-medium text-gray-300 mb-2">
+                        Server URL
+                    </label>
+                    <input type="url" id="ntfy-server" name="server"
+                           value="{{ notification_settings.ntfy.server if notification_settings and notification_settings.ntfy else 'https://ntfy.sh' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                           placeholder="https://ntfy.sh">
+                    <p class="mt-1 text-xs text-gray-500">Use https://ntfy.sh or your self-hosted ntfy server</p>
+                </div>
+                
+                <div>
+                    <label for="ntfy-topic" class="block text-sm font-medium text-gray-300 mb-2">
+                        Topic
+                    </label>
+                    <input type="text" id="ntfy-topic" name="topic"
+                           value="{{ notification_settings.ntfy.topic if notification_settings and notification_settings.ntfy else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                           placeholder="uc-intg-manager-notifications">
+                    <p class="mt-1 text-xs text-gray-500">The topic to publish notifications to (subscribe to this in the ntfy app)</p>
+                </div>
+                
+                <div>
+                    <label for="ntfy-token" class="block text-sm font-medium text-gray-300 mb-2">
+                        Access Token (Optional)
+                    </label>
+                    <input type="password" id="ntfy-token" name="token"
+                           value="{{ notification_settings.ntfy.token if notification_settings and notification_settings.ntfy else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                           placeholder="tk_AgQdq7mVBoFD37zQVN29RhuMzNIz2">
+                    <p class="mt-1 text-xs text-gray-500">Required if your topic is protected (recommended for public servers)</p>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <button type="submit" 
+                            class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors">
+                        <i class="fa-solid fa-save mr-2"></i>Save
+                    </button>
+                    <button type="button" id="ntfy-test"
+                            class="px-4 py-2 bg-uc-darker hover:bg-uc-card text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+                        <i class="fa-solid fa-paper-plane mr-2"></i>Send Test
+                    </button>
+                </div>
+            </form>
+        </div>
+        <!-- End ntfy Card -->
+
+        <!-- Pushover Card -->
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-orange-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-solid fa-mobile-vibrate text-orange-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-white">Pushover</h2>
+                        <p class="text-sm text-gray-400">Send push notifications to your mobile devices</p>
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" id="pushover-enabled" class="sr-only peer" {% if notification_settings and notification_settings.pushover and notification_settings.pushover.enabled %}checked{% endif %}>
+                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
+                </label>
+            </div>
+            
+            <form id="pushover-form" class="space-y-4">
+                <div>
+                    <label for="pushover-user-key" class="block text-sm font-medium text-gray-300 mb-2">
+                        User Key
+                    </label>
+                    <input type="text" id="pushover-user-key" name="user_key"
+                           value="{{ notification_settings.pushover.user_key if notification_settings and notification_settings.pushover else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
+                           placeholder="azGDORePK8gMaC0QOYAMyEEuzJnyUi">
+                    <p class="mt-1 text-xs text-gray-500">Your Pushover user key (found on the Pushover dashboard)</p>
+                </div>
+                
+                <div>
+                    <label for="pushover-app-token" class="block text-sm font-medium text-gray-300 mb-2">
+                        API Token
+                    </label>
+                    <input type="text" id="pushover-app-token" name="app_token"
+                           value="{{ notification_settings.pushover.app_token if notification_settings and notification_settings.pushover else '' }}"
+                           class="w-full px-4 py-2 bg-uc-darker border border-uc-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
+                           placeholder="a3k42pusyp1p4y48n4vkaxaur1qn62">
+                    <p class="mt-1 text-xs text-gray-500">Create an application at <a href="https://pushover.net/apps/build" target="_blank" class="text-orange-400 hover:text-orange-300">pushover.net/apps/build</a></p>
+                </div>
+                
+                <div class="flex items-center gap-3">
+                    <button type="submit" 
+                            class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors">
+                        <i class="fa-solid fa-save mr-2"></i>Save
+                    </button>
+                    <button type="button" id="pushover-test"
+                            class="px-4 py-2 bg-uc-darker hover:bg-uc-card text-gray-300 hover:text-white text-sm font-medium rounded-lg transition-colors border border-uc-border">
+                        <i class="fa-solid fa-paper-plane mr-2"></i>Send Test
+                    </button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Notification Triggers Card -->
+        <div class="bg-uc-card rounded-xl p-6 border border-uc-border">
+            <div class="flex items-start justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-solid fa-sliders text-purple-400 text-xl"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-semibold text-white">Notification Triggers</h2>
+                        <p class="text-sm text-gray-400">Choose which events should send notifications</p>
+                    </div>
+                </div>
+            </div>
+            
+            <form id="triggers-form" class="space-y-4">
+                <div class="space-y-3">
+                    <label class="flex items-center justify-between cursor-pointer group p-3 rounded-lg hover:bg-uc-darker/50 transition-colors">
+                        <div>
+                            <div class="text-sm font-medium text-gray-200 group-hover:text-white">Integration update available</div>
+                            <div class="text-xs text-gray-500 mt-0.5">Notify when an update is available for installed integrations</div>
+                        </div>
+                        <input type="checkbox" name="integration_update_available" class="w-4 h-4 text-blue-600 bg-uc-darker border-uc-border rounded focus:ring-2 focus:ring-blue-500" {% if notification_settings.triggers.integration_update_available %}checked{% endif %}>
+                    </label>
+                    
+                    <label class="flex items-center justify-between cursor-pointer group p-3 rounded-lg hover:bg-uc-darker/50 transition-colors">
+                        <div>
+                            <div class="text-sm font-medium text-gray-200 group-hover:text-white">New integration in registry</div>
+                            <div class="text-xs text-gray-500 mt-0.5">Notify when new integrations are added to the registry</div>
+                        </div>
+                        <input type="checkbox" name="new_integration_in_registry" class="w-4 h-4 text-blue-600 bg-uc-darker border-uc-border rounded focus:ring-2 focus:ring-blue-500" {% if notification_settings.triggers.new_integration_in_registry %}checked{% endif %}>
+                    </label>
+                    
+                    <label class="flex items-center justify-between cursor-pointer group p-3 rounded-lg hover:bg-uc-darker/50 transition-colors">
+                        <div>
+                            <div class="text-sm font-medium text-gray-200 group-hover:text-white">Integration error state</div>
+                            <div class="text-xs text-gray-500 mt-0.5">Notify when an integration enters an error state</div>
+                        </div>
+                        <input type="checkbox" name="integration_error_state" class="w-4 h-4 text-blue-600 bg-uc-darker border-uc-border rounded focus:ring-2 focus:ring-blue-500" {% if notification_settings.triggers.integration_error_state %}checked{% endif %}>
+                    </label>
+                </div>
+
+                <div class="flex justify-end pt-4 border-t border-uc-border">
+                    <button type="submit" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors">
+                        Save Preferences
+                    </button>
+                </div>
+            </form>
+        </div>
+        <!-- End Notification Triggers Card -->
+
+    </div>
+</div>
+
+<script>
+// Helper function to show messages
+function showMessage(message, isError = false) {
+    const messageDiv = document.getElementById('notification-message');
+    messageDiv.className = `fixed top-2 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-50 sm:max-w-md sm:w-full shadow-2xl transition-all duration-300 p-4 rounded-lg ${isError ? 'bg-red-600 border border-red-500 text-white' : 'bg-green-600 border border-green-500 text-white'}`;
+    messageDiv.innerHTML = `<i class="fa-solid fa-${isError ? 'exclamation-circle' : 'check-circle'} mr-2"></i>${message}`;
+    messageDiv.classList.remove('hidden');
+    
+    // Auto-hide after 4 seconds with fade out
+    setTimeout(() => {
+        messageDiv.style.opacity = '0';
+        setTimeout(() => {
+            messageDiv.classList.add('hidden');
+            messageDiv.style.opacity = '1';
+        }, 300);
+    }, 4000);
+}
+
+// Auto-save when toggles change
+document.getElementById('ha-enabled').addEventListener('change', async (e) => {
+    const formData = new FormData(document.getElementById('ha-form'));
+    try {
+        const response = await fetch('/api/notifications/home-assistant', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: e.target.checked,
+                url: formData.get('url'),
+                token: formData.get('token')
+            })
+        });
+        if (response.ok) {
+            showMessage(e.target.checked ? 'Home Assistant notifications enabled' : 'Home Assistant notifications disabled');
+        }
+    } catch (error) {
+        showMessage('Error updating settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('webhook-enabled').addEventListener('change', async (e) => {
+    const formData = new FormData(document.getElementById('webhook-form'));
+    let headers = null;
+    const headersText = formData.get('headers').trim();
+    if (headersText) {
+        try {
+            headers = JSON.parse(headersText);
+        } catch (error) {
+            headers = null;
+        }
+    }
+    
+    try {
+        const response = await fetch('/api/notifications/webhook', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: e.target.checked,
+                url: formData.get('url'),
+                headers: headers
+            })
+        });
+        if (response.ok) {
+            showMessage(e.target.checked ? 'Webhook notifications enabled' : 'Webhook notifications disabled');
+        }
+    } catch (error) {
+        showMessage('Error updating settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('pushover-enabled').addEventListener('change', async (e) => {
+    const formData = new FormData(document.getElementById('pushover-form'));
+    try {
+        const response = await fetch('/api/notifications/pushover', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: e.target.checked,
+                user_key: formData.get('user_key'),
+                app_token: formData.get('app_token')
+            })
+        });
+        if (response.ok) {
+            showMessage(e.target.checked ? 'Pushover notifications enabled' : 'Pushover notifications disabled');
+        }
+    } catch (error) {
+        showMessage('Error updating settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('ntfy-enabled').addEventListener('change', async (e) => {
+    const formData = new FormData(document.getElementById('ntfy-form'));
+    try {
+        const response = await fetch('/api/notifications/ntfy', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: e.target.checked,
+                server: formData.get('server'),
+                topic: formData.get('topic'),
+                token: formData.get('token')
+            })
+        });
+        if (response.ok) {
+            showMessage(e.target.checked ? 'ntfy notifications enabled' : 'ntfy notifications disabled');
+        }
+    } catch (error) {
+        showMessage('Error updating settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('discord-enabled').addEventListener('change', async (e) => {
+    const formData = new FormData(document.getElementById('discord-form'));
+    try {
+        const response = await fetch('/api/notifications/discord', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: e.target.checked,
+                webhook_url: formData.get('webhook_url')
+            })
+        });
+        if (response.ok) {
+            showMessage(e.target.checked ? 'Discord notifications enabled' : 'Discord notifications disabled');
+        }
+    } catch (error) {
+        showMessage('Error updating settings: ' + error.message, true);
+    }
+});
+
+// Home Assistant form
+document.getElementById('ha-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const enabled = document.getElementById('ha-enabled').checked;
+    
+    try {
+        const response = await fetch('/api/notifications/home-assistant', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: enabled,
+                url: formData.get('url'),
+                token: formData.get('token')
+            })
+        });
+        
+        if (response.ok) {
+            showMessage('Home Assistant settings saved successfully');
+        } else {
+            showMessage('Failed to save Home Assistant settings', true);
+        }
+    } catch (error) {
+        showMessage('Error saving settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('ha-test').addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/notifications/home-assistant/test', {method: 'POST'});
+        if (response.ok) {
+            showMessage('Test notification sent to Home Assistant');
+        } else {
+            showMessage('Failed to send test notification', true);
+        }
+    } catch (error) {
+        showMessage('Error sending test: ' + error.message, true);
+    }
+});
+
+// Webhook form
+document.getElementById('webhook-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const enabled = document.getElementById('webhook-enabled').checked;
+    
+    let headers = null;
+    const headersText = formData.get('headers').trim();
+    if (headersText) {
+        try {
+            headers = JSON.parse(headersText);
+        } catch (error) {
+            showMessage('Invalid JSON in custom headers', true);
+            return;
+        }
+    }
+    
+    try {
+        const response = await fetch('/api/notifications/webhook', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: enabled,
+                url: formData.get('url'),
+                headers: headers
+            })
+        });
+        
+        if (response.ok) {
+            showMessage('Webhook settings saved successfully');
+        } else {
+            showMessage('Failed to save Webhook settings', true);
+        }
+    } catch (error) {
+        showMessage('Error saving settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('webhook-test').addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/notifications/webhook/test', {method: 'POST'});
+        if (response.ok) {
+            showMessage('Test notification sent via Webhook');
+        } else {
+            showMessage('Failed to send test notification', true);
+        }
+    } catch (error) {
+        showMessage('Error sending test: ' + error.message, true);
+    }
+});
+
+// Pushover form
+document.getElementById('pushover-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const enabled = document.getElementById('pushover-enabled').checked;
+    
+    try {
+        const response = await fetch('/api/notifications/pushover', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: enabled,
+                user_key: formData.get('user_key'),
+                app_token: formData.get('app_token')
+            })
+        });
+        
+        if (response.ok) {
+            showMessage('Pushover settings saved successfully');
+        } else {
+            showMessage('Failed to save Pushover settings', true);
+        }
+    } catch (error) {
+        showMessage('Error saving settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('pushover-test').addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/notifications/pushover/test', {method: 'POST'});
+        if (response.ok) {
+            showMessage('Test notification sent via Pushover');
+        } else {
+            showMessage('Failed to send test notification', true);
+        }
+    } catch (error) {
+        showMessage('Error sending test: ' + error.message, true);
+    }
+});
+
+// ntfy form
+document.getElementById('ntfy-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const enabled = document.getElementById('ntfy-enabled').checked;
+    
+    try {
+        const response = await fetch('/api/notifications/ntfy', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: enabled,
+                server: formData.get('server'),
+                topic: formData.get('topic'),
+                token: formData.get('token')
+            })
+        });
+        
+        if (response.ok) {
+            showMessage('ntfy settings saved successfully');
+        } else {
+            showMessage('Failed to save ntfy settings', true);
+        }
+    } catch (error) {
+        showMessage('Error saving settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('ntfy-test').addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/notifications/ntfy/test', {method: 'POST'});
+        if (response.ok) {
+            showMessage('Test notification sent via ntfy');
+        } else {
+            showMessage('Failed to send test notification', true);
+        }
+    } catch (error) {
+        showMessage('Error sending test: ' + error.message, true);
+    }
+});
+
+// Discord form
+document.getElementById('discord-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const enabled = document.getElementById('discord-enabled').checked;
+    
+    try {
+        const response = await fetch('/api/notifications/discord', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: enabled,
+                webhook_url: formData.get('webhook_url')
+            })
+        });
+        
+        if (response.ok) {
+            showMessage('Discord settings saved successfully');
+        } else {
+            showMessage('Failed to save Discord settings', true);
+        }
+    } catch (error) {
+        showMessage('Error saving settings: ' + error.message, true);
+    }
+});
+
+document.getElementById('discord-test').addEventListener('click', async () => {
+    try {
+        const response = await fetch('/api/notifications/discord/test', {method: 'POST'});
+        if (response.ok) {
+            showMessage('Test notification sent to Discord');
+        } else {
+            showMessage('Failed to send test notification', true);
+        }
+    } catch (error) {
+        showMessage('Error sending test: ' + error.message, true);
+    }
+});
+
+// Notification triggers form
+document.getElementById('triggers-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    
+    // Build triggers object from checkbox states
+    const triggers = {};
+    const checkboxes = e.target.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(checkbox => {
+        triggers[checkbox.name] = checkbox.checked;
+    });
+    
+    try {
+        const response = await fetch('/api/notifications/triggers', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(triggers)
+        });
+        
+        if (response.ok) {
+            showMessage('Notification preferences saved successfully');
+        } else {
+            showMessage('Failed to save notification preferences', true);
+        }
+    } catch (error) {
+        showMessage('Error saving preferences: ' + error.message, true);
+    }
+});
+</script>
+{% endblock %}
