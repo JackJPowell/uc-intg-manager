@@ -140,6 +140,84 @@ class RemoteAPIClient:
         _LOG.debug("Fetching all drivers")
         return await self._request("GET", "/intg/drivers?limit=100")
 
+    async def get_log_services(self) -> list[dict[str, Any]]:
+        """
+        Get all available log services from the remote.
+
+        Returns a list of service objects with 'service', 'active', and 'name' fields.
+        Custom integrations are prefixed with 'custom-intg-' (e.g., 'custom-intg-jvc_projector_driver').
+
+        :return: List of log service dictionaries
+        """
+        _LOG.debug("Fetching log services")
+        return await self._request("GET", "/system/logs/services")
+
+    async def get_logs(
+        self,
+        priority: int | None = None,
+        service: str | None = None,
+        limit: int = 1000,
+        as_text: bool = False,
+    ) -> list[dict[str, Any]] | str:
+        """
+        Get log entries from the remote.
+
+        :param priority: Minimum priority of log message (0-7, where 0 is highest)
+        :param service: Service ID to filter logs (e.g., 'custom-intg-jvc_projector_driver')
+        :param limit: Maximum number of log entries to retrieve (max 10,000, default 1000)
+        :param as_text: If True, return logs as text export; if False, return as JSON objects
+        :return: List of log dictionaries or text string depending on as_text parameter
+
+        Notes:
+        - Log entries are retrieved in reverse order (newest first)
+        - Maximum 10,000 entries
+        - Not all services use priority logging (many log everything at priority 6/info)
+        - Text format: tab-separated fields, message may contain tabs and line breaks
+        """
+        params = {}
+        if priority is not None:
+            params["p"] = priority
+        if service is not None:
+            params["s"] = service
+        if limit is not None:
+            params["limit"] = min(limit, 10000)  # Enforce max limit
+
+        # Set content type header based on desired format
+        headers = {}
+        if as_text:
+            headers["Content-Type"] = "text/plain"
+        else:
+            headers["Content-Type"] = "application/json"
+
+        _LOG.debug(
+            "Fetching logs: priority=%s, service=%s, limit=%s, as_text=%s",
+            priority,
+            service,
+            limit,
+            as_text,
+        )
+
+        # For text format, we need to handle the response differently
+        if as_text:
+            session = await self._get_session()
+            url = f"http://{self._address}:{self._port}/system/logs"
+            async with session.get(url, params=params, headers=headers) as response:
+                if response.status == 401:
+                    raise RemoteAPIError("Authentication failed")
+                if response.status == 403:
+                    raise RemoteAPIError("Access forbidden")
+                if response.status >= 400:
+                    raise RemoteAPIError(
+                        f"Request failed: {response.status} - {await response.text()}"
+                    )
+                return await response.text()
+        else:
+            # JSON format uses standard request method
+            result = await self._request(
+                "GET", "/system/logs", params=params, headers=headers
+            )
+            return result if isinstance(result, list) else []
+
     async def get_power_status(self) -> dict[str, Any]:
         """
         Get the current power/charger status of the remote.

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Integration Logs - Integration Manager{% endblock %}
+
+{% block content %}
+<div class="mb-6 sm:mb-8">
+    <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+        <div>
+            <h1 class="text-2xl sm:text-3xl font-bold text-white mb-2">Integration Logs</h1>
+            <p class="text-sm sm:text-base text-gray-400">View logs from Remote integrations</p>
+        </div>
+    </div>
+</div>
+
+<!-- Service Selection and Controls -->
+<div class="mb-6 bg-gray-800 rounded-lg p-4 sm:p-6">
+    <div class="flex flex-col gap-4">
+        <div class="flex flex-col lg:flex-row gap-4 items-start lg:items-end">
+            <!-- Service Dropdown -->
+            <div class="flex-1 w-full">
+                <label for="service-select" class="block text-sm font-medium text-gray-300 mb-2">
+                    <i class="fa-solid fa-microchip mr-1.5 text-blue-400"></i>
+                    Select Integration Service
+                </label>
+                <select id="service-select" 
+                        name="service"
+                        hx-get="/api/integration-logs/entries"
+                        hx-target="#integration-log-entries"
+                        hx-swap="innerHTML"
+                        hx-include="[name='service'], [name='priority']"
+                        hx-trigger="change"
+                        class="w-full px-4 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-white shadow-sm cursor-pointer hover:bg-gray-650 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none transition-colors">
+                    <option value="" class="text-gray-400">Select a service...</option>
+                    {% for service in services %}
+                    <option value="{{ service.service }}" {% if service.service == selected_service %}selected{% endif %} class="py-2">
+                        {{ service.display_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- Priority/Log Level Dropdown -->
+            <div class="w-full lg:w-64">
+                <label for="priority-select" class="block text-sm font-medium text-gray-300 mb-2">
+                    <i class="fa-solid fa-filter mr-1.5 text-blue-400"></i>
+                    Log Level
+                </label>
+                <select id="priority-select" 
+                        name="priority"
+                        hx-get="/api/integration-logs/entries"
+                        hx-target="#integration-log-entries"
+                        hx-swap="innerHTML"
+                        hx-include="[name='service'], [name='priority']"
+                        hx-trigger="change"
+                        class="w-full px-4 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-white shadow-sm cursor-pointer hover:bg-gray-650 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none transition-colors">
+                    <option value="7" selected class="py-2">All Levels (Debug+)</option>
+                    <option value="6" class="py-2">Info+</option>
+                    <option value="5" class="py-2">Notice+</option>
+                    <option value="4" class="py-2">Warning+</option>
+                    <option value="3" class="py-2">Error+</option>
+                    <option value="2" class="py-2">Critical+</option>
+                    <option value="1" class="py-2">Alert+</option>
+                    <option value="0" class="py-2">Emergency Only</option>
+                </select>
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="flex gap-2 sm:gap-3">
+                <button type="button"
+                        id="refresh-btn"
+                        hx-get="/api/integration-logs/entries"
+                        hx-target="#integration-log-entries"
+                        hx-swap="innerHTML"
+                        hx-include="[name='service'], [name='priority']"
+                        class="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-arrows-rotate w-4 h-4"></i>
+                    <span class="hidden sm:inline">Refresh</span>
+                </button>
+                <button type="button"
+                        id="download-btn"
+                        onclick="downloadLogs()"
+                        class="px-3 sm:px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-download w-4 h-4"></i>
+                    <span class="hidden sm:inline">Download</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log Priority Legend -->
+<div class="mb-4 flex flex-wrap gap-4 text-sm">
+    <span class="text-gray-400 font-medium">Priority Levels:</span>
+    <span class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-red-600"></span>
+        <span class="text-gray-400">Emergency/Alert/Critical/Error</span>
+    </span>
+    <span class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-yellow-500"></span>
+        <span class="text-gray-400">Warning</span>
+    </span>
+    <span class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+        <span class="text-gray-400">Notice/Info</span>
+    </span>
+    <span class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+        <span class="text-gray-400">Debug</span>
+    </span>
+</div>
+
+<!-- Log Entries Container -->
+<div class="bg-gray-800 rounded-lg overflow-hidden">
+    <div id="integration-log-entries" class="divide-y divide-gray-700 max-h-[70vh] overflow-auto font-mono text-xs sm:text-sm">
+        {% include 'partials/integration_log_entries.html' %}
+    </div>
+</div>
+
+<!-- Auto-refresh option -->
+<div class="mt-4 flex items-center gap-2">
+    <input type="checkbox" id="auto-refresh" class="rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500">
+    <label for="auto-refresh" class="text-gray-400 text-sm">Auto-refresh every 10 seconds</label>
+</div>
+
+<script>
+    // Auto-refresh functionality
+    let refreshInterval = null;
+    const checkbox = document.getElementById('auto-refresh');
+    const serviceSelect = document.getElementById('service-select');
+    
+    checkbox.addEventListener('change', function() {
+        if (this.checked) {
+            refreshInterval = setInterval(function() {
+                const service = serviceSelect.value;
+                const priority = document.getElementById('priority-select').value;
+                if (service) {
+                    let url = '/api/integration-logs/entries?service=' + encodeURIComponent(service);
+                    if (priority) {
+                        url += '&priority=' + encodeURIComponent(priority);
+                    }
+                    htmx.ajax('GET', url, '#integration-log-entries');
+                }
+            }, 10000);
+        } else {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        }
+    });
+    
+    // Download logs function
+    function downloadLogs() {
+        const service = document.getElementById('service-select').value;
+        const priority = document.getElementById('priority-select').value;
+        if (!service) {
+            alert('Please select a service first');
+            return;
+        }
+        
+        // Create download link with priority parameter
+        let url = '/api/integration-logs/download?service=' + encodeURIComponent(service);
+        if (priority) {
+            url += '&priority=' + encodeURIComponent(priority);
+        }
+        window.location.href = url;
+    }
+</script>
+{% endblock %}

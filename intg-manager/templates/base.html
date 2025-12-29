@@ -164,7 +164,13 @@
                         <a href="/logs" 
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/logs' %}bg-uc-card text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
                             <i class="fa-regular fa-file-lines mr-3 text-lg"></i>
-                            Logs
+                            App Logs
+                        </a>
+                        
+                        <a href="/integration-logs" 
+                           class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/integration-logs' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
+                            <i class="fa-solid fa-file-code mr-3 text-lg"></i>
+                            Integration Logs
                         </a>
                     </div>
                 </div>
