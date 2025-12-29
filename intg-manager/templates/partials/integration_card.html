@@ -121,6 +121,24 @@
             
             <!-- Action buttons -->
             <div class="flex items-center gap-2">
+            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+            {% set path_parts = repo_path.split('/') %}
+            {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+            {% set owner = path_parts[0] %}
+            {% set repo = path_parts[1] %}
+            <button
+                hx-get="/api/version-selector/{{ owner }}/{{ repo }}/{{ integration.driver_id }}"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Select Version')"
+                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Select version">
+                <i class="fa-solid fa-list-ul h-4 w-4"></i>
+            </button>
+            {% endif %}
+            {% endif %}
+            
             <button
                 hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
                 hx-target="#modal-content"
@@ -330,6 +348,25 @@
             </a>
             {% elif integration.custom %}
             <!-- Custom integrations installed on the remote -->
+            <!-- Version selector button -->
+            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
+            {% set path_parts = repo_path.split('/') %}
+            {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
+            {% set owner = path_parts[0] %}
+            {% set repo = path_parts[1] %}
+            <button
+                hx-get="/api/version-selector/{{ owner }}/{{ repo }}/{{ integration.driver_id }}"
+                hx-target="#modal-content"
+                hx-swap="innerHTML"
+                hx-on::before-request="openModal('Select Version')"
+                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                title="Select version">
+                <i class="fa-solid fa-list-ul h-4 w-4"></i>
+            </button>
+            {% endif %}
+            {% endif %}
+            
             <!-- Delete button for all integrations -->
             <button
                 hx-get="/api/integration/{{ integration.driver_id }}/delete-confirm"
