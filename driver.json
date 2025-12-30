@@ -1,6 +1,6 @@
 {
   "driver_id": "intg_manager_driver",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "min_core_api": "0.20.0",
   "name": {
     "en": "Integration Manager",
@@ -40,5 +40,5 @@
       }
     ]
   },
-  "release_date": "2025-12-29"
+  "release_date": "2025-12-30"
 }
