@@ -231,7 +231,9 @@ def backup_integration(
             if save_backup(driver_id, backup_data):
                 _LOG.info("Backup for '%s' completed successfully", driver_id)
             else:
-                _LOG.warning("Backup for '%s' extracted but failed to save to file", driver_id)
+                _LOG.warning(
+                    "Backup for '%s' extracted but failed to save to file", driver_id
+                )
 
         return backup_data
 
@@ -294,7 +296,9 @@ def save_backup(driver_id: str, backup_data: str) -> bool:
     }
     success = _save_backups(backups)
     if success:
-        _LOG.info("Successfully saved backup for integration '%s' at %s", driver_id, timestamp)
+        _LOG.info(
+            "Successfully saved backup for integration '%s' at %s", driver_id, timestamp
+        )
     else:
         _LOG.error("Failed to save backup for integration '%s'", driver_id)
     return success

@@ -205,10 +205,10 @@ class NotificationService:
             return False
 
         url = f"{config.server.rstrip('/')}/{config.topic}"
-        
+
         # Ensure priority is valid (1-5)
         priority = max(1, min(5, priority))
-        
+
         headers = {
             "Title": title,
             "Priority": str(priority),

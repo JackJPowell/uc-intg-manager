@@ -2593,10 +2593,12 @@ def delete_integration(driver_id: str):
         # Check if integration is configured by checking for instances
         is_configured = False
         instance_id = f"{driver_id}.main"
-        
+
         try:
             instances = _remote_client.get_integrations()
-            is_configured = any(i.get("integration_id") == instance_id for i in instances)
+            is_configured = any(
+                i.get("integration_id") == instance_id for i in instances
+            )
         except SyncAPIError:
             pass
 
@@ -2631,14 +2633,16 @@ def delete_integration(driver_id: str):
             # If it does, return updated available_card showing uninstalled state
             # If not, return empty (card will be removed from integration_list)
             registry = load_registry()
-            registry_item = next((r for r in registry if r.get("driver_id") == driver_id), None)
-            
+            registry_item = next(
+                (r for r in registry if r.get("driver_id") == driver_id), None
+            )
+
             if registry_item:
                 # Driver is in registry - construct available_card showing uninstalled state
                 # Build AvailableIntegration from registry data
                 settings = Settings.load()
                 remote_ip = _remote_client._address if _remote_client else None
-                
+
                 available_integration = AvailableIntegration(
                     driver_id=registry_item.get("driver_id", ""),
                     name=registry_item.get("name", ""),
@@ -2659,14 +2663,14 @@ def delete_integration(driver_id: str):
                     external=False,
                     instance_id="",
                 )
-                
+
                 return render_template(
                     "partials/available_card.html",
                     integration=available_integration,
                     remote_ip=remote_ip,
                     settings=settings,
                 )
-            
+
             # Not in registry or not found - return empty (card will be removed)
             return "", 200
         else:
@@ -3453,11 +3457,19 @@ def get_status_html():
 def settings_page():
     """Render the settings page."""
     settings = Settings.load()
+    # Detect if running in Docker/external mode
+    uc_config_home = os.getenv("UC_CONFIG_HOME", "")
+    is_external = uc_config_home.startswith("/config")
+    is_external = True
+    _LOG.info(
+        f"Settings page: UC_CONFIG_HOME='{uc_config_home}', is_external={is_external}"
+    )
     return render_template(
         "settings.html",
         settings=settings,
         remote_address=_remote_client._address if _remote_client else None,
         web_server_port=WEB_SERVER_PORT,
+        is_external=is_external,
     )
 
 

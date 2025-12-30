@@ -19,17 +19,22 @@
         </h2>
         
         <div class="space-y-4">
-            <label class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 sm:p-4 bg-gray-700/50 rounded-lg cursor-pointer hover:bg-gray-700">
+            <label class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 sm:p-4 bg-gray-700/50 rounded-lg {% if is_external %}opacity-50 cursor-not-allowed{% else %}cursor-pointer hover:bg-gray-700{% endif %}">
                 <div>
                     <div class="text-white font-medium text-sm sm:text-base">Shutdown on Battery</div>
                     <div class="text-xs sm:text-sm text-gray-400">
+                        {% if is_external %}
+                        Not applicable when running in Docker/external mode - web server always runs.
+                        {% else %}
                         Stop the web server when the remote is removed from the dock.
                         Helps conserve battery life.
+                        {% endif %}
                     </div>
                 </div>
                 <input type="checkbox" name="shutdown_on_battery" 
                        class="w-5 h-5 rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500"
-                       {% if settings.shutdown_on_battery %}checked{% endif %}>
+                       {% if settings.shutdown_on_battery and not is_external %}checked{% endif %}
+                       {% if is_external %}disabled{% endif %}>
             </label>
         </div>
     </div>

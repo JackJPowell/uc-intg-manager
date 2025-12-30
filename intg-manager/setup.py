@@ -117,8 +117,15 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
         try:
             # Test the connection
             client = RemoteAPIClient(address, pin=pin)
+
+            # First, test if we can connect at all
+            if not await client.test_connection():
+                _LOG.error("Connection test failed for %s", address)
+                await client.close()
+                return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
+
             try:
-                # Try to get version info to validate connection
+                # Get version info to validate connection and retrieve device details
                 version_info = await client.get_version()
                 _LOG.info(
                     "Connected to remote: %s (firmware %s)",
@@ -162,9 +169,13 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                         )
 
             except RemoteAPIError as e:
-                _LOG.error("Failed to connect to remote: %s", e)
+                _LOG.error("Failed to retrieve remote details: %s", e)
                 await client.close()
                 return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
+            except Exception as e:
+                _LOG.error("Unexpected error during remote connection: %s", e)
+                await client.close()
+                return SetupError(IntegrationSetupError.OTHER)
             finally:
                 await client.close()
 

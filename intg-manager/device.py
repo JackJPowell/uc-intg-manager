@@ -8,6 +8,7 @@ It manages connections, polls power status, and controls the web server.
 """
 
 import logging
+import os
 from asyncio import AbstractEventLoop
 from datetime import datetime
 from typing import Any
@@ -74,6 +75,9 @@ class IntegrationManagerDevice(PollingDevice):
         self._is_docked: bool = False
         self._connected: bool = False
 
+        # Track if we're running in external/Docker mode
+        self._is_external: bool = False
+
         # Poll counter for periodic version checking
         self._poll_count: int = 0
 
@@ -123,29 +127,47 @@ class IntegrationManagerDevice(PollingDevice):
                 self._connected = True
                 _LOG.info("[%s] Connected to remote", self.log_id)
 
-                # Check initial dock state and start web server if charging
-                # This handles the case where the remote is already docked at startup
-                try:
-                    self._is_docked = await self._client.is_docked()
-                    if self._is_docked:
-                        _LOG.info(
-                            "[%s] Remote is charging at startup (dock or wireless)",
-                            self.log_id,
-                        )
-                        await self._on_docked()
-                    else:
-                        _LOG.info("[%s] Remote is on battery at startup", self.log_id)
-                except RemoteAPIError as e:
-                    _LOG.warning(
-                        "[%s] Failed to check initial charging status: %s",
+                # Check if we're running in Docker/external mode
+                # In Docker, UC_CONFIG_HOME is set to /config
+                self._is_external = os.getenv("UC_CONFIG_HOME", "").startswith(
+                    "/config"
+                )
+
+                if self._is_external:
+                    # Running in Docker - always start web server immediately
+                    _LOG.info(
+                        "[%s] Running in external/Docker mode - starting web server",
                         self.log_id,
-                        e,
                     )
-                except Exception as e:
-                    # This catches web server startup failures
-                    _LOG.error(
-                        "[%s] Error during startup initialization: %s", self.log_id, e
-                    )
+                    self._is_docked = True  # Treat as always "docked" in Docker mode
+                    await self._on_docked()
+                else:
+                    # Running on Remote - check dock state and start web server if charging
+                    try:
+                        self._is_docked = await self._client.is_docked()
+                        if self._is_docked:
+                            _LOG.info(
+                                "[%s] Remote is charging at startup (dock or wireless)",
+                                self.log_id,
+                            )
+                            await self._on_docked()
+                        else:
+                            _LOG.info(
+                                "[%s] Remote is on battery at startup", self.log_id
+                            )
+                    except RemoteAPIError as e:
+                        _LOG.warning(
+                            "[%s] Failed to check initial charging status: %s",
+                            self.log_id,
+                            e,
+                        )
+                    except Exception as e:
+                        # This catches web server startup failures
+                        _LOG.error(
+                            "[%s] Error during startup initialization: %s",
+                            self.log_id,
+                            e,
+                        )
             else:
                 raise RemoteAPIError("Connection test failed")
 
@@ -202,20 +224,25 @@ class IntegrationManagerDevice(PollingDevice):
         It checks if the remote is charging (docked or wireless) and starts/stops
         the web server accordingly. Also triggers periodic version checks for
         installed integrations.
+
+        When running in external/Docker mode, skip charging status checks since
+        the web server should always be running.
         """
         self._poll_count += 1
 
         try:
-            was_docked = self._is_docked
-            self._is_docked = await self._client.is_docked()
+            # Skip dock polling in external/Docker mode - web server always runs
+            if not self._is_external:
+                was_docked = self._is_docked
+                self._is_docked = await self._client.is_docked()
 
-            # Handle dock state changes
-            if self._is_docked and not was_docked:
-                # Remote just docked - start web server
-                await self._on_docked()
-            elif not self._is_docked and was_docked:
-                # Remote just undocked - stop web server
-                await self._on_undocked()
+                # Handle dock state changes
+                if self._is_docked and not was_docked:
+                    # Remote just docked - start web server
+                    await self._on_docked()
+                elif not self._is_docked and was_docked:
+                    # Remote just undocked - stop web server
+                    await self._on_undocked()
 
             # Periodic version check (every VERSION_CHECK_INTERVAL_POLLS polls)
             # Only check when docked and web server is running
