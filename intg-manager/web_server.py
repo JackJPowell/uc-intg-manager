@@ -3460,7 +3460,6 @@ def settings_page():
     # Detect if running in Docker/external mode
     uc_config_home = os.getenv("UC_CONFIG_HOME", "")
     is_external = uc_config_home.startswith("/config")
-    is_external = True
     _LOG.info(
         f"Settings page: UC_CONFIG_HOME='{uc_config_home}', is_external={is_external}"
     )
