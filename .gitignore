@@ -102,7 +102,10 @@ ENV/
 .DS_Store
 
 config.json
+manager.json
+system_messages.json
 env
 licenses.json
 tools/licenses.md
+config/
 data/
