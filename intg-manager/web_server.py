@@ -1119,28 +1119,37 @@ def _perform_update_integration(
             _LOG.warning("Failed to load registry for migration check: %s", e)
 
         # Validate version against migration boundary if specified
-        if version and migration_required_at:
+        # Only block downgrade if current version > migration_required_at and target version < migration_required_at
+        if version and migration_required_at and integration.version:
             clean_version = version.lstrip("v")
+            clean_current_version = integration.version.lstrip("v")
             try:
-                if Version(clean_version) <= Version(migration_required_at):
+                current_ver = Version(clean_current_version)
+                target_ver = Version(clean_version)
+                migration_ver = Version(migration_required_at)
+                
+                # Block only if: current > migration_required_at AND target < migration_required_at
+                # Version at migration_required_at and above are safe (they have the new entity format)
+                if current_ver > migration_ver and target_ver < migration_ver:
                     with _operation_lock:
                         _operation_in_progress = False
                     _LOG.warning(
-                        "Update blocked for %s - version %s violates migration boundary %s",
+                        "Downgrade blocked for %s - current version %s > migration boundary %s, cannot downgrade to %s",
                         integration.driver_id,
-                        version,
+                        integration.version,
                         migration_required_at,
+                        version,
                     )
                     return jsonify(
                         {
                             "status": "error",
-                            "message": f"Cannot downgrade to version {version} - requires version > {migration_required_at}",
+                            "message": f"Cannot downgrade from {integration.version} to {version} - migration boundary at {migration_required_at} prevents this downgrade",
                         }
                     ), 400
             except InvalidVersion as e:
                 with _operation_lock:
                     _operation_in_progress = False
-                _LOG.warning("Invalid version format %s: %s", version, e)
+                _LOG.warning("Invalid version format %s or %s: %s", version, integration.version, e)
                 return jsonify(
                     {"status": "error", "message": f"Invalid version format: {version}"}
                 ), 400
@@ -2184,8 +2193,9 @@ def update_driver(driver_id: str):
                 }
             ), 400
 
-        # Check migration boundary if version specified
-        if version:
+        # Check migration boundary if version specified and integration already installed
+        # Only block downgrade if current version > migration_required_at and target version < migration_required_at
+        if version and integration.version:
             try:
                 registry = load_registry()
                 for entry in registry:
@@ -2196,19 +2206,27 @@ def update_driver(driver_id: str):
                         migration_required_at = entry.get("migration_required_at")
                         if migration_required_at:
                             clean_version = version.lstrip("v")
-                            if Version(clean_version) <= Version(migration_required_at):
+                            clean_current_version = integration.version.lstrip("v")
+                            current_ver = Version(clean_current_version)
+                            target_ver = Version(clean_version)
+                            migration_ver = Version(migration_required_at)
+                            
+                            # Block only if: current > migration_required_at AND target < migration_required_at
+                            # Version at migration_required_at and above are safe (they have the new entity format)
+                            if current_ver > migration_ver and target_ver < migration_ver:
                                 with _operation_lock:
                                     _operation_in_progress = False
                                 _LOG.warning(
-                                    "Update blocked for %s - version %s violates migration boundary %s",
+                                    "Downgrade blocked for %s - current version %s > migration boundary %s, cannot downgrade to %s",
                                     driver_id,
-                                    version,
+                                    integration.version,
                                     migration_required_at,
+                                    version,
                                 )
                                 return jsonify(
                                     {
                                         "status": "error",
-                                        "message": f"Cannot downgrade to version {version} - requires version > {migration_required_at}",
+                                        "message": f"Cannot downgrade from {integration.version} to {version} - migration boundary at {migration_required_at} prevents this downgrade",
                                     }
                                 ), 400
                         break
