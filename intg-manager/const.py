@@ -13,26 +13,21 @@ _LOG = logging.getLogger(__name__)
 
 
 # Configuration directory for persistent storage
-# Use ./config relative to project root for local dev, /config absolute for Docker/Remote
+# Use UC_CONFIG_HOME environment variable (Docker/Remote), fall back to ./config for local dev
 def _get_data_dir():
     """Get the data directory, with fallback for local development."""
-    # Try absolute path first (Docker/Remote)
-    abs_config_dir = "/config"
-    try:
-        os.makedirs(abs_config_dir, exist_ok=True)
-        # Test if we can write to it
-        test_file = os.path.join(abs_config_dir, ".write_test")
-        with open(test_file, "w", encoding="utf-8") as f:
-            f.write("test")
-        os.remove(test_file)
-        return abs_config_dir
-    except (OSError, PermissionError):
-        # Fall back to relative ./config directory for local development
-        rel_config_dir = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "config"
-        )
-        os.makedirs(rel_config_dir, exist_ok=True)
-        return rel_config_dir
+    # Check for UC_CONFIG_HOME environment variable (set by Docker/Remote)
+    config_home = os.environ.get("UC_CONFIG_HOME")
+    if config_home:
+        os.makedirs(config_home, exist_ok=True)
+        return config_home
+
+    # Fall back to relative ./config directory for local development
+    local_config_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "config"
+    )
+    os.makedirs(local_config_dir, exist_ok=True)
+    return local_config_dir
 
 
 DATA_DIR = _get_data_dir()
