@@ -168,9 +168,16 @@
                         </a>
                         
                         <a href="/diagnostics" 
-                           class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'diagnostics_page' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
-                            <i class="fa-solid fa-stethoscope mr-3 text-lg"></i>
-                            Diagnostics
+                           class="flex items-center justify-between px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'diagnostics_page' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
+                            <div class="flex items-center">
+                                <i class="fa-solid fa-stethoscope mr-3 text-lg"></i>
+                                Diagnostics
+                            </div>
+                            {% if orphaned_entities_count > 0 %}
+                            <span class="ml-2 px-2 py-0.5 text-xs font-bold bg-orange-500 text-white rounded-full">
+                                {{ orphaned_entities_count }}
+                            </span>
+                            {% endif %}
                         </a>
                         
                         <a href="/system-messages" 

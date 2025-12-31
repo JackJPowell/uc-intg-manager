@@ -4152,6 +4152,26 @@ def inject_system_messages_count():
         return {"unread_messages_count": 0}
 
 
+@app.context_processor
+def inject_orphaned_entities_count():
+    """Inject orphaned entities count into all templates."""
+    if not _remote_client:
+        return {"orphaned_entities_count": 0}
+    
+    try:
+        orphaned_entities = _remote_client.find_orphan_entities()
+        # Group by activity to get unique count
+        activity_ids = set()
+        for entity in orphaned_entities:
+            activity_id = entity.get("activity_id")
+            if activity_id:
+                activity_ids.add(activity_id)
+        return {"orphaned_entities_count": len(activity_ids)}
+    except Exception as e:
+        _LOG.debug("Failed to get orphaned entities count: %s", e)
+        return {"orphaned_entities_count": 0}
+
+
 @app.route("/system-messages")
 def system_messages_page():
     """Render the system messages page and mark displayed messages as read."""
