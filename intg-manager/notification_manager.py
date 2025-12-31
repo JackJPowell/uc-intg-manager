@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from typing import Any
 
+from const import MANAGER_DATA_FILE
 from notification_service import NotificationService
 from notification_settings import NotificationSettings
 
@@ -26,6 +29,54 @@ class NotificationManager:
         # Track what we've already notified about to avoid spam
         self._notified_updates: set[str] = set()  # {driver_id:version}
         self._notified_errors: dict[str, str] = {}  # {driver_id: error_state}
+        # Load persisted notification state from disk
+        self._load_notification_state()
+
+    def _load_notification_state(self) -> None:
+        """Load notification state from manager.json file."""
+        try:
+            if os.path.exists(MANAGER_DATA_FILE):
+                with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    notification_state = data.get("notification_state", {})
+                    self._notified_updates = set(notification_state.get("notified_updates", []))
+                    self._notified_errors = notification_state.get("notified_errors", {})
+                    _LOG.debug(
+                        "Loaded notification state: %d updates, %d errors",
+                        len(self._notified_updates),
+                        len(self._notified_errors),
+                    )
+        except (json.JSONDecodeError, OSError) as e:
+            _LOG.warning("Failed to load notification state: %s", e)
+
+    def _save_notification_state(self) -> None:
+        """Save notification state to manager.json file."""
+        try:
+            # Load existing data to preserve other sections
+            existing_data = {}
+            if os.path.exists(MANAGER_DATA_FILE):
+                try:
+                    with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
+                        existing_data = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            # Update notification state section
+            existing_data["notification_state"] = {
+                "notified_updates": list(self._notified_updates),
+                "notified_errors": self._notified_errors,
+            }
+            existing_data["version"] = "1.0"
+
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(MANAGER_DATA_FILE), exist_ok=True)
+
+            # Write to disk
+            with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing_data, f, indent=2)
+            _LOG.debug("Saved notification state to %s", MANAGER_DATA_FILE)
+        except OSError as e:
+            _LOG.error("Failed to save notification state: %s", e)
 
     def _load_settings(self) -> NotificationSettings:
         """Load current notification settings."""
@@ -88,6 +139,7 @@ class NotificationManager:
         try:
             await self._service.send_all(settings, title, message)
             self._notified_updates.add(notification_key)
+            self._save_notification_state()  # Persist to disk
             _LOG.info("Sent update notification for %s", integration_name)
         except Exception as e:
             _LOG.error("Failed to send update notification: %s", e)
@@ -147,6 +199,7 @@ class NotificationManager:
         try:
             await self._service.send_all(settings, title, message, priority=1)
             self._notified_errors[driver_id] = state
+            self._save_notification_state()  # Persist to disk
             _LOG.info("Sent error state notification for %s", integration_name)
         except Exception as e:
             _LOG.error("Failed to send error state notification: %s", e)
@@ -159,7 +212,8 @@ class NotificationManager:
 
         :param driver_id: Driver ID of the integration
         """
-        self._notified_errors.pop(driver_id, None)
+        if self._notified_errors.pop(driver_id, None) is not None:
+            self._save_notification_state()  # Persist to disk
 
     def clear_update_notification(self, driver_id: str, version: str) -> None:
         """
@@ -171,7 +225,9 @@ class NotificationManager:
         :param version: Version that was updated to
         """
         notification_key = f"{driver_id}:{version}"
-        self._notified_updates.discard(notification_key)
+        if notification_key in self._notified_updates:
+            self._notified_updates.discard(notification_key)
+            self._save_notification_state()  # Persist to disk
 
     def update_registry_count(
         self, integration_data: list[tuple[str, str]]
