@@ -85,6 +85,48 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 _remote_client: SyncRemoteClient | None = None
 _github_client: SyncGitHubClient | None = None
 
+# User's language preference from remote localization settings
+_user_language_code: str = "en_GB"  # Default to remote's default
+
+
+def _get_localized_name(
+    name_dict: dict[str, str] | None, fallback: str = "Unknown"
+) -> str:
+    """
+    Extract a localized name from a multi-language dictionary.
+
+    Tries user's language first (both full code and base language),
+    then common fallbacks (en, en_US, en_GB), then any available language.
+
+    :param name_dict: Dictionary with language codes as keys (e.g., {"en": "Name", "en_US": "Name"})
+    :param fallback: Default value if no name found
+    :return: Localized name string
+    """
+    if not name_dict or not isinstance(name_dict, dict):
+        return fallback
+
+    # Try user's preferred language first (e.g., "en_US")
+    if _user_language_code and _user_language_code in name_dict:
+        return name_dict[_user_language_code]
+
+    # Try just the language part without country code (e.g., "en" from "en_US")
+    if _user_language_code and "_" in _user_language_code:
+        base_language = _user_language_code.split("_")[0]
+        if base_language in name_dict:
+            return name_dict[base_language]
+
+    # Try common English variants as fallback
+    for lang_code in ["en", "en_US", "en_GB"]:
+        if lang_code in name_dict:
+            return name_dict[lang_code]
+
+    # Return first available language
+    if name_dict:
+        return next(iter(name_dict.values()))
+
+    return fallback
+
+
 # Cached version data for integrations
 _cached_version_data: dict = {}
 _version_check_timestamp: str | None = None
@@ -1127,10 +1169,10 @@ def _perform_update_integration(
                 current_ver = Version(clean_current_version)
                 target_ver = Version(clean_version)
                 migration_ver = Version(migration_required_at)
-                
+
                 # Block only if: current > migration_required_at AND target < migration_required_at
                 # Version at migration_required_at and above are safe (they have the new entity format)
-                if current_ver > migration_ver and target_ver < migration_ver:
+                if current_ver >= migration_ver and target_ver < migration_ver:
                     with _operation_lock:
                         _operation_in_progress = False
                     _LOG.warning(
@@ -1149,7 +1191,12 @@ def _perform_update_integration(
             except InvalidVersion as e:
                 with _operation_lock:
                     _operation_in_progress = False
-                _LOG.warning("Invalid version format %s or %s: %s", version, integration.version, e)
+                _LOG.warning(
+                    "Invalid version format %s or %s: %s",
+                    version,
+                    integration.version,
+                    e,
+                )
                 return jsonify(
                     {"status": "error", "message": f"Invalid version format: {version}"}
                 ), 400
@@ -2210,10 +2257,13 @@ def update_driver(driver_id: str):
                             current_ver = Version(clean_current_version)
                             target_ver = Version(clean_version)
                             migration_ver = Version(migration_required_at)
-                            
+
                             # Block only if: current > migration_required_at AND target < migration_required_at
                             # Version at migration_required_at and above are safe (they have the new entity format)
-                            if current_ver > migration_ver and target_ver < migration_ver:
+                            if (
+                                current_ver >= migration_ver
+                                and target_ver < migration_ver
+                            ):
                                 with _operation_lock:
                                     _operation_in_progress = False
                                 _LOG.warning(
@@ -3858,6 +3908,7 @@ def save_notification_triggers():
             integration_update_available=data.get("integration_update_available", True),
             new_integration_in_registry=data.get("new_integration_in_registry", False),
             integration_error_state=data.get("integration_error_state", True),
+            orphaned_entities_detected=data.get("orphaned_entities_detected", True),
         )
 
         settings.save()
@@ -4082,6 +4133,84 @@ def download_integration_logs():
     except SyncAPIError as e:
         _LOG.error("Failed to download integration logs: %s", e)
         return f"Failed to download logs: {e}", 500
+
+
+# ============================================================================
+# Diagnostics Routes
+# ============================================================================
+
+
+@app.route("/diagnostics")
+def diagnostics_page():
+    """Render the diagnostics page."""
+    return render_template(
+        "diagnostics.html",
+        remote_address=_remote_client._address if _remote_client else "localhost",
+    )
+
+
+@app.route("/api/diagnostics/orphaned-entities")
+def get_orphaned_entities():
+    """Get orphaned entities data as HTML partial for HTMX."""
+    if not _remote_client:
+        return render_template(
+            "partials/orphaned_entities.html",
+            orphaned_entities=[],
+        )
+
+    try:
+        orphaned_entities = _remote_client.find_orphan_entities()
+        _LOG.debug("Orphaned entities data: %s", orphaned_entities)
+
+        # Group entities by activity for display
+        activities = {}
+        for entity in orphaned_entities:
+            activity_id = entity.get("activity_id")
+            if not activity_id:
+                continue
+
+            if activity_id not in activities:
+                activity_name = entity.get("activity_name", {})
+                name = _get_localized_name(activity_name, "Unknown Activity")
+                activities[activity_id] = {"name": name, "entities": []}
+
+            # Add localized names for entity and integration
+            entity_copy = entity.copy()
+            entity_copy["localized_name"] = _get_localized_name(
+                entity.get("name"), "Unknown Entity"
+            )
+
+            # Process integration name if present
+            integration = entity.get("integration")
+            if integration and isinstance(integration, dict):
+                integration_copy = integration.copy()
+                integration_copy["localized_name"] = _get_localized_name(
+                    integration.get("name"), "Unknown Integration"
+                )
+                entity_copy["integration"] = integration_copy
+
+            activities[activity_id]["entities"].append(entity_copy)
+
+        remote_ip = _remote_client._address if _remote_client else None
+        return render_template(
+            "partials/orphaned_entities.html",
+            activities=activities,
+            remote_ip=remote_ip,
+        )
+    except SyncAPIError as e:
+        _LOG.error("Failed to fetch orphaned entities: %s", e)
+        # Return error message
+        return f"""
+        <div class="bg-red-900/20 border border-red-500/30 rounded-lg p-6">
+            <div class="flex items-start gap-3">
+                <i class="fa-solid fa-triangle-exclamation text-red-400 text-xl"></i>
+                <div>
+                    <h3 class="text-white font-medium mb-1">Error Loading Diagnostics</h3>
+                    <p class="text-sm text-gray-300">{e}</p>
+                </div>
+            </div>
+        </div>
+        """
 
 
 @app.route("/api/backups/create", methods=["POST"])
@@ -4448,7 +4577,7 @@ class WebServer:
         :param host: Host to bind to
         :param port: Port to listen on
         """
-        global _remote_client, _github_client
+        global _remote_client, _github_client, _user_language_code
 
         self._host = host
         self._port = port
@@ -4462,6 +4591,15 @@ class WebServer:
             api_key=api_key,
         )
         _github_client = SyncGitHubClient()
+
+        # Fetch user's language preference
+        try:
+            localization = _remote_client.get_localization()
+            if localization and localization.get("language_code"):
+                _user_language_code = localization["language_code"]
+                _LOG.info("User language set to: %s", _user_language_code)
+        except Exception as e:
+            _LOG.warning("Failed to fetch localization settings: %s", e)
 
         # Ensure template and static directories exist
         self._setup_directories()
@@ -4568,6 +4706,148 @@ class WebServer:
             _LOG.debug("New integration check complete")
         except Exception as e:
             _LOG.warning("Failed to check for new integrations: %s", e)
+
+    def check_orphaned_entities(self) -> None:
+        """
+        Check for orphaned entities in activities and send notifications.
+
+        This is called periodically to detect orphaned entities that may
+        prevent activities from functioning correctly.
+        """
+        if not _remote_client:
+            return
+
+        try:
+            orphaned_entities = _remote_client.find_orphan_entities()
+            _LOG.debug(
+                "Found %d orphaned entities",
+                len(orphaned_entities) if orphaned_entities else 0,
+            )
+
+            if orphaned_entities:
+                # Group by activity to get unique activities with orphaned entities
+                activities = {}
+                for entity in orphaned_entities:
+                    activity_id = entity.get("activity_id")
+                    if not activity_id:
+                        continue
+
+                    if activity_id not in activities:
+                        activity_name = entity.get("activity_name", {})
+                        name = _get_localized_name(activity_name, "Unknown Activity")
+                        activities[activity_id] = name
+
+                if activities:
+                    activity_names = list(activities.values())
+                    activity_ids = list(activities.keys())
+
+                    _LOG.info(
+                        "Found %d activities with orphaned entities: %s",
+                        len(activity_names),
+                        ", ".join(activity_names),
+                    )
+
+                    # Send notification
+                    notification_manager = get_notification_manager()
+                    send_notification_sync(
+                        notification_manager.notify_orphaned_entities,
+                        activity_names,
+                        activity_ids,
+                    )
+                    _LOG.debug("Orphaned entities notification sent")
+                else:
+                    _LOG.debug("No activities with orphaned entities")
+                    # Clear any previously notified activities if they're now resolved
+                    notification_manager = get_notification_manager()
+                    if notification_manager._notified_orphaned_activities:
+                        notification_manager.clear_orphaned_activities(
+                            list(notification_manager._notified_orphaned_activities)
+                        )
+            else:
+                _LOG.debug("No orphaned entities detected")
+                # Clear any previously notified activities
+                notification_manager = get_notification_manager()
+                if notification_manager._notified_orphaned_activities:
+                    notification_manager.clear_orphaned_activities(
+                        list(notification_manager._notified_orphaned_activities)
+                    )
+
+        except SyncAPIError as e:
+            _LOG.warning("Failed to check for orphaned entities: %s", e)
+        except Exception as e:
+            _LOG.error("Unexpected error checking orphaned entities: %s", e)
+
+    async def check_orphaned_entities_async(self) -> None:
+        """
+        Check for orphaned entities in activities and send notifications (async version).
+
+        This is called from async contexts like startup to detect orphaned entities
+        that may prevent activities from functioning correctly.
+        """
+        if not _remote_client:
+            _LOG.debug("Skipping orphaned entities check - no remote client")
+            return
+
+        try:
+            _LOG.debug("Checking for orphaned entities...")
+            orphaned_entities = await _remote_client.find_orphan_entities_async()
+            _LOG.debug(
+                "Found %d orphaned entities",
+                len(orphaned_entities) if orphaned_entities else 0,
+            )
+
+            if orphaned_entities:
+                # Group by activity to get unique activities with orphaned entities
+                activities = {}
+                for entity in orphaned_entities:
+                    activity_id = entity.get("activity_id")
+                    if not activity_id:
+                        continue
+
+                    if activity_id not in activities:
+                        activity_name = entity.get("activity_name", {})
+                        name = _get_localized_name(activity_name, "Unknown Activity")
+                        activities[activity_id] = name
+
+                if activities:
+                    activity_names = list(activities.values())
+                    activity_ids = list(activities.keys())
+
+                    _LOG.info(
+                        "Found %d activities with orphaned entities: %s",
+                        len(activity_names),
+                        ", ".join(activity_names),
+                    )
+
+                    # Send notification
+                    _LOG.debug("Attempting to send orphaned entities notification...")
+                    notification_manager = get_notification_manager()
+                    await notification_manager.notify_orphaned_entities(
+                        activity_names,
+                        activity_ids,
+                    )
+                    _LOG.debug("Orphaned entities notification sent")
+                else:
+                    _LOG.debug("No activities with orphaned entities")
+                    # Clear any previously notified activities if they're now resolved
+                    notification_manager = get_notification_manager()
+                    if notification_manager._notified_orphaned_activities:
+                        notification_manager.clear_orphaned_activities(
+                            list(notification_manager._notified_orphaned_activities)
+                        )
+            else:
+                _LOG.debug("No orphaned entities detected")
+                # Clear any previously notified activities
+                notification_manager = get_notification_manager()
+                if notification_manager._notified_orphaned_activities:
+                    notification_manager.clear_orphaned_activities(
+                        list(notification_manager._notified_orphaned_activities)
+                    )
+
+        except SyncAPIError as e:
+            _LOG.warning("Failed to check for orphaned entities: %s", e)
+        except Exception as e:
+            _LOG.warning("Error checking orphaned entities: %s", e)
 
     def perform_scheduled_backup(self) -> bool:
         """

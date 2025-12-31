@@ -1,0 +1,91 @@
+{% if activities %}
+<!-- Orphaned Entities Found -->
+<div class="space-y-6">
+    {% for activity_id, activity_info in activities.items() %}
+    <div class="bg-red-900/20 border-2 border-red-500/40 rounded-lg overflow-hidden">
+        <!-- Activity Header -->
+        <div class="bg-red-500/10 border-b border-red-500/30 px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-red-500/20 rounded-lg flex items-center justify-center">
+                        <i class="fa-solid fa-clapperboard text-red-400 text-lg"></i>
+                    </div>
+                    <div>
+                        <p class="text-xs text-red-400 uppercase tracking-wide font-semibold mb-0.5">Activity</p>
+                        <h3 class="text-lg font-semibold">
+                            {% if remote_ip %}
+                            <a href="http://{{ remote_ip }}/configurator/#/activity/{{ activity_id }}?category=activity" 
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               class="text-white hover:text-blue-400 transition-colors inline-flex items-center gap-2 group">
+                                {{ activity_info.name }}
+                                <i class="fa-solid fa-arrow-up-right-from-square text-xs text-gray-400 group-hover:text-blue-400 transition-colors"></i>
+                            </a>
+                            {% else %}
+                            <span class="text-white">{{ activity_info.name }}</span>
+                            {% endif %}
+                        </h3>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 px-3 py-1.5 bg-red-500/20 rounded-full border border-red-500/30">
+                    <i class="fa-solid fa-triangle-exclamation text-red-400"></i>
+                    <span class="text-sm font-medium text-red-300">{{ activity_info.entities | length }} orphaned</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Orphaned Entities List -->
+        <div class="p-6 space-y-3">
+            {% for entity in activity_info.entities %}
+            <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <!-- Entity Name (First) -->
+                    <div>
+                        <p class="text-xs text-gray-500 mb-1">Entity Name</p>
+                        <p class="text-sm text-white font-medium">{{ entity.localized_name }}</p>
+                    </div>
+                    
+                    <!-- Entity Type -->
+                    {% if entity.entity_type %}
+                    <div>
+                        <p class="text-xs text-gray-500 mb-1">Entity Type</p>
+                        <p class="text-sm text-white">
+                            <span class="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-xs font-medium">
+                                {{ entity.entity_type }}
+                            </span>
+                        </p>
+                    </div>
+                    {% endif %}
+                    
+                    <!-- Entity ID -->
+                    <div>
+                        <p class="text-xs text-gray-500 mb-1">Entity ID</p>
+                        <p class="text-sm text-white font-mono break-all">{{ entity.entity_id }}</p>
+                    </div>
+                    
+                    <!-- Integration -->
+                    {% if entity.integration and entity.integration.localized_name %}
+                    <div>
+                        <p class="text-xs text-gray-500 mb-1">Integration</p>
+                        <p class="text-sm text-white">{{ entity.integration.localized_name }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<!-- No Orphaned Entities -->
+<div class="bg-green-900/20 border border-green-500/30 rounded-lg p-8">
+    <div class="flex flex-col items-center justify-center text-center">
+        <div class="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mb-4">
+            <i class="fa-solid fa-check text-green-400 text-2xl"></i>
+        </div>
+        <h3 class="text-xl font-semibold text-white mb-2">All Clear!</h3>
+        <p class="text-gray-300">No orphaned entities detected in your activities.</p>
+    </div>
+</div>
+{% endif %}

@@ -167,6 +167,12 @@
                             Notifications
                         </a>
                         
+                        <a href="/diagnostics" 
+                           class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'diagnostics_page' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
+                            <i class="fa-solid fa-stethoscope mr-3 text-lg"></i>
+                            Diagnostics
+                        </a>
+                        
                         <a href="/logs" 
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/logs' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
                             <i class="fa-solid fa-clipboard-list mr-3 text-lg"></i>

@@ -325,6 +325,14 @@
                         </div>
                         <input type="checkbox" name="integration_error_state" class="w-4 h-4 text-blue-600 bg-uc-darker border-uc-border rounded focus:ring-2 focus:ring-blue-500" {% if notification_settings.triggers.integration_error_state %}checked{% endif %}>
                     </label>
+                    
+                    <label class="flex items-center justify-between cursor-pointer group p-3 rounded-lg hover:bg-uc-darker/50 transition-colors">
+                        <div>
+                            <div class="text-sm font-medium text-gray-200 group-hover:text-white">Orphaned entities detected</div>
+                            <div class="text-xs text-gray-500 mt-0.5">Notify when orphaned entities are found in activities</div>
+                        </div>
+                        <input type="checkbox" name="orphaned_entities_detected" class="w-4 h-4 text-blue-600 bg-uc-darker border-uc-border rounded focus:ring-2 focus:ring-blue-500" {% if notification_settings.triggers.orphaned_entities_detected %}checked{% endif %}>
+                    </label>
                 </div>
 
                 <div class="flex justify-end pt-4 border-t border-uc-border">

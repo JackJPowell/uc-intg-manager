@@ -41,11 +41,18 @@ def _load_backups() -> dict[str, Any]:
                 if "backups" in data and "integrations" not in data:
                     _LOG.info("Migrating backup file to new format")
                     return {
-                        "settings": {},
+                        "settings": data.get("settings", {}),
                         "integrations": data.get("backups", {}),
                         "backup_timestamp": data.get("last_updated"),
                         "version": "1.0",
                     }
+                # Ensure all required keys exist
+                if "integrations" not in data:
+                    data["integrations"] = {}
+                if "settings" not in data:
+                    data["settings"] = {}
+                if "version" not in data:
+                    data["version"] = "1.0"
                 return data
         except (json.JSONDecodeError, OSError) as e:
             _LOG.error("Failed to load backups file: %s", e)

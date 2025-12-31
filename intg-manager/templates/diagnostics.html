@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Diagnostics - Integration Manager{% endblock %}
+
+{% block content %}
+<div class="mb-6 sm:mb-8">
+    <h1 class="text-2xl sm:text-3xl font-bold text-white mb-2">Diagnostics</h1>
+    <p class="text-sm sm:text-base text-gray-400">Identify and troubleshoot issues with your integrations and activities</p>
+</div>
+
+<!-- Orphaned Entities Section -->
+<div class="mb-8">
+    <div class="mb-4 flex items-center gap-3">
+        <div class="w-10 h-10 bg-red-500/20 rounded-lg flex items-center justify-center">
+            <i class="fa-solid fa-link-slash text-red-400 text-lg"></i>
+        </div>
+        <div>
+            <h2 class="text-xl font-semibold text-white">Orphaned Entities</h2>
+            <p class="text-sm text-gray-400">Entities referenced in activities that no longer exist</p>
+        </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="mb-6 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+        <div class="flex gap-3">
+            <button 
+                hx-get="/api/diagnostics/orphaned-entities"
+                hx-target="#orphaned-entities-container"
+                hx-swap="innerHTML"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2">
+                <i class="fa-solid fa-arrows-rotate"></i>
+                Refresh
+            </button>
+            <a 
+                href="http://{{ remote_address }}/configurator/#/activities-macros"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2">
+                <i class="fa-solid fa-external-link"></i>
+                Open Remote Configurator
+            </a>
+        </div>
+    </div>
+
+    <!-- Orphaned Entities Container -->
+    <div id="orphaned-entities-container" 
+         hx-get="/api/diagnostics/orphaned-entities"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <!-- Loading state -->
+        <div class="flex items-center justify-center py-12">
+            <div class="text-center">
+                <div class="spinner inline-block mb-4"></div>
+                <p class="text-gray-400">Loading diagnostics...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Card -->
+    <div class="mt-6 bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
+        <div class="flex items-start gap-3">
+            <i class="fa-solid fa-circle-info text-blue-400 text-xl mt-0.5"></i>
+            <div>
+                <h3 class="text-white font-medium mb-1">About Orphaned Entities</h3>
+                <p class="text-sm text-gray-300">
+                    Orphaned entities are entities referenced in activities but no longer exist in their integration. 
+                    This can happen when devices are removed or integrations are reconfigured. 
+                    Orphaned entities may prevent activities from functioning correctly.
+                </p>
+                <p class="text-sm text-gray-300 mt-2">
+                    To fix orphaned entities, remove the missing entity references from the affected activities in the Remote Configurator, 
+                    then click Refresh to verify the changes.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Placeholder for future diagnostic sections -->
+<!-- Additional diagnostic sections will be added here -->
+
+<style>
+    .spinner {
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-top: 2px solid #fff;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+</style>
+{% endblock %}

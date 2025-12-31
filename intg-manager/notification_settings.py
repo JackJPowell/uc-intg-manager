@@ -8,10 +8,11 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from const import MANAGER_DATA_FILE
+
 _LOG = logging.getLogger(__name__)
 
-# Notification settings file location
-NOTIFICATION_SETTINGS_FILE = os.path.expanduser("~/.ucintg/notification_settings.json")
+NOTIFICATION_SETTINGS_FILE = MANAGER_DATA_FILE
 
 
 @dataclass
@@ -99,6 +100,9 @@ class NotificationTriggers:
     integration_error_state: bool = True
     """Notify when an integration enters an ERROR state."""
 
+    orphaned_entities_detected: bool = True
+    """Notify when orphaned entities are detected in activities."""
+
 
 @dataclass
 class NotificationSettings:
@@ -143,39 +147,83 @@ class NotificationSettings:
 
     @classmethod
     def load(cls) -> NotificationSettings:
-        """Load notification settings from file or return defaults."""
+        """Load notification settings from manager.json or return defaults."""
         if os.path.exists(NOTIFICATION_SETTINGS_FILE):
             try:
                 with open(NOTIFICATION_SETTINGS_FILE, encoding="utf-8") as f:
-                    data = json.load(f)
+                    file_data = json.load(f)
+                    # Get notification_settings section from manager.json
+                    data = file_data.get("notification_settings", {})
 
-                # Convert nested dicts to dataclass instances
-                if "home_assistant" in data:
-                    data["home_assistant"] = HomeAssistantNotificationConfig(
-                        **data["home_assistant"]
-                    )
-                if "webhook" in data:
-                    data["webhook"] = WebhookNotificationConfig(**data["webhook"])
-                if "pushover" in data:
-                    data["pushover"] = PushoverNotificationConfig(**data["pushover"])
-                if "ntfy" in data:
-                    data["ntfy"] = NtfyNotificationConfig(**data["ntfy"])
-                if "discord" in data:
-                    data["discord"] = DiscordNotificationConfig(**data["discord"])
-                if "triggers" in data:
-                    data["triggers"] = NotificationTriggers(**data["triggers"])
+                    if not data:
+                        # Try legacy location for migration
+                        legacy_file = os.path.expanduser(
+                            "~/.ucintg/notification_settings.json"
+                        )
+                        if os.path.exists(legacy_file):
+                            _LOG.info(
+                                "Migrating notification settings from legacy location"
+                            )
+                            with open(legacy_file, encoding="utf-8") as lf:
+                                data = json.load(lf)
+                            # Save to new location and return
+                            settings = cls._parse_settings_data(data)
+                            settings.save()
+                            # Clean up legacy file
+                            try:
+                                os.remove(legacy_file)
+                                _LOG.info("Removed legacy notification settings file")
+                            except OSError:
+                                pass
+                            return settings
+                        return cls()
 
-                return cls(**data)
+                    return cls._parse_settings_data(data)
             except (json.JSONDecodeError, OSError) as e:
                 _LOG.warning("Failed to load notification settings: %s", e)
         return cls()
 
+    @classmethod
+    def _parse_settings_data(cls, data: dict) -> NotificationSettings:
+        """Parse settings data dict into NotificationSettings instance."""
+        # Convert nested dicts to dataclass instances
+        if "home_assistant" in data:
+            data["home_assistant"] = HomeAssistantNotificationConfig(
+                **data["home_assistant"]
+            )
+        if "webhook" in data:
+            data["webhook"] = WebhookNotificationConfig(**data["webhook"])
+        if "pushover" in data:
+            data["pushover"] = PushoverNotificationConfig(**data["pushover"])
+        if "ntfy" in data:
+            data["ntfy"] = NtfyNotificationConfig(**data["ntfy"])
+        if "discord" in data:
+            data["discord"] = DiscordNotificationConfig(**data["discord"])
+        if "triggers" in data:
+            data["triggers"] = NotificationTriggers(**data["triggers"])
+
+        return cls(**data)
+
     def save(self) -> None:
-        """Save notification settings to file."""
+        """Save notification settings to manager.json."""
         try:
             os.makedirs(os.path.dirname(NOTIFICATION_SETTINGS_FILE), exist_ok=True)
+
+            # Load existing data to preserve other sections
+            existing_data = {}
+            if os.path.exists(NOTIFICATION_SETTINGS_FILE):
+                try:
+                    with open(NOTIFICATION_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                        existing_data = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            # Update notification_settings section
+            existing_data["notification_settings"] = self.to_dict()
+            existing_data["version"] = "1.0"
+
             with open(NOTIFICATION_SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.to_dict(), f, indent=2)
+                json.dump(existing_data, f, indent=2)
             _LOG.info("Notification settings saved to %s", NOTIFICATION_SETTINGS_FILE)
         except OSError as e:
             _LOG.error("Failed to save notification settings: %s", e)

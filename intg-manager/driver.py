@@ -56,7 +56,7 @@ async def main():
     await driver.register_all_configured_devices()
 
     # Set up the setup handler
-    discovery = ManagerDiscovery("_uc-remote._tcp.local.", timeout=2)
+    discovery = ManagerDiscovery("_uc-remote._tcp.local.", timeout=3)
     setup_handler = RemoteSetupFlow.create_handler(driver, discovery=discovery)
 
     # Initialize the API with the driver configuration

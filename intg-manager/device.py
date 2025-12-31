@@ -287,13 +287,29 @@ class IntegrationManagerDevice(PollingDevice):
                 if self._web_server.is_running:
                     _LOG.info("[%s] Web server started successfully", self.log_id)
 
-                    # Trigger initial version check on startup
-                    _LOG.info("[%s] Triggering initial version check...", self.log_id)
+                    # Trigger initial checks on startup
+                    _LOG.info(
+                        "[%s] Triggering initial integration checks...", self.log_id
+                    )
                     try:
+                        # Check for version updates
                         self._web_server.refresh_integration_versions()
+
+                        # Check for error states (disconnected, error, etc.)
+                        self._web_server.check_error_states()
+
+                        # Check for new integrations in registry
+                        self._web_server.check_new_integrations()
+
+                        # Check for orphaned entities in activities (async version for startup)
+                        await self._web_server.check_orphaned_entities_async()
+
+                        _LOG.info(
+                            "[%s] Initial integration checks complete", self.log_id
+                        )
                     except Exception as e:
                         _LOG.warning(
-                            "[%s] Initial version check failed: %s", self.log_id, e
+                            "[%s] Initial integration checks failed: %s", self.log_id, e
                         )
                 else:
                     _LOG.error(
@@ -343,6 +359,9 @@ class IntegrationManagerDevice(PollingDevice):
 
             # Check for new integrations in registry
             self._web_server.check_new_integrations()
+
+            # Check for orphaned entities in activities
+            self._web_server.check_orphaned_entities()
 
             _LOG.debug("[%s] Integration checks complete", self.log_id)
         except Exception as e:
