@@ -22,13 +22,13 @@ import time
 from datetime import datetime
 from typing import Any
 
-from const import INTEGRATION_BACKUPS_FILE, API_DELAY, Settings
+from const import MANAGER_DATA_FILE, API_DELAY, Settings
 from sync_api import SyncRemoteClient, SyncAPIError
 
 _LOG = logging.getLogger(__name__)
 
 # Backup storage file
-BACKUP_FILE = INTEGRATION_BACKUPS_FILE
+BACKUP_FILE = MANAGER_DATA_FILE
 
 
 def _load_backups() -> dict[str, Any]:

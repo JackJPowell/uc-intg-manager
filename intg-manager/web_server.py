@@ -44,7 +44,7 @@ from backup_service import (
     backup_all_integrations,
     get_backup,
 )
-from const import WEB_SERVER_PORT, Settings, API_DELAY, INTEGRATION_BACKUPS_FILE
+from const import WEB_SERVER_PORT, Settings, API_DELAY, MANAGER_DATA_FILE
 from log_handler import get_log_entries, get_log_handler
 from migration_service import extract_migration_mappings
 from sync_api import SyncRemoteClient, SyncGitHubClient, load_registry, SyncAPIError
@@ -4372,7 +4372,7 @@ def upload_complete_backup():
 
         # Save the complete backup file (includes all integrations)
         try:
-            with open(INTEGRATION_BACKUPS_FILE, "w", encoding="utf-8") as f:
+            with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
                 json.dump(backup_data, f, indent=2)
             _LOG.info("Restored complete backup file")
         except OSError as e:

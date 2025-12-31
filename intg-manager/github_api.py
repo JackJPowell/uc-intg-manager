@@ -9,9 +9,11 @@ release information for integrations.
 
 import logging
 import re
+import ssl
 from typing import Any
 
 import aiohttp
+import certifi
 
 from const import GITHUB_API_BASE
 
@@ -42,7 +44,16 @@ class GitHubClient:
             }
             # Create timeout object explicitly to avoid context manager issues
             timeout = aiohttp.ClientTimeout(total=30)
-            self._session = aiohttp.ClientSession(headers=headers, timeout=timeout)
+            
+            # Create SSL context with certifi certificates for HTTPS
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            
+            self._session = aiohttp.ClientSession(
+                headers=headers,
+                timeout=timeout,
+                connector=connector,
+            )
         return self._session
 
     async def close(self) -> None:

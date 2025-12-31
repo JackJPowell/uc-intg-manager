@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 from typing import Any
 
 import aiohttp
+import certifi
 
 from notification_settings import (
     DiscordNotificationConfig,
@@ -17,6 +19,13 @@ from notification_settings import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+# Create SSL context with certifi certificates for HTTPS requests
+def _get_ssl_context() -> ssl.SSLContext:
+    """Get SSL context with certifi certificates."""
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    return ssl_context
 
 
 class NotificationService:
@@ -59,7 +68,9 @@ class NotificationService:
             payload["data"] = data
 
         try:
-            async with aiohttp.ClientSession() as session:
+            ssl_context = _get_ssl_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     url, headers=headers, json=payload, timeout=10
                 ) as resp:
@@ -112,7 +123,9 @@ class NotificationService:
             payload.update(data)
 
         try:
-            async with aiohttp.ClientSession() as session:
+            ssl_context = _get_ssl_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     config.url, headers=headers, json=payload, timeout=10
                 ) as resp:
@@ -162,7 +175,9 @@ class NotificationService:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            ssl_context = _get_ssl_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(url, data=payload, timeout=10) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -221,7 +236,9 @@ class NotificationService:
             headers["Authorization"] = f"Bearer {config.token}"
 
         try:
-            async with aiohttp.ClientSession() as session:
+            ssl_context = _get_ssl_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     url, headers=headers, data=message.encode("utf-8"), timeout=10
                 ) as resp:
@@ -275,7 +292,9 @@ class NotificationService:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            ssl_context = _get_ssl_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     config.webhook_url, json=payload, timeout=10
                 ) as resp:

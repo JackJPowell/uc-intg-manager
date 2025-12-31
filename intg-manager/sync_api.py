@@ -14,6 +14,7 @@ import re
 from typing import Any
 from datetime import datetime
 
+import certifi
 import requests
 from requests.auth import HTTPBasicAuth
 from packaging.version import Version, InvalidVersion
@@ -58,8 +59,9 @@ class SyncRemoteClient:
         self._port = port
         self._base_url = f"http://{address}:{port}/api"
 
-        # Set up session with auth
+        # Set up session with auth and certifi certificates for HTTPS
         self._session = requests.Session()
+        self._session.verify = certifi.where()  # Use certifi's certificate bundle
         if api_key:
             self._session.headers["Authorization"] = f"Bearer {api_key}"
         elif pin:
@@ -509,6 +511,7 @@ class SyncGitHubClient:
     def __init__(self) -> None:
         """Initialize the GitHub client."""
         self._session = requests.Session()
+        self._session.verify = certifi.where()  # Use certifi's certificate bundle
         self._session.headers.update(
             {
                 "Accept": "application/vnd.github.v3+json",
@@ -781,7 +784,11 @@ def load_registry() -> list[dict[str, Any]]:
 
         # Otherwise treat it as a URL
         _LOG.debug("Loading registry from URL: %s", KNOWN_INTEGRATIONS_URL)
-        response = requests.get(KNOWN_INTEGRATIONS_URL, timeout=REQUEST_TIMEOUT)
+        response = requests.get(
+            KNOWN_INTEGRATIONS_URL,
+            timeout=REQUEST_TIMEOUT,
+            verify=certifi.where(),
+        )
         if response.status_code == 200:
             data = response.json()
             if isinstance(data, dict) and "integrations" in data:
