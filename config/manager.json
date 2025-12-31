@@ -1,0 +1,107 @@
+{
+  "notification_settings": {
+    "home_assistant": {
+      "enabled": false,
+      "url": "",
+      "token": ""
+    },
+    "webhook": {
+      "enabled": false,
+      "url": "",
+      "headers": {}
+    },
+    "pushover": {
+      "enabled": false,
+      "user_key": "",
+      "app_token": ""
+    },
+    "ntfy": {
+      "enabled": false,
+      "server": "https://ntfy.sh",
+      "topic": "",
+      "token": ""
+    },
+    "discord": {
+      "enabled": false,
+      "webhook_url": ""
+    },
+    "triggers": {
+      "integration_update_available": true,
+      "new_integration_in_registry": false,
+      "integration_error_state": true,
+      "orphaned_entities_detected": true
+    },
+    "_last_registry_count": 63,
+    "_known_integration_ids": [
+      "uc-intg-htpc",
+      "integration-zidoo",
+      "uc-intg-plex",
+      "uc-intg-powerview",
+      "integration-sonybluray",
+      "uc-intg-skyq",
+      "uc-intg-hass",
+      "integration-sonos",
+      "integration-hue",
+      "integration-lgtv",
+      "ucr2-integration-requests",
+      "uc-intg-androidtv",
+      "uc-intg-synology-system",
+      "uc-intg-yamaha-avr",
+      "uc-intg-rvolution",
+      "integration-kodi",
+      "uc-intg-broadlink",
+      "integration-roku",
+      "uc-intg-steam",
+      "ucr2-integration-sonySDCP",
+      "uc-intg-jvc",
+      "uc-intg-anthemav",
+      "uc-intg-nzbinfo",
+      "integration-orangetv",
+      "integration-globalcache",
+      "unfoldedcircle-adbtv",
+      "uc-intg-bond",
+      "uc-intg-lmserver",
+      "uc-intg-xbox",
+      "uc-intg-hubitat",
+      "integration-roon",
+      "integration-panasonicbluray",
+      "integration-matter",
+      "uc-intg-demo",
+      "uc-intg-cctv",
+      "uc-intg-naim",
+      "uc-intg-emotiva",
+      "integration-dreambox",
+      "integration-sonyavr",
+      "uc-intg-denonavr",
+      "uc-intg-zwave",
+      "uc-intg-psn",
+      "uc-intg-hdfury",
+      "uc-intg-spotify",
+      "uc-intg-manager",
+      "uc-intg-xbox-live",
+      "uc-intg-lutron",
+      "uc-intg-samsungtv",
+      "ucr-integration-sonyADCP",
+      "integration-bang-olufsen",
+      "uc-intg-weather",
+      "ucr2-integration-dunehd",
+      "uc-intg-madvr",
+      "uc-intg-emby",
+      "unfoldedcircle-oppo",
+      "uc-intg-appletv",
+      "uc-intg-heos",
+      "uc-intg-musiccast",
+      "uc-intg-wiim",
+      "integration-mpchc",
+      "uc-intg-onkyo-avr",
+      "uc-intg-smartthings",
+      "uc-intg-horizon"
+    ]
+  },
+  "version": "1.0",
+  "read_message_ids": [
+    "2025-001",
+    "2024-002",
+    "2024-003"
+  ]
+}

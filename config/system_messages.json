@@ -1,0 +1,25 @@
+{
+  "messages": [
+    {
+      "id": "2025-001",
+      "date": "2025-01-15",
+      "title": "Welcome to Integration Manager System Messages",
+      "content": "<p>This new feature allows you to receive important announcements and updates about the Integration Manager.</p><p>Messages are marked as read automatically when you view this page.</p>",
+      "priority": "normal"
+    },
+    {
+      "id": "2024-003",
+      "date": "2024-12-20",
+      "title": "Orphaned Entities Diagnostics Available",
+      "content": "<p>A new <strong>Diagnostics</strong> page has been added to help identify orphaned entities in your activities.</p><p>Orphaned entities can prevent activities from functioning properly. Visit the Diagnostics page to see if any activities need attention.</p>",
+      "priority": "normal"
+    },
+    {
+      "id": "2024-002",
+      "date": "2024-12-01",
+      "title": "Notification Settings Enhanced",
+      "content": "<p>You can now receive notifications for:</p><ul><li>Integration updates</li><li>New integrations detected</li><li>Integration errors</li><li>Orphaned entities in activities</li></ul><p>Configure your preferences in the Notifications settings page.</p>",
+      "priority": "low"
+    }
+  ]
+}

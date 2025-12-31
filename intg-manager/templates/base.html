@@ -173,6 +173,19 @@
                             Diagnostics
                         </a>
                         
+                        <a href="/system-messages" 
+                           class="flex items-center justify-between px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'system_messages_page' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
+                            <div class="flex items-center">
+                                <i class="fa-solid fa-inbox mr-3 text-lg"></i>
+                                System Messages
+                            </div>
+                            {% if unread_messages_count > 0 %}
+                            <span class="ml-2 px-2 py-0.5 text-xs font-bold bg-uc-primary text-white rounded-full">
+                                {{ unread_messages_count }}
+                            </span>
+                            {% endif %}
+                        </a>
+                        
                         <a href="/logs" 
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/logs' %}bg-uc-primary text-white{% else %}text-gray-300 hover:bg-uc-card hover:text-white{% endif %} transition-colors">
                             <i class="fa-solid fa-clipboard-list mr-3 text-lg"></i>
@@ -200,8 +213,8 @@
         <footer class="bg-uc-dark border-t border-uc-border">
             <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8 py-4">
                 <div class="flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-0 text-xs sm:text-sm text-gray-400">
-                    <div>
-                        Integration Manager v1.3.5
+                    <div id="footer-quote">
+                        <!-- Random quote will be inserted here -->
                     </div>
                     <div class="flex items-center space-x-3 sm:space-x-4">
                         <a href="https://github.com/jackjpowell/uc-intg-manager" target="_blank" rel="noopener" 
@@ -218,6 +231,61 @@
             </div>
         </footer>
     </div>
+    
+    <script>
+        // Random footer quotes
+        const quotes = [
+            "Macros are just good manners",
+            "HDMI-CEC works perfectly. Until it doesn't",
+            "Smart TVs get dumb updates",
+            "Local control beats cloud convenience",
+            "Automation is empathy",
+            "Convenience shouldn't need an account",
+            "If it's smart, it should be quiet",
+            "Cloud outages shouldn't turn off your lights",
+            "The network is the product",
+            "Firmware updates are a trust exercise",
+            "Every workaround becomes permanent",
+            "Offline is a feature",
+            "Local control is peace of mind",
+            "Automation should work without the internet",
+            "Deterministic beats magical",
+            "If it works offline, it works",
+            "State matters",
+            "Automation is about trust",
+            "Inputs should never surprise you",
+            "Power state is not a suggestion",
+            "Volume is not a number, it's a feeling",
+            "HDMI is a negotiated settlement",
+            "Good macros feel invisible",
+            "HDMI is adversarial",
+            "CEC remembers nothing",
+            "CEC is a suggestion",
+            "CEC breaks macros",
+            "Manual control is the fallback",
+            "The LAN is home",
+            "CEC never read the spec",
+            "CEC needs a reboot",
+            "The cloud always picks the worst moment",
+            "Firmware updates ship hope",
+            "Everything works until it doesn't",
+            "Magic is just undocumented behavior",
+            "Abstractions leak at movie night",
+            "State drift is inevitable",
+            "AV gear lies politely",
+            "Power order matters",
+            "Sync is always off by one",
+            "It worked yesterday",
+            "This should have been local",
+            "It's always DNS",
+            "HDMI is non-deterministic",
+            "The spec allows this"
+        ];
+        
+        // Select and display a random quote
+        const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
+        document.getElementById('footer-quote').textContent = randomQuote;
+    </script>
     
     <!-- Mobile Menu Toggle Script -->
     <script>

@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}System Messages - Integration Manager{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-3xl font-bold text-white flex items-center">
+            <i class="fa-solid fa-inbox mr-3 text-uc-primary"></i>
+            System Messages
+        </h1>
+        <button 
+            id="refreshBtn"
+            hx-post="/api/system-messages/refresh" 
+            hx-swap="none"
+            class="px-4 py-2 bg-uc-card hover:bg-uc-primary text-white rounded-lg transition-colors flex items-center">
+            <i class="fa-solid fa-arrows-rotate mr-2"></i>
+            Refresh
+        </button>
+    </div>
+
+    <!-- Unread Messages Section -->
+    {% if unread_messages %}
+    <div class="mb-8">
+        <h2 class="text-xl font-semibold text-white mb-4 flex items-center">
+            <i class="fa-solid fa-envelope mr-2 text-uc-primary"></i>
+            New Messages
+            <span class="ml-2 px-2 py-0.5 text-xs font-bold bg-uc-primary text-white rounded-full">
+                {{ unread_messages|length }}
+            </span>
+        </h2>
+        
+        <div class="space-y-4">
+            {% for message in unread_messages %}
+            <div class="bg-uc-card rounded-lg p-6 border-l-4 {% if message.priority == 'critical' %}border-red-500{% elif message.priority == 'high' %}border-orange-500{% elif message.priority == 'low' %}border-blue-500{% else %}border-uc-primary{% endif %}">
+                <div class="flex items-start justify-between mb-3">
+                    <div class="flex-1">
+                        <h3 class="text-lg font-semibold text-white mb-1">
+                            {{ message.title }}
+                        </h3>
+                        <div class="flex items-center text-sm text-gray-400">
+                            <i class="fa-solid fa-calendar mr-2"></i>
+                            {{ message.date }}
+                            {% if message.priority == 'critical' %}
+                            <span class="ml-3 px-2 py-0.5 text-xs font-bold bg-red-500 text-white rounded">
+                                CRITICAL
+                            </span>
+                            {% elif message.priority == 'high' %}
+                            <span class="ml-3 px-2 py-0.5 text-xs font-bold bg-orange-500 text-white rounded">
+                                HIGH PRIORITY
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="text-gray-300 leading-relaxed message-content">
+                    {{ message.content|safe }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="bg-uc-card rounded-lg p-8 text-center mb-8">
+        <i class="fa-solid fa-check-circle text-6xl text-green-500 mb-4"></i>
+        <p class="text-xl text-white font-semibold mb-2">All Caught Up!</p>
+        <p class="text-gray-400">You have no new messages.</p>
+    </div>
+    {% endif %}
+
+    <!-- Read Messages Section -->
+    {% if read_messages %}
+    <div class="mb-8">
+        <details class="group">
+            <summary class="cursor-pointer list-none">
+                <div class="flex items-center justify-between bg-uc-card hover:bg-gray-700 rounded-lg p-4 transition-colors">
+                    <h2 class="text-lg font-semibold text-gray-400 flex items-center">
+                        <i class="fa-solid fa-envelope-open mr-2"></i>
+                        Previous Messages
+                        <span class="ml-2 text-sm font-normal">({{ read_messages|length }})</span>
+                    </h2>
+                    <i class="fa-solid fa-chevron-down group-open:rotate-180 transition-transform text-gray-400"></i>
+                </div>
+            </summary>
+            
+            <div class="mt-4 space-y-4 opacity-75">
+                {% for message in read_messages %}
+                <div class="bg-uc-card rounded-lg p-6 border-l-4 border-gray-600">
+                    <div class="flex items-start justify-between mb-3">
+                        <div class="flex-1">
+                            <h3 class="text-lg font-semibold text-gray-300 mb-1">
+                                {{ message.title }}
+                            </h3>
+                            <div class="flex items-center text-sm text-gray-500">
+                                <i class="fa-solid fa-calendar mr-2"></i>
+                                {{ message.date }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-gray-400 leading-relaxed message-content">
+                        {{ message.content|safe }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+    </div>
+    {% endif %}
+
+    {% if not unread_messages and not read_messages %}
+    <div class="bg-uc-card rounded-lg p-8 text-center">
+        <i class="fa-solid fa-inbox text-6xl text-gray-600 mb-4"></i>
+        <p class="text-xl text-gray-400 font-semibold mb-2">No Messages</p>
+        <p class="text-gray-500">Check back later for system announcements and updates.</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+    .message-content p {
+        margin-bottom: 0.5rem;
+    }
+    .message-content ul {
+        list-style-type: disc;
+        margin-left: 1.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .message-content li {
+        margin-bottom: 0.25rem;
+    }
+    .message-content strong {
+        font-weight: 600;
+        color: white;
+    }
+</style>
+
+<script>
+    // Handle refresh button click and response
+    document.body.addEventListener('htmx:afterRequest', function(event) {
+        if (event.detail.target.id === 'refreshBtn') {
+            const xhr = event.detail.xhr;
+            if (xhr.status === 200) {
+                // Success - reload the page to show updated messages
+                location.reload();
+            } else {
+                // Error - show a message
+                alert('Failed to refresh messages from GitHub. Please try again later.');
+            }
+        }
+    });
+
+    // Add loading state to refresh button
+    document.body.addEventListener('htmx:beforeRequest', function(event) {
+        if (event.detail.target.id === 'refreshBtn') {
+            const btn = event.detail.target;
+            const icon = btn.querySelector('i');
+            icon.classList.add('fa-spin');
+        }
+    });
+
+    document.body.addEventListener('htmx:afterRequest', function(event) {
+        if (event.detail.target.id === 'refreshBtn') {
+            const btn = event.detail.target;
+            const icon = btn.querySelector('i');
+            icon.classList.remove('fa-spin');
+        }
+    });
+</script>
+{% endblock %}

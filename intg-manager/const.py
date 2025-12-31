@@ -11,18 +11,40 @@ from typing import Any
 
 _LOG = logging.getLogger(__name__)
 
-# Configuration directory for persistent storage across upgrades
-# Priority: UC_CONFIG_HOME (Docker) > UC_DATA_HOME (Remote) > local dev default
-_DEFAULT_DATA_HOME = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
-# UC_CONFIG_HOME is set in Docker and should persist across upgrades (e.g., /config)
-# UC_DATA_HOME is set by the Remote but may not persist across upgrades (e.g., /data)
-# Both already point to the data directory, so no need for subdirectory
-DATA_DIR = os.environ.get("UC_CONFIG_HOME") or os.environ.get("UC_DATA_HOME") or _DEFAULT_DATA_HOME
-os.makedirs(DATA_DIR, exist_ok=True)
+# Configuration directory for persistent storage
+# Use ./config relative to project root for local dev, /config absolute for Docker/Remote
+def _get_data_dir():
+    """Get the data directory, with fallback for local development."""
+    # Try absolute path first (Docker/Remote)
+    abs_config_dir = "/config"
+    try:
+        os.makedirs(abs_config_dir, exist_ok=True)
+        # Test if we can write to it
+        test_file = os.path.join(abs_config_dir, ".write_test")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("test")
+        os.remove(test_file)
+        return abs_config_dir
+    except (OSError, PermissionError):
+        # Fall back to relative ./config directory for local development
+        rel_config_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "config"
+        )
+        os.makedirs(rel_config_dir, exist_ok=True)
+        return rel_config_dir
+
+
+DATA_DIR = _get_data_dir()
 
 # Manager data file - stores settings, integration backups, and other persistent data
 MANAGER_DATA_FILE = os.path.join(DATA_DIR, "manager.json")
+
+# System messages file - stores announcements and notifications for users
+SYSTEM_MESSAGES_FILE = os.path.join(DATA_DIR, "system_messages.json")
+
+# System messages GitHub URL - remote source for messages
+SYSTEM_MESSAGES_URL = "https://raw.githubusercontent.com/JackJPowell/uc-intg-list/main/system_messages.json"
 
 # Version check interval (in poll cycles, at 60s each = 30 min)
 VERSION_CHECK_INTERVAL_POLLS = 30
@@ -70,18 +92,24 @@ class Settings:
                 settings_data = data.get("settings", {})
                 field_names = {f.name for f in fields(cls)}
                 _LOG.info("Loaded settings from %s", MANAGER_DATA_FILE)
-                return cls(**{k: v for k, v in settings_data.items() if k in field_names})
+                return cls(
+                    **{k: v for k, v in settings_data.items() if k in field_names}
+                )
             except (json.JSONDecodeError, OSError) as e:
-                _LOG.warning("Failed to load settings from %s: %s", MANAGER_DATA_FILE, e)
+                _LOG.warning(
+                    "Failed to load settings from %s: %s", MANAGER_DATA_FILE, e
+                )
         else:
-            _LOG.info("Manager data file not found at %s, using defaults", MANAGER_DATA_FILE)
+            _LOG.info(
+                "Manager data file not found at %s, using defaults", MANAGER_DATA_FILE
+            )
         return cls()
 
     def save(self) -> None:
         """Save settings to manager data file."""
         try:
             os.makedirs(os.path.dirname(MANAGER_DATA_FILE), exist_ok=True)
-            
+
             # Load existing data to preserve other sections
             existing_data = {}
             if os.path.exists(MANAGER_DATA_FILE):
@@ -90,11 +118,11 @@ class Settings:
                         existing_data = json.load(f)
                 except (json.JSONDecodeError, OSError):
                     pass
-            
+
             # Update settings section
             existing_data["settings"] = asdict(self)
             existing_data["version"] = "1.0"
-            
+
             with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
                 json.dump(existing_data, f, indent=2)
             _LOG.info("Settings saved to %s", MANAGER_DATA_FILE)

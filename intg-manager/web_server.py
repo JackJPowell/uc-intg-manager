@@ -32,6 +32,7 @@ from notification_settings import (
 from notification_settings import NotificationSettings, NotificationTriggers
 from notification_service import NotificationService
 from notification_manager import send_notification_sync, get_notification_manager
+from system_messages import get_system_messages_service
 
 import markdown
 from flask import Flask, render_template, jsonify, request, send_file, Response
@@ -4140,6 +4141,66 @@ def download_integration_logs():
 # ============================================================================
 
 
+@app.context_processor
+def inject_system_messages_count():
+    """Inject unread system messages count into all templates."""
+    try:
+        messages_service = get_system_messages_service()
+        return {"unread_messages_count": messages_service.get_unread_count()}
+    except Exception as e:
+        _LOG.error("Failed to get unread messages count: %s", e)
+        return {"unread_messages_count": 0}
+
+
+@app.route("/system-messages")
+def system_messages_page():
+    """Render the system messages page and mark displayed messages as read."""
+    try:
+        messages_service = get_system_messages_service()
+        
+        # Get unread and read messages
+        unread_messages = messages_service.get_unread_messages()
+        read_messages = messages_service.get_read_messages()
+        
+        # Mark all currently displayed unread messages as read
+        if unread_messages:
+            message_ids = [msg.id for msg in unread_messages]
+            messages_service.mark_messages_as_read(message_ids)
+        
+        return render_template(
+            "system_messages.html",
+            unread_messages=unread_messages,
+            read_messages=read_messages,
+        )
+    except Exception as e:
+        _LOG.error("Failed to load system messages: %s", e)
+        return render_template(
+            "system_messages.html",
+            unread_messages=[],
+            read_messages=[],
+        )
+
+
+@app.route("/api/system-messages/refresh", methods=["POST"])
+def refresh_system_messages():
+    """Fetch latest system messages from GitHub and reload the page."""
+    try:
+        messages_service = get_system_messages_service()
+        success = messages_service.fetch_from_github()
+        
+        if success:
+            _LOG.info("System messages refreshed from GitHub")
+            # Return success response that triggers page reload
+            return jsonify({"success": True, "message": "Messages refreshed successfully"})
+        else:
+            _LOG.warning("Failed to refresh system messages from GitHub")
+            return jsonify({"success": False, "message": "Failed to fetch from GitHub"}), 500
+            
+    except Exception as e:
+        _LOG.error("Error refreshing system messages: %s", e)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @app.route("/diagnostics")
 def diagnostics_page():
     """Render the diagnostics page."""
@@ -4848,6 +4909,25 @@ class WebServer:
             _LOG.warning("Failed to check for orphaned entities: %s", e)
         except Exception as e:
             _LOG.warning("Error checking orphaned entities: %s", e)
+
+    def check_system_messages(self) -> None:
+        """
+        Check for new system messages from GitHub.
+
+        This is called periodically to fetch the latest messages.
+        """
+        try:
+            _LOG.debug("Checking for new system messages from GitHub...")
+            messages_service = get_system_messages_service()
+            success = messages_service.fetch_from_github()
+            
+            if success:
+                _LOG.info("System messages updated from GitHub")
+            else:
+                _LOG.debug("No new system messages or fetch failed")
+                
+        except Exception as e:
+            _LOG.warning("Failed to check system messages: %s", e)
 
     def perform_scheduled_backup(self) -> bool:
         """

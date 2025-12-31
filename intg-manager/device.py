@@ -304,6 +304,9 @@ class IntegrationManagerDevice(PollingDevice):
                         # Check for orphaned entities in activities (async version for startup)
                         await self._web_server.check_orphaned_entities_async()
 
+                        # Check for new system messages from GitHub
+                        self._web_server.check_system_messages()
+
                         _LOG.info(
                             "[%s] Initial integration checks complete", self.log_id
                         )
@@ -362,6 +365,9 @@ class IntegrationManagerDevice(PollingDevice):
 
             # Check for orphaned entities in activities
             self._web_server.check_orphaned_entities()
+
+            # Check for new system messages from GitHub
+            self._web_server.check_system_messages()
 
             _LOG.debug("[%s] Integration checks complete", self.log_id)
         except Exception as e:
