@@ -11,19 +11,18 @@ from typing import Any
 
 _LOG = logging.getLogger(__name__)
 
-# Data directory for persistent storage
-# UC_DATA_HOME is set by the remote, defaults to parent of intg-manager for dev
-_DEFAULT_DATA_HOME = os.path.dirname(os.path.dirname(__file__))
-DATA_HOME = os.environ.get("UC_DATA_HOME", _DEFAULT_DATA_HOME)
+# Configuration directory for persistent storage across upgrades
+# Priority: UC_CONFIG_HOME (Docker) > UC_DATA_HOME (Remote) > local dev default
+_DEFAULT_DATA_HOME = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
-# Ensure data directory exists
-DATA_DIR = os.path.join(DATA_HOME, "data")
+# UC_CONFIG_HOME is set in Docker and should persist across upgrades (e.g., /config)
+# UC_DATA_HOME is set by the Remote but may not persist across upgrades (e.g., /data)
+# Both already point to the data directory, so no need for subdirectory
+DATA_DIR = os.environ.get("UC_CONFIG_HOME") or os.environ.get("UC_DATA_HOME") or _DEFAULT_DATA_HOME
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Settings and backup files live in the data directory
-SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
-BACKUPS_DIR = os.path.join(DATA_DIR, "backups")
-INTEGRATION_BACKUPS_FILE = os.path.join(DATA_DIR, "integration_backups.json")
+# Manager data file - stores settings, integration backups, and other persistent data
+MANAGER_DATA_FILE = os.path.join(DATA_DIR, "manager.json")
 
 # Version check interval (in poll cycles, at 60s each = 30 min)
 VERSION_CHECK_INTERVAL_POLLS = 30
@@ -63,24 +62,42 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
-        """Load settings from file or return defaults."""
-        if os.path.exists(SETTINGS_FILE):
+        """Load settings from manager data file or return defaults."""
+        if os.path.exists(MANAGER_DATA_FILE):
             try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                settings_data = data.get("settings", {})
                 field_names = {f.name for f in fields(cls)}
-                return cls(**{k: v for k, v in data.items() if k in field_names})
+                _LOG.info("Loaded settings from %s", MANAGER_DATA_FILE)
+                return cls(**{k: v for k, v in settings_data.items() if k in field_names})
             except (json.JSONDecodeError, OSError) as e:
-                _LOG.warning("Failed to load settings: %s", e)
+                _LOG.warning("Failed to load settings from %s: %s", MANAGER_DATA_FILE, e)
+        else:
+            _LOG.info("Manager data file not found at %s, using defaults", MANAGER_DATA_FILE)
         return cls()
 
     def save(self) -> None:
-        """Save settings to file."""
+        """Save settings to manager data file."""
         try:
-            os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(asdict(self), f, indent=2)
-            _LOG.info("Settings saved to %s", SETTINGS_FILE)
+            os.makedirs(os.path.dirname(MANAGER_DATA_FILE), exist_ok=True)
+            
+            # Load existing data to preserve other sections
+            existing_data = {}
+            if os.path.exists(MANAGER_DATA_FILE):
+                try:
+                    with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
+                        existing_data = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+            
+            # Update settings section
+            existing_data["settings"] = asdict(self)
+            existing_data["version"] = "1.0"
+            
+            with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing_data, f, indent=2)
+            _LOG.info("Settings saved to %s", MANAGER_DATA_FILE)
         except OSError as e:
             _LOG.error("Failed to save settings: %s", e)
 
