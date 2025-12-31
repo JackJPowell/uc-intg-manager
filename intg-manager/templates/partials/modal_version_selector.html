@@ -132,3 +132,45 @@
     
     {% endif %}
 </div>
+
+<script>
+(function() {
+    // Helper function to compare semantic versions
+    function compareVersions(v1, v2) {
+        const clean = (v) => v.replace(/^v/, '').split(/[^0-9]+/).map(n => parseInt(n) || 0);
+        const a = clean(v1);
+        const b = clean(v2);
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+            const diff = (a[i] || 0) - (b[i] || 0);
+            if (diff !== 0) return diff;
+        }
+        return 0;
+    }
+    
+    // Add click handler to version buttons to update overlay text
+    document.querySelectorAll('[hx-post]').forEach(button => {
+        button.addEventListener('click', function() {
+            const url = this.getAttribute('hx-post');
+            const versionMatch = url.match(/[?&]version=([^&]+)/);
+            const targetId = this.getAttribute('hx-target');
+            
+            if (versionMatch && targetId) {
+                const selectedVersion = decodeURIComponent(versionMatch[1]);
+                // Extract driver_id from target (format: #card-driver_id)
+                const driverId = targetId.replace('#card-', '');
+                const overlay = document.getElementById('upgrade-overlay-' + driverId);
+                
+                if (overlay) {
+                    const currentVersion = overlay.getAttribute('data-current-version');
+                    const textElement = overlay.querySelector('.upgrade-text');
+                    
+                    if (currentVersion && textElement && selectedVersion) {
+                        const comparison = compareVersions(selectedVersion, currentVersion);
+                        textElement.textContent = comparison < 0 ? 'Downgrading...' : 'Upgrading...';
+                    }
+                }
+            }
+        });
+    });
+})();
+</script>

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from typing import Any
 
+from const import MANAGER_DATA_FILE
 from notification_service import NotificationService
 from notification_settings import NotificationSettings
 
@@ -26,6 +29,66 @@ class NotificationManager:
         # Track what we've already notified about to avoid spam
         self._notified_updates: set[str] = set()  # {driver_id:version}
         self._notified_errors: dict[str, str] = {}  # {driver_id: error_state}
+        self._notified_orphaned_activities: set[str] = set()  # {activity_id}
+        # Load persisted notification state from disk
+        self._load_notification_state()
+
+    def _load_notification_state(self) -> None:
+        """Load notification state from manager.json file."""
+        try:
+            if os.path.exists(MANAGER_DATA_FILE):
+                with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    notification_state = data.get("notification_state", {})
+                    self._notified_updates = set(
+                        notification_state.get("notified_updates", [])
+                    )
+                    self._notified_errors = notification_state.get(
+                        "notified_errors", {}
+                    )
+                    self._notified_orphaned_activities = set(
+                        notification_state.get("notified_orphaned_activities", [])
+                    )
+                    _LOG.debug(
+                        "Loaded notification state: %d updates, %d errors, %d orphaned activities",
+                        len(self._notified_updates),
+                        len(self._notified_errors),
+                        len(self._notified_orphaned_activities),
+                    )
+        except (json.JSONDecodeError, OSError) as e:
+            _LOG.warning("Failed to load notification state: %s", e)
+
+    def _save_notification_state(self) -> None:
+        """Save notification state to manager.json file."""
+        try:
+            # Load existing data to preserve other sections
+            existing_data = {}
+            if os.path.exists(MANAGER_DATA_FILE):
+                try:
+                    with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
+                        existing_data = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            # Update notification state section
+            existing_data["notification_state"] = {
+                "notified_updates": list(self._notified_updates),
+                "notified_errors": self._notified_errors,
+                "notified_orphaned_activities": list(
+                    self._notified_orphaned_activities
+                ),
+            }
+            existing_data["version"] = "1.0"
+
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(MANAGER_DATA_FILE), exist_ok=True)
+
+            # Write to disk
+            with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing_data, f, indent=2)
+            _LOG.debug("Saved notification state to %s", MANAGER_DATA_FILE)
+        except OSError as e:
+            _LOG.error("Failed to save notification state: %s", e)
 
     def _load_settings(self) -> NotificationSettings:
         """Load current notification settings."""
@@ -88,6 +151,7 @@ class NotificationManager:
         try:
             await self._service.send_all(settings, title, message)
             self._notified_updates.add(notification_key)
+            self._save_notification_state()  # Persist to disk
             _LOG.info("Sent update notification for %s", integration_name)
         except Exception as e:
             _LOG.error("Failed to send update notification: %s", e)
@@ -147,6 +211,7 @@ class NotificationManager:
         try:
             await self._service.send_all(settings, title, message, priority=1)
             self._notified_errors[driver_id] = state
+            self._save_notification_state()  # Persist to disk
             _LOG.info("Sent error state notification for %s", integration_name)
         except Exception as e:
             _LOG.error("Failed to send error state notification: %s", e)
@@ -159,7 +224,78 @@ class NotificationManager:
 
         :param driver_id: Driver ID of the integration
         """
-        self._notified_errors.pop(driver_id, None)
+        if self._notified_errors.pop(driver_id, None) is not None:
+            self._save_notification_state()  # Persist to disk
+
+    async def notify_orphaned_entities(
+        self, activity_names: list[str], activity_ids: list[str]
+    ) -> None:
+        """
+        Notify when orphaned entities are detected in activities.
+
+        :param activity_names: List of activity names with orphaned entities
+        :param activity_ids: List of activity IDs with orphaned entities
+        """
+        _LOG.debug(
+            "notify_orphaned_entities called with %d activities: %s (IDs: %s)",
+            len(activity_names),
+            activity_names,
+            activity_ids,
+        )
+
+        settings = self._load_settings()
+        if (
+            not self._should_notify(settings)
+            or not settings.triggers.orphaned_entities_detected
+        ):
+            return
+
+        # Filter to only new orphaned activities
+        new_activity_ids = set(activity_ids) - self._notified_orphaned_activities
+        if not new_activity_ids:
+            _LOG.debug("No new orphaned activities to notify about")
+            return
+
+        # Get names for the new activities
+        id_to_name = {aid: name for aid, name in zip(activity_ids, activity_names)}
+        new_activity_names = [
+            id_to_name[aid] for aid in new_activity_ids if aid in id_to_name
+        ]
+
+        count = len(new_activity_names)
+        if count == 0:
+            return
+
+        title = "Orphaned Entities Detected"
+        message = f"{count} activit{'y' if count == 1 else 'ies'} with orphaned entities: {', '.join(new_activity_names)}"
+
+        _LOG.info(
+            "Sending orphaned entities notification: title='%s', message='%s'",
+            title,
+            message,
+        )
+        try:
+            await self._service.send_all(settings, title, message, priority=1)
+            # Update tracked activities
+            self._notified_orphaned_activities.update(new_activity_ids)
+            self._save_notification_state()
+            _LOG.info("Sent orphaned entities notification for %d activities", count)
+        except Exception as e:
+            _LOG.error("Failed to send orphaned entities notification: %s", e)
+
+    def clear_orphaned_activities(self, activity_ids: list[str]) -> None:
+        """
+        Clear orphaned activity notifications that have been resolved.
+
+        :param activity_ids: List of activity IDs that no longer have orphaned entities
+        """
+        removed = False
+        for aid in activity_ids:
+            if aid in self._notified_orphaned_activities:
+                self._notified_orphaned_activities.discard(aid)
+                removed = True
+        if removed:
+            self._save_notification_state()
 
     def clear_update_notification(self, driver_id: str, version: str) -> None:
         """
@@ -171,7 +307,9 @@ class NotificationManager:
         :param version: Version that was updated to
         """
         notification_key = f"{driver_id}:{version}"
-        self._notified_updates.discard(notification_key)
+        if notification_key in self._notified_updates:
+            self._notified_updates.discard(notification_key)
+            self._save_notification_state()  # Persist to disk
 
     def update_registry_count(
         self, integration_data: list[tuple[str, str]]

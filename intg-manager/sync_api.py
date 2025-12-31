@@ -13,7 +13,10 @@ import os
 import re
 from typing import Any
 from datetime import datetime
+import asyncio
+from ucapi_framework import find_orphaned_entities
 
+import certifi
 import requests
 from requests.auth import HTTPBasicAuth
 from packaging.version import Version, InvalidVersion
@@ -58,8 +61,9 @@ class SyncRemoteClient:
         self._port = port
         self._base_url = f"http://{address}:{port}/api"
 
-        # Set up session with auth
+        # Set up session with auth and certifi certificates for HTTPS
         self._session = requests.Session()
+        self._session.verify = certifi.where()  # Use certifi's certificate bundle
         if api_key:
             self._session.headers["Authorization"] = f"Bearer {api_key}"
         elif pin:
@@ -217,6 +221,57 @@ class SyncRemoteClient:
                 "GET", "/system/logs", params=params, headers=headers
             )
             return result if isinstance(result, list) else []
+
+    def get_localization(self) -> dict[str, Any]:
+        """
+        Get the remote's localization settings including language preference.
+
+        :return: Localization settings with language_code, country_code, time_zone, etc.
+        :raises SyncAPIError: If the request fails
+        """
+        try:
+            result = self._request("GET", "/cfg/localization")
+            _LOG.debug("Localization settings: %s", result)
+            return result if isinstance(result, dict) else {}
+        except SyncAPIError as e:
+            _LOG.warning("Failed to get localization settings: %s", e)
+            return {}
+
+    async def find_orphan_entities_async(self) -> list[dict[str, Any]]:
+        """
+        Find orphaned entities across all activities (async version).
+
+        :return: List of orphaned entity dictionaries with activity information
+        :raises SyncAPIError: If the request fails
+        """
+        try:
+            remote_url = f"http://{self._address}:{self._port}"
+            result = await find_orphaned_entities(
+                remote_url=remote_url,
+                api_key=self._api_key,
+            )
+            _LOG.debug("Found %d orphan entities", len(result))
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            _LOG.error("Failed to get orphan entities: %s", e)
+            raise SyncAPIError(f"Failed to get orphan entities: {e}") from e
+
+    def find_orphan_entities(self) -> list[dict[str, Any]]:
+        """
+        Find orphaned entities across all activities.
+
+        Note: This is a synchronous wrapper around the ucapi-framework's async
+        find_orphaned_entities helper function.
+
+        :return: List of orphaned entity dictionaries with activity information
+        :raises SyncAPIError: If the request fails
+        """
+        try:
+            # Use asyncio.run() which requires no event loop to be running
+            return asyncio.run(self.find_orphan_entities_async())
+        except Exception as e:
+            _LOG.error("Failed to get orphan entities: %s", e)
+            raise SyncAPIError(f"Failed to get orphan entities: {e}") from e
 
     def delete_instance(self, instance_id: str) -> bool:
         """
@@ -509,6 +564,7 @@ class SyncGitHubClient:
     def __init__(self) -> None:
         """Initialize the GitHub client."""
         self._session = requests.Session()
+        self._session.verify = certifi.where()  # Use certifi's certificate bundle
         self._session.headers.update(
             {
                 "Accept": "application/vnd.github.v3+json",
@@ -781,7 +837,11 @@ def load_registry() -> list[dict[str, Any]]:
 
         # Otherwise treat it as a URL
         _LOG.debug("Loading registry from URL: %s", KNOWN_INTEGRATIONS_URL)
-        response = requests.get(KNOWN_INTEGRATIONS_URL, timeout=REQUEST_TIMEOUT)
+        response = requests.get(
+            KNOWN_INTEGRATIONS_URL,
+            timeout=REQUEST_TIMEOUT,
+            verify=certifi.where(),
+        )
         if response.status_code == 200:
             data = response.json()
             if isinstance(data, dict) and "integrations" in data:

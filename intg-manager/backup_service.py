@@ -22,13 +22,13 @@ import time
 from datetime import datetime
 from typing import Any
 
-from const import INTEGRATION_BACKUPS_FILE, API_DELAY, Settings
+from const import MANAGER_DATA_FILE, API_DELAY, Settings
 from sync_api import SyncRemoteClient, SyncAPIError
 
 _LOG = logging.getLogger(__name__)
 
 # Backup storage file
-BACKUP_FILE = INTEGRATION_BACKUPS_FILE
+BACKUP_FILE = MANAGER_DATA_FILE
 
 
 def _load_backups() -> dict[str, Any]:
@@ -41,11 +41,18 @@ def _load_backups() -> dict[str, Any]:
                 if "backups" in data and "integrations" not in data:
                     _LOG.info("Migrating backup file to new format")
                     return {
-                        "settings": {},
+                        "settings": data.get("settings", {}),
                         "integrations": data.get("backups", {}),
                         "backup_timestamp": data.get("last_updated"),
                         "version": "1.0",
                     }
+                # Ensure all required keys exist
+                if "integrations" not in data:
+                    data["integrations"] = {}
+                if "settings" not in data:
+                    data["settings"] = {}
+                if "version" not in data:
+                    data["version"] = "1.0"
                 return data
         except (json.JSONDecodeError, OSError) as e:
             _LOG.error("Failed to load backups file: %s", e)

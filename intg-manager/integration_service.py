@@ -11,10 +11,12 @@ import asyncio
 import json
 import logging
 import os
+import ssl
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+import certifi
 
 from const import KNOWN_INTEGRATIONS_URL
 from github_api import GitHubClient
@@ -107,7 +109,9 @@ class IntegrationService:
         """
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 async with session.get(KNOWN_INTEGRATIONS_URL) as response:
                     if response.status == 200:
                         self._known_integrations = await response.json()

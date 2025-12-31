@@ -8,9 +8,11 @@ It provides methods to query integrations, drivers, and system status.
 """
 
 import logging
+import ssl
 from typing import Any
 
 import aiohttp
+import certifi
 
 _LOG = logging.getLogger(__name__)
 
@@ -65,11 +67,16 @@ class RemoteAPIClient:
             # Create timeout object explicitly to avoid context manager issues
             # when running from non-async context via run_coroutine_threadsafe
             timeout = aiohttp.ClientTimeout(total=30)
+            
+            # Create SSL context with certifi certificates for HTTPS support
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
 
             self._session = aiohttp.ClientSession(
                 headers=headers,
                 auth=auth,
                 timeout=timeout,
+                connector=connector,
             )
         return self._session
 
