@@ -130,6 +130,26 @@ Stay informed about integration updates, errors, and new integrations with multi
 4. Use **Test Notification** to verify your configuration
 5. Backups are automatically included when exporting settings
 
+### Diagnostics
+
+Identify and resolve issues with your activities using the built-in diagnostics tools.
+
+- **Orphaned Entity Detection**: Automatically finds entities referenced in activities that no longer exist
+- **Activity Grouping**: Entities are organized by the activities they belong to for easy identification
+- **Notifications**: Optional alerts when orphaned entities are detected (configurable in Notifications settings)
+
+Orphaned entities can prevent activities from functioning correctly. The Diagnostics page helps you identify which activities need attention and provides quick access to fix them.
+
+### System Messages
+
+Stay informed about Integration Manager announcements and updates.
+
+- **Automatic Updates**: New messages are automatically fetched
+- **Read Status Tracking**: Messages are automatically marked as read when viewed
+- **Message History**: Previously read messages are accessible in a collapsible section
+
+System messages provide important information about new features, critical updates, and best practices for managing your integrations.
+
 ### Power-Aware Operation
 
 The web server automatically starts when your Remote is docked and shuts down when on battery (configurable).
