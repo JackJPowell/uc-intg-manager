@@ -210,7 +210,7 @@ services:
       - UC_INTG_MANAGER_HTTP_PORT=8088
       - UC_CONFIG_HOME=/config
     volumes:
-      - uc-intg-manager:/config
+      - ./uc-intg-manager:/config
     restart: unless-stopped
 ```
 
