@@ -11,7 +11,7 @@ _Changes in the next release_
 
 ---
 
-## v1.7.1 - 2026-05-01
+## v1.7.2 - 2026-05-02
 ### Added
 - **Sponsorship links** — Integration and available cards now show a heart button for developers who have set up sponsorship links. Hovering reveals platform options (GitHub Sponsors, Buy Me a Coffee, PayPal, Ko-fi, and more).
 - **Unused activity entities diagnostic** — The diagnostics page now surfaces entities that are added to the activity but are not used anywhere inside the activity.
