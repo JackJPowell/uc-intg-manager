@@ -314,10 +314,12 @@ class IntegrationManagerDevice(PollingDevice):
             set_remote_online(self.identifier, False)
             raise
         except asyncio.TimeoutError as e:
+            _LOG.error("[%s] Timeout while trying to connect: %s", self.log_id, e)
             self._connected = False
             set_remote_online(self.identifier, False)
             raise RemoteAPIError("Connection test timed out") from e
         except Exception as e:
+            _LOG.error("[%s] Unexpected error during connection: %s", self.log_id, e)
             self._connected = False
             set_remote_online(self.identifier, False)
             raise RemoteAPIError(f"Connection test failed: {e}") from e

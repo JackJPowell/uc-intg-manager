@@ -10,6 +10,7 @@ Uses synchronous HTTP clients (requests) to avoid aiohttp async context issues.
 """
 
 import asyncio
+import inspect
 import io
 import json
 import logging
@@ -173,6 +174,13 @@ _remote_online: dict[str, bool] = {}
 
 def set_remote_online(remote_id: str, online: bool) -> None:
     """Called by device.py to push connectivity changes into the web server."""
+    caller = inspect.stack()[1].function
+    _LOG.debug(
+        "[%s] set_remote_online(%s) called from %s",
+        remote_id,
+        online,
+        caller,
+    )
     _remote_online[remote_id] = online
 
 
@@ -180,7 +188,15 @@ def is_remote_online(remote_id: str | None) -> bool:
     """Return True if the named remote is currently considered online."""
     if not remote_id:
         return False
-    return _remote_online.get(remote_id, False)
+    result = _remote_online.get(remote_id, False)
+    caller = inspect.stack()[1].function
+    _LOG.debug(
+        "[%s] is_remote_online -> %s, called from %s",
+        remote_id,
+        result,
+        caller,
+    )
+    return result
 
 
 def _render_offline_partial() -> str:
