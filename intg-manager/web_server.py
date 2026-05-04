@@ -6360,6 +6360,11 @@ class WebServer:
                 pin=config.pin,
                 api_key=config.api_key,
             )
+        _LOG.info(
+            "WebServer.__init__: loaded %d remote(s): %s",
+            len(_remote_clients),
+            list(_remote_clients.keys()),
+        )
 
         _github_client = GitHubClient()
         _sync_github_client = _SyncGitHubClient()
@@ -6473,10 +6478,19 @@ class WebServer:
                 pin=config.pin,
                 api_key=config.api_key,
             )
+            # If this remote is new (no prior online status), assume online — setup
+            # already verified it was reachable before adding it to the config.
+            if config.identifier not in _remote_online:
+                _LOG.info(
+                    "[%s] New remote — marking online immediately", config.identifier
+                )
+                _remote_online[config.identifier] = True
             _LOG.info("Loaded remote: %s (%s)", config.name, config.identifier)
 
         _LOG.info(
-            "Remote reload complete - %d remotes configured", len(_remote_clients)
+            "Remote reload complete - %d remotes configured: %s",
+            len(_remote_clients),
+            list(_remote_clients.keys()),
         )
 
     @property
@@ -6495,32 +6509,65 @@ class WebServer:
         """
         await _refresh_version_cache(remote_id)
 
-    async def check_error_states(self, remote_id: str) -> None:
+    async def check_connectivity(self, remote_id: str) -> None:
         """
-        Check all integrations for error states and send notifications.
+        Test whether a remote is reachable and update its online status.
 
-        This is called periodically to detect integrations that have entered
-        error or disconnected states. Also updates the remote's online status
-        so the UI banner reflects actual connectivity, not just the last
-        WebSocket lifecycle event.
+        This is the single owner of set_remote_online for periodic heartbeat
+        checks. On-demand status changes (connect/disconnect lifecycle events)
+        are handled directly in device.py.
 
-        :param remote_id: Remote identifier to check error states for
+        :param remote_id: Remote identifier to test
         """
         client = _remote_clients.get(remote_id)
         if not client:
+            _LOG.warning(
+                "[%s] check_connectivity: no client in _remote_clients (known: %s)",
+                remote_id,
+                list(_remote_clients.keys()),
+            )
             return
 
         try:
             is_online = await client.test_connection()
             set_remote_online(remote_id, is_online)
-            if not is_online:
-                return
-            # This will trigger error state notifications automatically
-            await _get_installed_integrations(remote_id)
-            # _LOG.debug("[%s] Error state check complete", remote_id)
         except Exception as e:
-            _LOG.warning("[%s] Failed to check error states: %s", remote_id, e)
+            _LOG.warning("[%s] Connectivity check failed: %s", remote_id, e)
             set_remote_online(remote_id, False)
+
+    async def check_all_remote_connectivity(self) -> None:
+        """Test connectivity for every configured remote and update online status."""
+        for remote_id in list(_remote_clients.keys()):
+            await self.check_connectivity(remote_id)
+
+    async def check_error_states(self, remote_id: str) -> None:
+        """
+        Check all integrations for error/disconnected states and send notifications.
+
+        Skipped when the remote is offline — connectivity is managed separately
+        by check_connectivity / check_all_remote_connectivity.
+
+        :param remote_id: Remote identifier to check
+        """
+        if not is_remote_online(remote_id):
+            return
+
+        client = _remote_clients.get(remote_id)
+        if not client:
+            return
+
+        try:
+            # Triggers error-state notifications automatically via _get_installed_integrations
+            await _get_installed_integrations(remote_id)
+        except Exception as e:
+            _LOG.warning(
+                "[%s] Failed to check integration error states: %s", remote_id, e
+            )
+
+    async def check_all_error_states(self) -> None:
+        """Check integration error states for every configured remote."""
+        for remote_id in list(_remote_clients.keys()):
+            await self.check_error_states(remote_id)
 
     async def check_new_integrations(self, remote_id: str) -> None:
         """
