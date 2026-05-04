@@ -471,10 +471,15 @@ class IntegrationManagerDevice(PollingDevice):
                 # Per-remote task: Scheduled backup for this remote
                 await self._check_scheduled_backup()
 
-            # Check for integration error states (disconnected, error, etc.) - runs every poll
+            # Connectivity heartbeat + integration error states — runs every poll
             if web_server and web_server.is_running:
-                # Per-remote task: Check error states for this remote
-                await web_server.check_error_states(self.identifier)
+                if self._is_owner():
+                    # Owner handles ALL remotes — some (added via setup) have no polling device
+                    await web_server.check_all_remote_connectivity()
+                    await web_server.check_all_error_states()
+                else:
+                    await web_server.check_connectivity(self.identifier)
+                    await web_server.check_error_states(self.identifier)
 
             # Web server health check - verify server is actually accessible when it should be running
             await self._check_web_server_health()
