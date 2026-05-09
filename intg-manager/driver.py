@@ -12,6 +12,8 @@ import asyncio
 import logging
 import os
 
+import ucapi
+
 from const import RemoteConfig
 from data_migration import migrate
 from device import IntegrationManagerDevice, _all_remote_configs
@@ -21,6 +23,16 @@ from setup import RemoteSetupFlow
 from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, get_config_path
 
 _LOG = logging.getLogger(__name__)
+
+
+def _remote_id_from_ws(websocket) -> str | None:
+    if not websocket or not getattr(websocket, "remote_address", None):
+        return None
+    host = websocket.remote_address[0]
+    for cfg in _all_remote_configs:
+        if cfg.address == host:
+            return cfg.identifier
+    return None
 
 
 class IntegrationManagerDriver(BaseIntegrationDriver):
@@ -33,24 +45,46 @@ class IntegrationManagerDriver(BaseIntegrationDriver):
     Other remotes have independent HTTP connections and should keep polling.
     """
 
-    def _disconnect_owner_only(self, reason: str) -> None:
-        """Disconnect only the owner device (first in config), leaving others running."""
-        owner_id = _all_remote_configs[0].identifier if _all_remote_configs else None
-        _LOG.debug(
-            "%s: disconnecting owner device only (%s)", reason, owner_id
-        )
-        for device_id, device in self._device_instances.items():
-            if device_id == owner_id:
-                self._loop.create_task(device.disconnect())
-                break
+    async def on_r2_connect_cmd(self, websocket=None) -> None:
+        await self.api.set_device_state(ucapi.DeviceStates.CONNECTED)
+        rid = _remote_id_from_ws(websocket)
+        device = self._device_instances.get(rid) if rid else None
+        if device:
+            _LOG.debug("Connect command from %s", rid)
+            self._loop.create_task(device.connect())
+        else:
+            _LOG.debug("Connect command without identifiable source - connecting all")
+            for d in self._device_instances.values():
+                self._loop.create_task(d.connect())
 
-    async def on_r2_disconnect_cmd(self) -> None:
-        """Disconnect only the owner device, not all remotes."""
-        self._disconnect_owner_only("Client disconnect command")
+    async def on_r2_disconnect_cmd(self, websocket=None) -> None:
+        rid = _remote_id_from_ws(websocket)
+        device = self._device_instances.get(rid) if rid else None
+        if device:
+            _LOG.debug("Disconnect command from %s", rid)
+            self._loop.create_task(device.disconnect())
+        else:
+            _LOG.debug("Disconnect command without identifiable source - ignoring")
 
-    async def on_r2_enter_standby(self) -> None:
-        """Disconnect only the owner device when it enters standby."""
-        self._disconnect_owner_only("Enter standby event")
+    async def on_r2_enter_standby(self, websocket=None) -> None:
+        rid = _remote_id_from_ws(websocket)
+        device = self._device_instances.get(rid) if rid else None
+        if device:
+            _LOG.debug("Enter standby from %s", rid)
+            self._loop.create_task(device.disconnect())
+        else:
+            _LOG.debug("Enter standby without identifiable source - ignoring")
+
+    async def on_r2_exit_standby(self, websocket=None) -> None:
+        rid = _remote_id_from_ws(websocket)
+        device = self._device_instances.get(rid) if rid else None
+        if device:
+            _LOG.debug("Exit standby from %s", rid)
+            self._loop.create_task(device.connect())
+        else:
+            _LOG.debug("Exit standby without identifiable source - reconnecting all")
+            for d in self._device_instances.values():
+                self._loop.create_task(d.connect())
 
 
 async def main():
