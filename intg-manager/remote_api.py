@@ -322,7 +322,7 @@ class RemoteAPIClient:
         """
         try:
             # First, check if a key with this name already exists
-            existing_keys = await self._request("GET", "/auth/api_keys")
+            existing_keys = await self._request("GET", "/auth/api_keys?limit=100")
 
             # Find and delete any existing key with the same name
             if isinstance(existing_keys, list):
