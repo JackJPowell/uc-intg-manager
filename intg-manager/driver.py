@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 
+import device as _device_module
 from const import RemoteConfig
 from data_migration import migrate
 from device import IntegrationManagerDevice, _all_remote_configs
@@ -36,13 +37,31 @@ class IntegrationManagerDriver(BaseIntegrationDriver):
     def _disconnect_owner_only(self, reason: str) -> None:
         """Disconnect only the owner device (first in config), leaving others running."""
         owner_id = _all_remote_configs[0].identifier if _all_remote_configs else None
-        _LOG.debug(
-            "%s: disconnecting owner device only (%s)", reason, owner_id
-        )
+        _LOG.debug("%s: disconnecting owner device only (%s)", reason, owner_id)
         for device_id, device in self._device_instances.items():
             if device_id == owner_id:
                 self._loop.create_task(device.disconnect())
                 break
+
+    async def on_r2_connect_cmd(self) -> None:
+        """Connect all devices, then immediately recheck all remote connectivity."""
+        await super().on_r2_connect_cmd()
+        self._loop.create_task(self._recheck_all_connectivity(delay=3))
+
+    async def on_r2_exit_standby(self) -> None:
+        """Reconnect all devices, then immediately recheck all remote connectivity."""
+        await super().on_r2_exit_standby()
+        self._loop.create_task(self._recheck_all_connectivity(delay=3))
+
+    async def _recheck_all_connectivity(self, delay: float = 3) -> None:
+        """Wait briefly for connections to settle, then update all remote online statuses."""
+        await asyncio.sleep(delay)
+        ws = _device_module._web_server_instance
+        if ws and ws.is_running:
+            _LOG.debug(
+                "Rechecking connectivity for all remotes after connect/exit-standby"
+            )
+            await ws.check_all_remote_connectivity()
 
     async def on_r2_disconnect_cmd(self) -> None:
         """Disconnect only the owner device, not all remotes."""

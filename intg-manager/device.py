@@ -327,6 +327,7 @@ class IntegrationManagerDevice(PollingDevice):
     async def disconnect(self) -> None:
         """Disconnect from the remote."""
         _LOG.debug("[%s] Disconnecting from remote", self.log_id)
+        global _web_server_instance
         set_remote_online(self.identifier, False)
 
         # Only stop web server if:
