@@ -77,9 +77,7 @@ def compare_versions_for_update(current: str, latest: str) -> bool:
     increases.
     """
     try:
-        return Version(normalize_version(latest)) > Version(
-            normalize_version(current)
-        )
+        return Version(normalize_version(latest)) > Version(normalize_version(current))
     except (InvalidVersion, TypeError, AttributeError):
         cur_core = _numeric_core(current) if isinstance(current, str) else ()
         lat_core = _numeric_core(latest) if isinstance(latest, str) else ()
