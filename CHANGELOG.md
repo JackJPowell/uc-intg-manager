@@ -11,6 +11,15 @@ _Changes in the next release_
 
 ---
 
+## v1.7.4 - 2025-05-12
+
+### Fixed
+- In certain circumstances when adding a remote, a previously created api key would not be found and a failure would occur when registering a new one
+- Additional remotes would sometimes be reported as offline incorrectly
+- Asyncio error related to zeroconf has been squished
+
+---
+
 ## v1.7.3 - 2026-05-03
 
 ### Fixed
