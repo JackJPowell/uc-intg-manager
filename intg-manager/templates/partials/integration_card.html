@@ -4,7 +4,12 @@
      data-description="{{ integration.description }}"
      data-developer="{{ integration.developer }}"
      data-status="{{ integration.state|lower }}"
-     data-has-update="{{ 'true' if integration.update_available else 'false' }}">
+     data-has-update="{{ 'true' if integration.update_available else 'false' }}"
+     {% if reconnecting %}
+     hx-get="/api/integration/{{ integration.driver_id }}/card"
+     hx-trigger="every 1s"
+     hx-swap="outerHTML"
+     {% endif %}>
     
     <!-- Card Header: Title left, Badges right -->
     <div class="flex items-start justify-between gap-2 mb-3">

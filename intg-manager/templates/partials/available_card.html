@@ -149,8 +149,8 @@
                     </div>
                 </div>
                 {% endif %}
-                {% if integration.supports_backup %}
-                <!-- Backup support indicator -->
+                {% if integration.supports_backup and not supports_inplace_update %}
+                 <!-- Backup support indicator -->
                 <div class="group relative p-1.5 text-green-600 dark:text-green-300 hover:text-white hover:bg-uc-darker rounded transition-colors cursor-help">
                     <i class="fa-solid fa-arrows-spin h-4 w-4"></i>
                     <div class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block z-50">
