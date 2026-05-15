@@ -13,6 +13,8 @@ _Changes in the next release_
 
 ## v2.0.0 - 2025-05-15
 
+## No meaningful changes until the final release. No need to update
+
 ### Changes
 
 - The webserver port is changing. If you navigate to 8088 the remote will present a splash screen notifying you of the new port `9999` and will redirect you after 10 seconds. If you have any bookmarks or saved links, please update them after the redirect occurs.
@@ -26,6 +28,7 @@ _Changes in the next release_
 ## v1.7.4 - 2025-05-12
 
 ### Fixed
+
 - In certain circumstances when adding a remote, a previously created api key would not be found and a failure would occur when registering a new one
 - Additional remotes would sometimes be reported as offline incorrectly
 - Asyncio error related to zeroconf has been squished
@@ -35,11 +38,13 @@ _Changes in the next release_
 ## v1.7.3 - 2026-05-03
 
 ### Fixed
+
 - If you had multiple remotes configured in integration manager, in certain conditions, only the first remote would be reported as online
 
 ## Previous Release Notes
 
 ### Added
+
 - **Sponsorship links** — Integration and available cards now show a heart button for developers who have set up sponsorship links. Hovering reveals platform options (GitHub Sponsors, Buy Me a Coffee, PayPal, Ko-fi, and more).
 - **Unused activity entities diagnostic** — The diagnostics page now surfaces entities that are added to the activity but are not used anywhere inside the activity.
 - **Offline Remote Improvements** - Remotes that are offline will no longer delay page loading PR/27 Thanks @henrikwidlund!
@@ -47,15 +52,19 @@ _Changes in the next release_
 
 
 ### Changed
+
 - **Diagnostics page layout** — Diagnostic sections are now collapsible. System Controls have been moved to the bottom of the page. Navigation buttons have correct colors in both light and dark mode.
 
 ### Fixed
+
 - **Battery/dock restart** — When `shutdown_on_battery` is enabled and the remote is re-docked, the web server now correctly restarts. Previously, stale references left after undocking prevented the server from being created again.
 - **Improved Version Detection** -- Previously, certain tags on a version would be misinterptred. PR/28 Thanks @henrikwidlund!
 ---
 
 ## v1.7.2 - 2026-05-02
+
 ### Added
+
 - **Sponsorship links** — Integration and available cards now show a heart button for developers who have set up sponsorship links. Hovering reveals platform options (GitHub Sponsors, Buy Me a Coffee, PayPal, Ko-fi, and more).
 - **Unused activity entities diagnostic** — The diagnostics page now surfaces entities that are added to the activity but are not used anywhere inside the activity.
 - **Offline Remote Improvements** - Remotes that are offline will no longer delay page loading PR/27 Thanks @henrikwidlund!
@@ -63,27 +72,33 @@ _Changes in the next release_
 
 
 ### Changed
+
 - **Diagnostics page layout** — Diagnostic sections are now collapsible. System Controls have been moved to the bottom of the page. Navigation buttons have correct colors in both light and dark mode.
 
 ### Fixed
+
 - **Battery/dock restart** — When `shutdown_on_battery` is enabled and the remote is re-docked, the web server now correctly restarts. Previously, stale references left after undocking prevented the server from being created again.
 - **Improved Version Detection** -- Previously, certain tags on a version would be misinterptred. PR/28 Thanks @henrikwidlund!
 ---
 
 ## v1.6.7 - 2026-04-19
+
 ### Added
+
 - **Self-update** — Integration Manager can now update itself directly from the web UI. Clicking it installs a temporary bootstrapper integration on the remote, which downloads the new IM release from GitHub, replaces the old installation, restores all settings and backups, then removes itself — no manual intervention required.
 - **Firmware update check** — The diagnostics page now shows the current remote firmware version and highlights when a newer firmware release is available.
 
 ### Changed
+
 - **Async web server** — Migrated from Flask to Quart (async-native). All route handlers are now `async`, enabling concurrent API calls without threading overhead.
 - **Async API client** — `sync_api.py` rewritten to use `aiohttp` throughout, removing synchronous `requests` calls from route handlers.
 - **Dependency updates** — `ucapi` bumped to `0.6.0`, `ucapi-framework` to `1.9.1`.
 
 ### Fixed
+
 - **Docker backup support** — Integrations running in Docker containers can now be backed up correctly.
 - **Entity reconfigure on update** — Fixed a bug where updating an integration would not restore your configured entities after an upgrade.
-- 
+
 ---
 
 ## v1.6.6 - 2026-04-19
