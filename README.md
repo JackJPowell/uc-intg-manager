@@ -43,9 +43,6 @@ The Integration Manager can automatically detect when newer versions of your cus
 - **Version Tracking**: View current and available versions for all installed integrations
 - **Beta Update Options**: Receive update notifications for beta releases when enabled in settings
 
-> [!NOTE]
-> For integrations that support the backup/restore API, configuration is automatically preserved during updates. Integrations without this support can still be updated, but will require manual reconfiguration afterward. The update button indicates which method applies.
-
 ### Integration Management
 
 Full lifecycle management for your custom integrations.
@@ -53,7 +50,6 @@ Full lifecycle management for your custom integrations.
 - **Delete Integrations**: Remove installed integrations directly from the web interface
 - **One-Click Installation**: Install new integrations from the community registry
 - **Update Control**: Update to latest, select specific versions, or choose beta releases
-- **Safe Uninstall**: Clean removal of integration drivers and configurations
 
 <img width="500" alt="delete" src="https://github.com/user-attachments/assets/dd7b0604-09d8-4647-9b24-be69cb99df2c" />
 
@@ -84,7 +80,7 @@ Backups are stored locally on the Remote and can be exported as JSON files for e
 
 Customize the Integration Manager's behavior through the Settings page:
 
-- **Shutdown on Battery**: Automatically stop the web server when the Remote is on battery power to conserve energy (default: enabled)
+- **Shutdown on Battery**: Automatically stop the web server when the Remote is on battery power (default: disabled)
 - **Automatic Updates**: Enable automatic installation of integration updates when detected (default: disabled - manual confirmation required)
 - **Show Beta Releases**: Display and allow installation of pre-release versions from GitHub (default: disabled)
 - **Automatic Backups**: Enable scheduled daily backups of integration configurations (default: disabled)
@@ -135,10 +131,9 @@ Stay informed about integration updates, errors, and new integrations with multi
 Identify and resolve issues with your activities using the built-in diagnostics tools.
 
 - **Orphaned Entity Detection**: Automatically finds entities referenced in activities that no longer exist
-- **Activity Grouping**: Entities are organized by the activities they belong to for easy identification
-- **Notifications**: Optional alerts when orphaned entities are detected (configurable in Notifications settings)
-
-Orphaned entities can prevent activities from functioning correctly. The Diagnostics page helps you identify which activities need attention and provides quick access to fix them.
+- **Orphaned IR Codeset Detection**: Automatically find and optionally reassociate/delete orphaned IR codesets
+- **Unused Activity Entities**: Easily view all the entities you have included in an activity but that are not referenced anywhere
+- **System Controls**: Easily reboot and shutdown your remote
 
 ### System Messages
 
@@ -149,17 +144,6 @@ Stay informed about Integration Manager announcements and updates.
 - **Message History**: Previously read messages are accessible in a collapsible section
 
 System messages provide important information about new features, critical updates, and best practices for managing your integrations.
-
-### Power-Aware Operation
-
-The web server automatically starts when your Remote is docked and shuts down when on battery (configurable).
-
-- **Automatic Start/Stop**: Web server lifecycle tied to dock status
-- **Battery Conservation**: No background processes draining battery during mobile use
-- **Status Indicators**: Dashboard shows current dock status and server state
-
-
-
 
 
 
@@ -178,7 +162,7 @@ The web server automatically starts when your Remote is docked and shuts down wh
      - **IP Address**: Your Remote's IP address (e.g., `192.168.1.100`)
      - **Web Configurator PIN**: The PIN from Settings → Profile → Web Configurator
    - Note: The PIN is only required during initial setup. An API key will be created and used for subsequent authentication.
-4. Access the web interface at `http://<remote-ip>:8088` when docked
+4. Access the web interface at `http://<remote-ip>:9999` when docked
 
 ### Option 2: Run in Docker
 
@@ -190,7 +174,7 @@ You can run the Integration Manager as a Docker container on an external server 
 docker run -d \\
   --name uc-intg-manager \\
   --network host \\
-  -e UC_INTG_MANAGER_HTTP_PORT=8088 \\
+  -e UC_INTG_MANAGER_HTTP_PORT=9999 \\
   -e UC_CONFIG_HOME=/config \\
   -v uc-intg-manager:/config \\
   ghcr.io/jackjpowell/uc-intg-manager:latest
@@ -207,7 +191,7 @@ services:
     container_name: uc-intg-manager
     network_mode: host
     environment:
-      - UC_INTG_MANAGER_HTTP_PORT=8088
+      - UC_INTG_MANAGER_HTTP_PORT=9999
       - UC_CONFIG_HOME=/config
     volumes:
       - ./uc-intg-manager:/config
@@ -218,7 +202,7 @@ services:
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `UC_INTG_MANAGER_HTTP_PORT` | HTTP port for Integration Manager Web Server | `8088` | No|
+| `UC_INTG_MANAGER_HTTP_PORT` | HTTP port for Integration Manager Web Server | `9999` | No|
 | `UC_CONFIG_HOME` | Configuration directory path | `/config` | No |
 | `UC_INTEGRATION_INTERFACE` | Network interface to bind integration API | `0.0.0.0` | No |
 | `UC_INTEGRATION_HTTP_PORT` | HTTP port for integration API | `9090` | No |
@@ -229,7 +213,7 @@ services:
 ### Accessing the Web Interface
 
 1. Ensure your Remote is docked (if running on the Remote itself)
-2. Open a browser and navigate to `http://<remote-ip>:8088`
+2. Open a browser and navigate to `http://<remote-ip>:9999`
 3. That's it!
 
 ### Managing Integrations
@@ -327,7 +311,7 @@ Run the driver:
 python -m intg-manager\driver.py
 ```
 
-Access the web interface at `http://localhost:8088`
+Access the web interface at `http://localhost:9999`
 
 
 ## Contributing
