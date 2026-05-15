@@ -4253,6 +4253,13 @@ async def self_update_inplace():
         im_owner, im_repo = parsed
         asset_pattern = manager_entry.get("asset_pattern")
 
+        # If no explicit asset_pattern in registry, derive one from the repo name.
+        # The release contains two assets (IM driver + bootstrapper) and the
+        # bootstrapper sorts first alphabetically, so without a pattern we'd
+        # accidentally download the bootstrapper tar.gz instead of the IM one.
+        if not asset_pattern:
+            asset_pattern = f"{im_repo}.*\\.tar\\.gz"
+
         _LOG.info(
             "Self-update-inplace: downloading IM %s from %s/%s",
             version,
