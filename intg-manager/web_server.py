@@ -36,6 +36,7 @@ from backup_service import (
 from const import (
     API_DELAY,
     DATA_DIR,
+    LEGACY_WEB_SERVER_PORT,
     MANAGER_DATA_FILE,
     REPO_CACHE_VALIDITY,
     REPO_FETCH_BATCH_INTERVAL,
@@ -46,7 +47,16 @@ from const import (
     UIPreferences,
 )
 from data_migration import migrate as migrate_v1_to_v2
-from quart import Quart, Response, jsonify, render_template, request, send_file, session
+from quart import (
+    Quart,
+    Response,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    session,
+)
 from log_handler import get_log_entries, get_log_handler
 from migration_service import extract_migration_mappings
 from notification_manager import (
@@ -139,6 +149,18 @@ async def _startup_fetch_localization() -> None:
                 _LOG.info("User language set to: %s", _user_language_code)
         except Exception as e:
             _LOG.warning("Failed to fetch localization settings at startup: %s", e)
+
+
+@app.before_request
+async def _redirect_legacy_port() -> Response | None:
+    """When accessed on the legacy port 8088, redirect to the port-moved notice page."""
+    host = request.host  # e.g. "192.168.1.100:8088"
+    if host.endswith(f":{LEGACY_WEB_SERVER_PORT}"):
+        # Allow through: the notice page itself and any static assets it needs
+        if request.path not in ("/port-moved",) and not request.path.startswith(
+            "/static/"
+        ):
+            return redirect("/port-moved", 302)  # ty:ignore[invalid-return-type]
 
 
 def get_active_remote_id() -> str | None:
@@ -297,6 +319,32 @@ _system_update_cache: dict[str, dict] = {}
 def set_system_update_info(remote_id: str, update_info: dict) -> None:
     """Cache system firmware update info for a remote (called from device.py)."""
     _system_update_cache[remote_id] = update_info
+
+
+# Firmware version cache keyed by remote_id (populated at connect time)
+_remote_firmware_versions: dict[str, str] = {}
+
+
+def set_firmware_version(remote_id: str, version: str) -> None:
+    """Store the installed firmware version for a remote (called from device.py)."""
+    _remote_firmware_versions[remote_id] = version
+    _LOG.info("[%s] Firmware version set to %s", remote_id, version)
+
+
+def _supports_inplace_update(remote_id: str | None = None) -> bool:
+    """Return True if the active remote supports in-place integration updates.
+
+    Requires firmware >= 2.9.3 which introduced POST /intg/install?update=true.
+    """
+    if remote_id is None:
+        remote_id = get_active_remote_id()
+    if not remote_id:
+        return False
+    version_str = _remote_firmware_versions.get(remote_id, "0.0.0")
+    try:
+        return Version(version_str) >= Version("2.9.3")
+    except InvalidVersion:
+        return False
 
 
 # Operation lock to prevent concurrent installs/upgrades
@@ -1162,6 +1210,17 @@ async def _can_backup_integration(
 async def health():
     """Simple health check endpoint."""
     return "OK"
+
+
+@app.route("/port-moved")
+async def port_moved():
+    """Inform users that the Integration Manager has moved to a new port."""
+    host = request.host
+    host_without_port = host.split(":")[0]
+    new_url = f"http://{host_without_port}:{WEB_SERVER_PORT}"
+    return await render_template(
+        "port_moved.html", new_url=new_url, new_port=WEB_SERVER_PORT
+    )
 
 
 @app.route("/api/registry")
@@ -2995,6 +3054,221 @@ async def update_driver(driver_id: str):
         _operation_lock_acquired_at = None
 
 
+@app.route("/api/integration/<driver_id>/card")
+async def get_integration_card(driver_id: str):
+    """
+    Return the rendered integration card for a single driver.
+
+    Used by the inplace-update reconnection poller: the card is fetched every
+    few seconds until the integration reconnects.  Once the returned card no
+    longer carries the polling trigger, HTMX stops polling automatically.
+    """
+    remote_id = get_active_remote_id()
+    integrations = await _get_installed_integrations(remote_id)
+    integration = next(
+        (
+            i
+            for i in integrations
+            if i.driver_id == driver_id or i.instance_id == driver_id
+        ),
+        None,
+    )
+    if not integration:
+        return "", 204
+
+    settings = Settings.load(remote_id=remote_id)
+    remote_ip = (
+        _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
+        if _get_active_remote_client()
+        else None
+    )
+
+    reconnecting = integration.state in ("DISCONNECTED", "ERROR")
+    return await render_template(
+        "partials/integration_card.html",
+        integration=integration,
+        settings=settings,
+        remote_ip=remote_ip,
+        reconnecting=reconnecting,
+    )
+
+
+@app.route("/api/integration/<driver_id>/update-inplace", methods=["POST"])
+async def update_integration_inplace(driver_id: str):
+    """
+    Update an integration in-place using the firmware 2.9.3+ update flag.
+
+    Accepts optional 'version' query parameter to install a specific version.
+
+    This is the simplified update path for firmware >= 2.9.3. It calls
+    POST /intg/install?update=true which updates the driver without the
+    backup/delete/restore cycle, preserving all configuration automatically.
+
+    Works for both configured instances (with instance_id) and unconfigured
+    drivers (driver_id only).
+    """
+    global _operation_in_progress, _operation_lock_acquired_at
+
+    if not _get_active_remote_client() or not _github_client:
+        return jsonify({"status": "error", "message": "Service not initialized"}), 500
+
+    _form = await request.form
+    version = request.args.get("version") or _form.get("version")
+
+    if conflict := await _try_acquire_operation_lock(f"update-inplace {driver_id}"):
+        return conflict
+
+    try:
+        remote_id = get_active_remote_id()
+        integrations = await _get_installed_integrations(remote_id)
+        integration = next(
+            (
+                i
+                for i in integrations
+                if i.driver_id == driver_id or i.instance_id == driver_id
+            ),
+            None,
+        )
+
+        # Also search by instance_id (driver_id arg may actually be an instance_id)
+        if not integration:
+            integration = next(
+                (i for i in integrations if i.instance_id == driver_id), None
+            )
+
+        if not integration:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify({"status": "error", "message": "Integration not found"}), 404
+
+        if integration.official:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "Official integrations are managed by firmware updates",
+                }
+            ), 400
+
+        if not integration.home_page or "github.com" not in integration.home_page:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "No GitHub repository found for this integration",
+                }
+            ), 400
+
+        parsed = GitHubClient.parse_github_url(integration.home_page)
+        if not parsed:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {"status": "error", "message": "Could not parse GitHub URL"}
+            ), 400
+
+        owner, repo = parsed
+
+        # Check registry for asset_pattern
+        registry = load_registry()
+        asset_pattern = next(
+            (
+                item.get("asset_pattern")
+                for item in registry
+                if item.get("driver_id") == integration.driver_id
+                or item.get("id") == integration.driver_id
+            ),
+            None,
+        )
+
+        if version:
+            _LOG.info(
+                "In-place updating %s to version %s", integration.driver_id, version
+            )
+            download_result = await _github_client.download_release_asset(
+                owner, repo, asset_pattern=asset_pattern, version=version
+            )
+        else:
+            _LOG.info("In-place updating %s to latest version", integration.driver_id)
+            download_result = await _github_client.download_release_asset(
+                owner, repo, asset_pattern=asset_pattern
+            )
+
+        if not download_result:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {"status": "error", "message": f"No release found for {owner}/{repo}"}
+            ), 404
+
+        archive_data, filename = download_result
+        _LOG.info(
+            "Downloaded %s (%d bytes) for in-place update", filename, len(archive_data)
+        )
+
+        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
+            archive_data, filename
+        )  # ty:ignore[unresolved-attribute]
+        _LOG.info("In-place update of %s completed successfully", integration.driver_id)
+
+        async with _operation_lock:
+            _operation_in_progress = False
+            _LOG.info(
+                "Lock released after in-place update of %s", integration.driver_id
+            )
+
+        # Kick off version cache refresh in the background
+        asyncio.get_event_loop().call_soon(
+            lambda: asyncio.ensure_future(_refresh_version_cache(remote_id))
+        )
+
+        # The integration will be temporarily DISCONNECTED while it restarts.
+        # Render the real card with reconnecting=True so HTMX polls every 1 s
+        # via the attrs injected into the card's outer div.  Once the integration
+        # comes back, /api/integration/<id>/card returns the card without those
+        # attrs and polling stops automatically.
+        settings = Settings.load(remote_id=remote_id)
+        remote_ip = (
+            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
+            if _get_active_remote_client()
+            else None
+        )
+        return await render_template(
+            "partials/integration_card.html",
+            integration=integration,
+            settings=settings,
+            remote_ip=remote_ip,
+            reconnecting=True,
+        )
+
+    except SyncAPIError as e:
+        _LOG.error("In-place update failed for %s: %s", driver_id, e)
+        async with _operation_lock:
+            _operation_in_progress = False
+        error_msg = str(e).replace('"', "&quot;").replace("'", "&#39;")
+        return (
+            f'<span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">'
+            f'<i class="fas fa-exclamation-circle"></i> Failed</span>',
+            500,
+        )
+    except Exception as e:
+        _LOG.error("Unexpected error during in-place update of %s: %s", driver_id, e)
+        async with _operation_lock:
+            _operation_in_progress = False
+            _operation_lock_acquired_at = None
+        error_msg = str(e).replace('"', "&quot;").replace("'", "&#39;")
+        return (
+            f'<span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">'
+            f'<i class="fas fa-exclamation-circle"></i> Failed</span>',
+            500,
+        )
+    finally:
+        _operation_in_progress = False
+        _operation_lock_acquired_at = None
+
+
 @app.route("/api/integration/<driver_id>/update-confirm")
 async def get_update_confirmation(driver_id: str):
     """
@@ -3855,12 +4129,28 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
         filtered_releases = (beta_releases + stable_releases)[:4]
 
         # Determine the install/update URL
-        if is_self_update:
+        # For firmware >= 2.9.3, use the simpler in-place update path for updates
+        use_inplace = _supports_inplace_update(get_active_remote_id())
+
+        if is_self_update and use_inplace:
+            install_url = "/api/self-update-inplace"
+            hx_target = "body"
+            hx_indicator = ""
+        elif is_self_update:
             install_url = "/api/self-update"
             hx_target = "body"
             hx_indicator = ""
+        elif is_update and instance_id and use_inplace:
+            install_url = f"/api/integration/{integration.driver_id}/update-inplace"  # ty:ignore[unresolved-attribute]
+            hx_target = f"#card-{driver_id}"
+            hx_indicator = f"#upgrade-overlay-{driver_id}"
         elif is_update and instance_id:
             install_url = f"/api/integration/{instance_id}/update"
+            hx_target = f"#card-{driver_id}"
+            hx_indicator = f"#upgrade-overlay-{driver_id}"
+        elif is_update and use_inplace:
+            # Driver installed but no instance - still use inplace
+            install_url = f"/api/integration/{driver_id}/update-inplace"
             hx_target = f"#card-{driver_id}"
             hx_indicator = f"#upgrade-overlay-{driver_id}"
         elif is_update:
@@ -3891,6 +4181,125 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
             "partials/modal_version_selector.html",
             error=f"Error loading versions: {str(e)}",
         )
+
+
+@app.route("/api/self-update-inplace", methods=["POST"])
+async def self_update_inplace():
+    """
+    Update Integration Manager in-place using the firmware 2.9.3+ update flag.
+
+    Replaces the complex bootstrapper flow for firmware >= 2.9.3.  The remote's
+    POST /intg/install?update=true preserves the integration's UC_CONFIG_HOME
+    directory, so manager.json and config.json are kept automatically — no
+    serialisation/handoff/restore dance needed.
+
+    Process:
+    1. Validate the target version
+    2. Download the IM release asset from GitHub
+    3. POST it to /intg/install?update=true on the remote
+    4. Return success — the browser JS redirects to /updating, which polls
+       /health and auto-redirects to / once the restarted IM is back up.
+    """
+    if not _get_active_remote_client() or not _github_client:
+        return jsonify({"status": "error", "message": "Service not initialized"}), 500
+
+    form = await request.form
+    version = request.args.get("version") or form.get("version")
+    if not version:
+        return jsonify(
+            {"status": "error", "message": "version parameter is required"}
+        ), 400
+
+    if not version.startswith("v"):
+        version = f"v{version}"
+
+    global _operation_in_progress
+    async with _operation_lock:
+        if _operation_in_progress:
+            return jsonify(
+                {"status": "error", "message": "Another install/upgrade is in progress"}
+            ), 409
+        _operation_in_progress = True
+        _LOG.info("Lock acquired for self-update-inplace to %s", version)
+
+    try:
+        registry = load_registry()
+        manager_entry = next(
+            (item for item in registry if item.get("self_managed", False)),
+            None,
+        )
+        if not manager_entry:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "Self-managed IM entry not found in registry",
+                }
+            ), 404
+
+        manager_repo_url = manager_entry.get("repository", "")
+        parsed = GitHubClient.parse_github_url(manager_repo_url)
+        if not parsed:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "Could not parse Integration Manager GitHub URL",
+                }
+            ), 400
+
+        im_owner, im_repo = parsed
+        asset_pattern = manager_entry.get("asset_pattern")
+
+        _LOG.info(
+            "Self-update-inplace: downloading IM %s from %s/%s",
+            version,
+            im_owner,
+            im_repo,
+        )
+        download_result = await _github_client.download_release_asset(
+            im_owner, im_repo, asset_pattern=asset_pattern, version=version
+        )
+        if not download_result:
+            async with _operation_lock:
+                _operation_in_progress = False
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": f"No IM asset found in release {version} at {im_owner}/{im_repo}",
+                }
+            ), 404
+
+        archive_data, filename = download_result
+        _LOG.info(
+            "Downloaded IM asset %s (%d bytes) — installing in-place",
+            filename,
+            len(archive_data),
+        )
+
+        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
+            archive_data, filename
+        )  # ty:ignore[unresolved-attribute]
+        _LOG.info("Self-update-inplace install sent successfully for %s", version)
+
+        async with _operation_lock:
+            _operation_in_progress = False
+
+        # Return success — the calling JS (same as self-update) redirects to /updating
+        return jsonify({"status": "ok"})
+
+    except SyncAPIError as e:
+        _LOG.error("Self-update-inplace failed (SyncAPIError): %s", e)
+        async with _operation_lock:
+            _operation_in_progress = False
+        return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception as e:
+        _LOG.error("Self-update-inplace failed: %s", e)
+        async with _operation_lock:
+            _operation_in_progress = False
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/self-update", methods=["POST"])
@@ -5538,8 +5947,11 @@ def _get_category_name_map() -> dict[str, str]:
 
 @app.context_processor
 async def inject_sponsors():
-    """Inject sponsors lookup dict into all templates."""
-    return {"sponsors": _get_sponsors()}
+    """Inject sponsors lookup dict and firmware context into all templates."""
+    return {
+        "sponsors": _get_sponsors(),
+        "supports_inplace_update": _supports_inplace_update(),
+    }
 
 
 @app.route("/system-messages")
@@ -6401,9 +6813,17 @@ class WebServer:
 
         self._shutdown_event = _asyncio.Event()
         try:
-            _LOG.info("Creating Hypercorn server on %s:%d", self._host, self._port)
+            _LOG.info(
+                "Creating Hypercorn server on %s:%d (legacy notice on :%d)",
+                self._host,
+                self._port,
+                LEGACY_WEB_SERVER_PORT,
+            )
             config = HypercornConfig()
-            config.bind = [f"{self._host}:{self._port}"]
+            config.bind = [
+                f"{self._host}:{self._port}",
+                f"{self._host}:{LEGACY_WEB_SERVER_PORT}",
+            ]
             config.loglevel = "WARNING"
             _LOG.info("Server configured, starting to serve...")
             loop = _asyncio.new_event_loop()

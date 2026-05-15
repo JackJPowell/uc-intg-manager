@@ -138,7 +138,7 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                 _LOG.info(
                     "Connected to remote: %s (firmware %s)",
                     version_info.get("device_name", "Unknown"),
-                    version_info.get("version", "Unknown"),
+                    version_info.get("os", "Unknown"),
                 )
                 name: str | None = version_info.get("device_name", None)
                 if name is None:

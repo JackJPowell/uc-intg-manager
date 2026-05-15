@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="10; url={{ new_url }}">
+    <title>Integration Manager Has Moved</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    <style>
+        body { background-color: #0f1117; }
+    </style>
+</head>
+<body class="dark bg-gray-950 text-gray-100 min-h-screen flex items-center justify-center p-6">
+    <div class="flex flex-col items-center text-center space-y-8 max-w-lg w-full">
+        <!-- Icon -->
+        <div class="w-20 h-20 bg-blue-500/10 rounded-2xl flex items-center justify-center">
+            <i class="fa-solid fa-plug-circle-exclamation text-4xl text-blue-400"></i>
+        </div>
+
+        <!-- Heading -->
+        <div class="space-y-3">
+            <h1 class="text-2xl font-bold text-white">Integration Manager Has Moved</h1>
+            <p class="text-gray-400">
+                The Integration Manager now runs on port
+                <span class="font-semibold text-gray-200">{{ new_port }}</span>.
+                You will be redirected automatically in a few seconds.
+            </p>
+        </div>
+
+        <!-- Info card -->
+        <div class="w-full rounded-xl border border-gray-700 bg-gray-900 p-6 text-left space-y-3">
+            <div class="flex items-start gap-3">
+                <i class="fa-solid fa-circle-info text-blue-400 mt-0.5 flex-shrink-0"></i>
+                <div class="text-sm text-gray-400">
+                    <p>This port (8088) now only serves this notice.</p>
+                    <p class="mt-2">The Integration Manager is available at:</p>
+                    <a href="{{ new_url }}"
+                       class="mt-1 inline-block font-mono text-blue-400 hover:text-blue-300 underline break-all">
+                        {{ new_url }}
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA button -->
+        <a href="{{ new_url }}"
+           class="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors shadow-lg">
+            <i class="fa-solid fa-arrow-right"></i>
+            Go to Integration Manager
+        </a>
+    </div>
+</body>
+</html>

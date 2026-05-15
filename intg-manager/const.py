@@ -327,8 +327,11 @@ class RemoteConfig:
         )
 
 
-# Web server port - read from environment variable or default to 8088
-WEB_SERVER_PORT = int(os.environ.get("UC_INTG_MANAGER_HTTP_PORT", "8088"))
+# Web server port - read from environment variable or default to 9999
+WEB_SERVER_PORT = int(os.environ.get("UC_INTG_MANAGER_HTTP_PORT", "9999"))
+
+# Legacy port kept open to serve a migration notice page
+LEGACY_WEB_SERVER_PORT = 8088
 
 # Known integrations registry URL
 # Override with UC_KNOWN_INTEGRATIONS_URL env var or local registry.json for development:

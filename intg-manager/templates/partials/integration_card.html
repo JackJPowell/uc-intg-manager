@@ -4,7 +4,12 @@
      data-description="{{ integration.description }}"
      data-developer="{{ integration.developer }}"
      data-status="{{ integration.state|lower }}"
-     data-has-update="{{ 'true' if integration.update_available else 'false' }}">
+     data-has-update="{{ 'true' if integration.update_available else 'false' }}"
+     {% if reconnecting %}
+     hx-get="/api/integration/{{ integration.driver_id }}/card"
+     hx-trigger="every 1s"
+     hx-swap="outerHTML"
+     {% endif %}>
     
     <!-- Card Header: Title left, Badges right -->
     <div class="flex items-start justify-between gap-2 mb-3">
@@ -223,7 +228,19 @@
             <!-- Split button: Main action + Dropdown for alternative -->
             <div class="relative inline-flex rounded-lg shadow-sm">
                 <!-- Main Update Button -->
-                {% if integration.can_auto_update %}
+                {% if supports_inplace_update %}
+                {# Firmware >= 2.9.3: in-place update, preserves config with no backup/restore needed #}
+                <button 
+                    class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
+                    hx-post="/api/integration/{{ integration.driver_id }}/update-inplace?version={{ integration.latest_version }}"
+                    hx-target="#card-{{ integration.driver_id }}"
+                    hx-swap="outerHTML"
+                    hx-indicator="#upgrade-overlay-{{ integration.driver_id }}"
+                    title="Update to {{ integration.latest_version }} (in-place, configuration preserved)">
+                    <i class="fa-solid fa-upload h-4 w-4 mr-1"></i>
+                    {{ integration.latest_version }}
+                </button>
+                {% elif integration.can_auto_update %}
                 {# Can do automated backup/restore - direct update #}
                 <button 
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
@@ -489,7 +506,7 @@
             <div class="relative inline-flex rounded-lg shadow-sm">
                 <button
                     class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-semibold rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
-                    hx-post="/api/self-update?version={{ integration.latest_version }}"
+                    hx-post="{% if supports_inplace_update %}/api/self-update-inplace{% else %}/api/self-update{% endif %}?version={{ integration.latest_version }}"
                     hx-swap="none"
                     hx-on::before-request="document.getElementById('upgrade-overlay-{{ integration.driver_id }}').classList.remove('hidden');"
                     hx-on::after-request="if(event.detail.successful) window.location.href='/updating?version={{ integration.latest_version }}'; else document.getElementById('upgrade-overlay-{{ integration.driver_id }}').classList.add('hidden');"

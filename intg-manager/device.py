@@ -25,7 +25,12 @@ from const import (
     MANAGER_DATA_FILE,
 )
 from remote_api import RemoteAPIClient, RemoteAPIError
-from web_server import WebServer, set_system_update_info, set_remote_online
+from web_server import (
+    WebServer,
+    set_firmware_version,
+    set_system_update_info,
+    set_remote_online,
+)
 from ucapi_framework import BaseConfigManager, PollingDevice, BaseIntegrationDriver
 from notification_manager import get_notification_manager as _get_nm
 
@@ -248,6 +253,16 @@ class IntegrationManagerDevice(PollingDevice):
                 self._connected = True
                 set_remote_online(self.identifier, True)
                 _LOG.info("[%s] Connected to remote", self.log_id)
+
+                # Fetch and cache firmware version for inplace-update capability checks
+                try:
+                    fw_version = await self._client.get_firmware_version()
+                    set_firmware_version(self.identifier, fw_version)
+                    _LOG.info("[%s] Firmware version: %s", self.log_id, fw_version)
+                except Exception as e:
+                    _LOG.warning(
+                        "[%s] Could not fetch firmware version: %s", self.log_id, e
+                    )
 
                 # Check if we're running in external mode
                 # UC_CONFIG_HOME is set by the UC Remote when running as an integration
