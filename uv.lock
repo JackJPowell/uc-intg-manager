@@ -706,7 +706,7 @@ wheels = [
 
 [[package]]
 name = "uc-intg-manager"
-version = "1.7.3"
+version = "1.7.4"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
