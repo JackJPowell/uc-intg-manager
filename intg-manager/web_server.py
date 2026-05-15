@@ -5002,7 +5002,7 @@ async def get_status_html():
         is_docked = await _get_active_remote_client().is_docked()  # ty:ignore[unresolved-attribute]
         docked_badge = (
             '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-700 dark:bg-green-500/20 text-white dark:text-green-300">'
-            '<i class="fa-regular fa-charging-station mr-1.5"></i>Docked</span>'
+            '<i class="fa-solid fa-charging-station mr-1.5"></i>Docked</span>'
             if is_docked
             else '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-700 dark:bg-yellow-500/20 text-white dark:text-yellow-300">'
             '<i class="fa-regular fa-battery-half mr-1.5"></i>On Battery</span>'
