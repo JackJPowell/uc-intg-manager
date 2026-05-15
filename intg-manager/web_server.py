@@ -152,7 +152,7 @@ async def _startup_fetch_localization() -> None:
 
 
 @app.before_request
-async def _redirect_legacy_port() -> None:
+async def _redirect_legacy_port() -> Response | None:
     """When accessed on the legacy port 8088, redirect to the port-moved notice page."""
     host = request.host  # e.g. "192.168.1.100:8088"
     if host.endswith(f":{LEGACY_WEB_SERVER_PORT}"):
@@ -160,7 +160,7 @@ async def _redirect_legacy_port() -> None:
         if request.path not in ("/port-moved",) and not request.path.startswith(
             "/static/"
         ):
-            return redirect("/port-moved", 302)
+            return redirect("/port-moved", 302)  # ty:ignore[invalid-return-type]
 
 
 def get_active_remote_id() -> str | None:
@@ -3083,39 +3083,14 @@ async def get_integration_card(driver_id: str):
         else None
     )
 
-    # If still disconnected, return the polling skeleton so HTMX keeps retrying
-    if integration.state in ("DISCONNECTED", "ERROR"):
-        return _reconnecting_card_html(driver_id, integration.name)
-
+    reconnecting = integration.state in ("DISCONNECTED", "ERROR")
     return await render_template(
         "partials/integration_card.html",
         integration=integration,
         settings=settings,
         remote_ip=remote_ip,
+        reconnecting=reconnecting,
     )
-
-
-def _reconnecting_card_html(driver_id: str, name: str) -> str:
-    """Return a minimal placeholder card that polls itself every 3 seconds via HTMX."""
-    return f"""<div id="card-{driver_id}"
-     class="integration-card relative bg-uc-light-card dark:bg-uc-card rounded-xl p-3 sm:p-5 border border-uc-light-border dark:border-uc-border"
-     hx-get="/api/integration/{driver_id}/card"
-     hx-trigger="every 3s"
-     hx-target="#card-{driver_id}"
-     hx-swap="outerHTML">
-  <div class="flex items-center gap-4">
-    <div class="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 bg-yellow-600/20 dark:bg-yellow-500/10 rounded-xl flex items-center justify-center">
-      <i class="fa-solid fa-puzzle-piece text-yellow-500" style="font-size: 1.25rem;"></i>
-    </div>
-    <div class="min-w-0 flex-1">
-      <p class="text-sm font-semibold text-gray-900 dark:text-white truncate">{name}</p>
-      <span class="inline-flex items-center gap-1.5 text-xs text-yellow-500">
-        <span class="inline-block w-2 h-2 rounded-full border border-yellow-400 border-t-transparent animate-spin"></span>
-        Reconnecting&hellip;
-      </span>
-    </div>
-  </div>
-</div>"""
 
 
 @app.route("/api/integration/<driver_id>/update-inplace", methods=["POST"])
@@ -3233,7 +3208,7 @@ async def update_integration_inplace(driver_id: str):
             "Downloaded %s (%d bytes) for in-place update", filename, len(archive_data)
         )
 
-        await _get_active_remote_client().install_integration_inplace(
+        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
             archive_data, filename
         )  # ty:ignore[unresolved-attribute]
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
@@ -3250,12 +3225,23 @@ async def update_integration_inplace(driver_id: str):
         )
 
         # The integration will be temporarily DISCONNECTED while it restarts.
-        # Return a reconnecting placeholder card that polls itself every 3 s via
-        # HTMX.  Once the integration comes back online, /api/integration/<id>/card
-        # will return the real card (without the polling trigger) and HTMX will
-        # swap it in, ending the poll loop automatically.
-        integration_name = integration.name
-        return _reconnecting_card_html(integration.driver_id, integration_name)
+        # Render the real card with reconnecting=True so HTMX polls every 1 s
+        # via the attrs injected into the card's outer div.  Once the integration
+        # comes back, /api/integration/<id>/card returns the card without those
+        # attrs and polling stops automatically.
+        settings = Settings.load(remote_id=remote_id)
+        remote_ip = (
+            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
+            if _get_active_remote_client()
+            else None
+        )
+        return await render_template(
+            "partials/integration_card.html",
+            integration=integration,
+            settings=settings,
+            remote_ip=remote_ip,
+            reconnecting=True,
+        )
 
     except SyncAPIError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
@@ -4155,7 +4141,7 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
             hx_target = "body"
             hx_indicator = ""
         elif is_update and instance_id and use_inplace:
-            install_url = f"/api/integration/{integration.driver_id}/update-inplace"
+            install_url = f"/api/integration/{integration.driver_id}/update-inplace"  # ty:ignore[unresolved-attribute]
             hx_target = f"#card-{driver_id}"
             hx_indicator = f"#upgrade-overlay-{driver_id}"
         elif is_update and instance_id:
@@ -4246,7 +4232,10 @@ async def self_update_inplace():
             async with _operation_lock:
                 _operation_in_progress = False
             return jsonify(
-                {"status": "error", "message": "Self-managed IM entry not found in registry"}
+                {
+                    "status": "error",
+                    "message": "Self-managed IM entry not found in registry",
+                }
             ), 404
 
         manager_repo_url = manager_entry.get("repository", "")
@@ -4255,14 +4244,20 @@ async def self_update_inplace():
             async with _operation_lock:
                 _operation_in_progress = False
             return jsonify(
-                {"status": "error", "message": "Could not parse Integration Manager GitHub URL"}
+                {
+                    "status": "error",
+                    "message": "Could not parse Integration Manager GitHub URL",
+                }
             ), 400
 
         im_owner, im_repo = parsed
         asset_pattern = manager_entry.get("asset_pattern")
 
         _LOG.info(
-            "Self-update-inplace: downloading IM %s from %s/%s", version, im_owner, im_repo
+            "Self-update-inplace: downloading IM %s from %s/%s",
+            version,
+            im_owner,
+            im_repo,
         )
         download_result = await _github_client.download_release_asset(
             im_owner, im_repo, asset_pattern=asset_pattern, version=version
@@ -4279,10 +4274,14 @@ async def self_update_inplace():
 
         archive_data, filename = download_result
         _LOG.info(
-            "Downloaded IM asset %s (%d bytes) — installing in-place", filename, len(archive_data)
+            "Downloaded IM asset %s (%d bytes) — installing in-place",
+            filename,
+            len(archive_data),
         )
 
-        await _get_active_remote_client().install_integration_inplace(archive_data, filename)  # ty:ignore[unresolved-attribute]
+        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
+            archive_data, filename
+        )  # ty:ignore[unresolved-attribute]
         _LOG.info("Self-update-inplace install sent successfully for %s", version)
 
         async with _operation_lock:
