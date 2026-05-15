@@ -11,6 +11,18 @@ _Changes in the next release_
 
 ---
 
+## v2.0.0 - 2025-05-15
+
+### Changes
+
+- The webserver port is changing. If you navigate to 8088 the remote will present a splash screen notifying you of the new port `9999` and will redirect you after 10 seconds. If you have any bookmarks or saved links, please update them after the redirect occurs.
+
+### Added
+
+- If you are running firmware 2.9.3 or later, all integrations can be updated in place! If you are running a version less than 2.9.3, functionality will remain for now but will be removed eventually.
+
+---
+
 ## v1.7.4 - 2025-05-12
 
 ### Fixed
