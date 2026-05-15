@@ -42,7 +42,7 @@
                        hx-swap="innerHTML"
                        hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
                        onclick="event.preventDefault();"
-                       class="hover:text-uc-primary transition-colors cursor-pointer" 
+                       class="hover:text-uc-primary dark:hover:text-gray-300 transition-colors cursor-pointer" 
                        title="View release notes for v{{ integration.version }}">
                         v{{ integration.version }}
                     </a>
@@ -219,7 +219,7 @@
                hx-swap="innerHTML"
                hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
                onclick="event.preventDefault();"
-               class="text-xs text-gray-400 hover:text-uc-primary transition-colors cursor-pointer" 
+               class="text-xs text-gray-400 hover:text-uc-primary dark:hover:text-gray-300 transition-colors cursor-pointer" 
                title="View release notes for v{{ integration.version }}">
                 v{{ integration.version }}
             </a>

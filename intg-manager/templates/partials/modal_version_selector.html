@@ -40,7 +40,7 @@
                 hx-target="{{ hx_target }}"
                 {% if is_self_update %}hx-swap="none" hx-on::after-request="if(event.detail.successful){ window.location.href='/updating?version={{ release.tag_name }}'; } else { closeModal(); }"{% else %}hx-swap="outerHTML"{% endif %}
                 {% if not is_self_update %}hx-indicator="{{ hx_indicator }}"{% endif %}
-                hx-on::before-request="closeModal(); {% if is_self_update %}var ov=document.querySelector('[id^=upgrade-overlay-]'); if(ov) ov.classList.remove('hidden');{% endif %}"
+                hx-on::before-request="closeModal(); {% if is_self_update %}var ov=document.getElementById('upgrade-overlay-{{ driver_id }}'); if(ov) ov.classList.remove('hidden');{% endif %}"
                 title="{% if is_self_update %}Update Integration Manager to{% else %}Install{% endif %} {{ release.tag_name }}">
                 
                 <div class="flex items-start justify-between gap-3">

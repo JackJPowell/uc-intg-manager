@@ -13,7 +13,11 @@
     <div class="text-center space-y-3">
         <h2 class="text-2xl font-bold text-gray-900 dark:text-white">Updating Integration Manager</h2>
         <p class="text-gray-500 dark:text-gray-400 max-w-md">
+            {% if inplace %}
+            The new version is being downloaded and installed. Integration Manager will restart automatically.
+            {% else %}
             The bootstrapper is installing the new version. Integration Manager will restart automatically.
+            {% endif %}
             <br>This page will reload when it's ready.
         </p>
         {% if target_version %}
@@ -25,6 +29,20 @@
 
     <!-- Progress steps -->
     <div class="bg-uc-light-card dark:bg-uc-card rounded-xl border border-uc-light-border dark:border-uc-border p-6 w-full max-w-md space-y-3">
+        {% if inplace %}
+        <div class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
+            <i class="fa-solid fa-circle-check text-green-400 w-4"></i>
+            Update triggered
+        </div>
+        <div class="flex items-center gap-3 text-sm text-gray-400">
+            <span class="inline-block w-4 h-4 rounded-full border-2 border-yellow-400 border-t-transparent animate-spin flex-shrink-0"></span>
+            Downloading &amp; installing new version…
+        </div>
+        <div class="flex items-center gap-3 text-sm text-gray-400">
+            <i class="fa-regular fa-circle w-4 text-center"></i>
+            Waiting for Integration Manager to restart
+        </div>
+        {% else %}
         <div class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
             <i class="fa-solid fa-circle-check text-green-400 w-4"></i>
             Bootstrapper installed
@@ -41,19 +59,25 @@
             <i class="fa-regular fa-circle w-4 text-center"></i>
             Waiting for Integration Manager to restart
         </div>
+        {% endif %}
     </div>
 
-    <!-- Live ping status: waits 15s for bootstrapper to uninstall old IM, then polls every 3s -->
+    <!-- Live ping status -->
     <div id="ping-target" class="hidden"></div>
 
-    <!-- Fallback manual link shown after 60 s -->
+    <!-- Fallback manual link shown after 90 s -->
     <p id="fallback-msg" class="hidden text-sm text-gray-500 dark:text-gray-400 text-center">
         Taking longer than expected?
         <a href="/" class="text-uc-primary hover:underline">Click here to go to the dashboard</a>
     </p>
 
     <script>
-        // Wait 15s before starting to poll (bootstrapper needs time to uninstall old IM)
+        // For inplace updates /health returns "UPDATING" while the download is in
+        // flight, so we can start polling immediately — no need to wait for the old
+        // IM to be torn down first.  For the bootstrapper flow we wait 15 s to let
+        // the bootstrapper uninstall the old IM before polling begins.
+        var pollDelay = {{ 'true' if inplace else 'false' }} ? 3000 : 15000;
+
         setTimeout(function() {
             var el = document.getElementById('ping-target');
             if (!el) return;
@@ -63,13 +87,13 @@
             el.setAttribute('hx-on::after-request',
                 "if(event.detail.xhr.status === 200 && event.detail.xhr.responseText.trim() === 'OK') { window.location.href = '/'; }");
             htmx.process(el);
-        }, 15000);
+        }, pollDelay);
 
-        // Show fallback link after 60 seconds in case something went wrong
+        // Show fallback link after 90 seconds in case something went wrong
         setTimeout(function() {
             var msg = document.getElementById('fallback-msg');
             if (msg) msg.classList.remove('hidden');
-        }, 60000);
+        }, 90000);
     </script>
 </div>
 {% endblock %}

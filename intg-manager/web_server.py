@@ -353,6 +353,10 @@ _operation_in_progress: bool = False
 _operation_lock_acquired_at: float | None = None
 _operation_lock = asyncio.Lock()
 
+# Set to True while a self-update-inplace is in flight so /health returns
+# "UPDATING" (not "OK"), preventing /updating from redirecting prematurely.
+_self_update_pending: bool = False
+
 
 async def _try_acquire_operation_lock(operation_name: str):
     """Acquire the operation lock.
@@ -1209,6 +1213,8 @@ async def _can_backup_integration(
 @app.route("/health")
 async def health():
     """Simple health check endpoint."""
+    if _self_update_pending:
+        return "UPDATING"
     return "OK"
 
 
@@ -1255,7 +1261,10 @@ async def available_page():
 async def updating_page():
     """Render the self-update waiting page."""
     target_version = request.args.get("version", "")
-    return await render_template("updating.html", target_version=target_version)
+    inplace = request.args.get("inplace", "").lower() in ("true", "1", "yes")
+    return await render_template(
+        "updating.html", target_version=target_version, inplace=inplace
+    )
 
 
 # =============================================================================
@@ -4183,6 +4192,61 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
         )
 
 
+async def _do_self_update_inplace(
+    im_owner: str, im_repo: str, asset_pattern: str, version: str
+) -> None:
+    """Background task: download the IM release asset and install it in-place.
+
+    Sets _self_update_pending = True for the duration so /health returns
+    "UPDATING".  On success the flag stays True until the IM process is
+    killed by the remote restart (the new process starts with it False).
+    On failure the flag is cleared so /health resumes returning "OK".
+    """
+    global _self_update_pending, _operation_in_progress
+    try:
+        _LOG.info(
+            "Self-update-inplace background: downloading IM %s from %s/%s",
+            version,
+            im_owner,
+            im_repo,
+        )
+        download_result = await _github_client.download_release_asset(  # ty:ignore[unresolved-attribute]
+            im_owner, im_repo, asset_pattern=asset_pattern, version=version
+        )
+        if not download_result:
+            _LOG.error(
+                "Self-update-inplace: no asset found for %s in %s/%s",
+                version,
+                im_owner,
+                im_repo,
+            )
+            _self_update_pending = False
+            return
+
+        archive_data, filename = download_result
+        _LOG.info(
+            "Self-update-inplace: downloaded %s (%d bytes) — sending install",
+            filename,
+            len(archive_data),
+        )
+
+        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
+            archive_data, filename
+        )
+        # Install accepted — remote will restart IM.  Keep _self_update_pending
+        # True so /health returns "UPDATING" until the new IM process takes over.
+        _LOG.info(
+            "Self-update-inplace: install sent for %s, awaiting IM restart", version
+        )
+    except Exception as e:
+        _LOG.error("Self-update-inplace background task failed: %s", e)
+        # Clear flag so /health goes back to "OK" and /updating can navigate away
+        _self_update_pending = False
+    finally:
+        async with _operation_lock:
+            _operation_in_progress = False
+
+
 @app.route("/api/self-update-inplace", methods=["POST"])
 async def self_update_inplace():
     """
@@ -4193,13 +4257,13 @@ async def self_update_inplace():
     directory, so manager.json and config.json are kept automatically — no
     serialisation/handoff/restore dance needed.
 
-    Process:
-    1. Validate the target version
-    2. Download the IM release asset from GitHub
-    3. POST it to /intg/install?update=true on the remote
-    4. Return success — the browser JS redirects to /updating, which polls
-       /health and auto-redirects to / once the restarted IM is back up.
+    Returns HX-Redirect to /updating immediately after queuing the background
+    download+install task so the browser navigates away before the IM process
+    is restarted by the remote.  /health returns "UPDATING" while the task is
+    in flight, preventing /updating from redirecting back to / prematurely.
     """
+    global _operation_in_progress, _self_update_pending
+
     if not _get_active_remote_client() or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
@@ -4213,100 +4277,62 @@ async def self_update_inplace():
     if not version.startswith("v"):
         version = f"v{version}"
 
-    global _operation_in_progress
     async with _operation_lock:
         if _operation_in_progress:
             return jsonify(
                 {"status": "error", "message": "Another install/upgrade is in progress"}
             ), 409
         _operation_in_progress = True
-        _LOG.info("Lock acquired for self-update-inplace to %s", version)
 
-    try:
-        registry = load_registry()
-        manager_entry = next(
-            (item for item in registry if item.get("self_managed", False)),
-            None,
-        )
-        if not manager_entry:
-            async with _operation_lock:
-                _operation_in_progress = False
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Self-managed IM entry not found in registry",
-                }
-            ), 404
-
-        manager_repo_url = manager_entry.get("repository", "")
-        parsed = GitHubClient.parse_github_url(manager_repo_url)
-        if not parsed:
-            async with _operation_lock:
-                _operation_in_progress = False
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Could not parse Integration Manager GitHub URL",
-                }
-            ), 400
-
-        im_owner, im_repo = parsed
-        asset_pattern = manager_entry.get("asset_pattern")
-
-        # If no explicit asset_pattern in registry, derive one from the repo name.
-        # The release contains two assets (IM driver + bootstrapper) and the
-        # bootstrapper sorts first alphabetically, so without a pattern we'd
-        # accidentally download the bootstrapper tar.gz instead of the IM one.
-        if not asset_pattern:
-            asset_pattern = f"{im_repo}.*\\.tar\\.gz"
-
-        _LOG.info(
-            "Self-update-inplace: downloading IM %s from %s/%s",
-            version,
-            im_owner,
-            im_repo,
-        )
-        download_result = await _github_client.download_release_asset(
-            im_owner, im_repo, asset_pattern=asset_pattern, version=version
-        )
-        if not download_result:
-            async with _operation_lock:
-                _operation_in_progress = False
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": f"No IM asset found in release {version} at {im_owner}/{im_repo}",
-                }
-            ), 404
-
-        archive_data, filename = download_result
-        _LOG.info(
-            "Downloaded IM asset %s (%d bytes) — installing in-place",
-            filename,
-            len(archive_data),
-        )
-
-        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
-            archive_data, filename
-        )  # ty:ignore[unresolved-attribute]
-        _LOG.info("Self-update-inplace install sent successfully for %s", version)
-
+    registry = load_registry()
+    manager_entry = next(
+        (item for item in registry if item.get("self_managed", False)),
+        None,
+    )
+    if not manager_entry:
         async with _operation_lock:
             _operation_in_progress = False
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Self-managed IM entry not found in registry",
+            }
+        ), 404
 
-        # Return success — the calling JS (same as self-update) redirects to /updating
-        return jsonify({"status": "ok"})
-
-    except SyncAPIError as e:
-        _LOG.error("Self-update-inplace failed (SyncAPIError): %s", e)
+    manager_repo_url = manager_entry.get("repository", "")
+    parsed = GitHubClient.parse_github_url(manager_repo_url)
+    if not parsed:
         async with _operation_lock:
             _operation_in_progress = False
-        return jsonify({"status": "error", "message": str(e)}), 500
-    except Exception as e:
-        _LOG.error("Self-update-inplace failed: %s", e)
-        async with _operation_lock:
-            _operation_in_progress = False
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Could not parse Integration Manager GitHub URL",
+            }
+        ), 400
+
+    im_owner, im_repo = parsed
+    asset_pattern = manager_entry.get("asset_pattern")
+
+    # Derive pattern from repo name when not set explicitly in the registry.
+    # The release contains both the IM driver and bootstrapper tar.gz; the
+    # bootstrapper sorts first alphabetically so without a pattern we'd pick
+    # the wrong asset.
+    if not asset_pattern:
+        asset_pattern = f"{im_repo}.*\\.tar\\.gz"
+
+    # Signal to /health that an update is in flight before we hand off to the
+    # background task, so the browser lands on /updating and waits correctly.
+    _self_update_pending = True
+    _LOG.info("Self-update-inplace: queuing background task for %s", version)
+    asyncio.create_task(
+        _do_self_update_inplace(im_owner, im_repo, asset_pattern, version)
+    )
+
+    clean_version = version.lstrip("v")
+    return Response(
+        "", headers={"HX-Redirect": f"/updating?version={clean_version}&inplace=true"}
+    )
 
 
 @app.route("/api/self-update", methods=["POST"])
