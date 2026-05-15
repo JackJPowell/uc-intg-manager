@@ -217,7 +217,7 @@
                 <div class="relative inline-flex rounded-lg shadow-sm">
                     <button
                         class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
-                        hx-post="/api/self-update?version={{ integration.latest_version }}"
+                        hx-post="{% if supports_inplace_update %}/api/self-update-inplace{% else %}/api/self-update{% endif %}?version={{ integration.latest_version }}"
                         hx-swap="none"
                         hx-on::before-request="document.querySelector('[id^=upgrade-overlay-]') && document.querySelector('[id^=upgrade-overlay-]').classList.remove('hidden');"
                         hx-on::after-request="if(event.detail.successful) window.location.href='/updating?version={{ integration.latest_version }}'; else { var ov=document.querySelector('[id^=upgrade-overlay-]'); if(ov) ov.classList.add('hidden'); }"
@@ -301,7 +301,19 @@
                 {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
                 <div class="relative inline-flex rounded-lg shadow-sm">
                     <!-- Main Update Button -->
-                    {% if integration.can_auto_update %}
+                    {% if supports_inplace_update %}
+                    {# Firmware >= 2.9.3: in-place update, no backup/restore needed #}
+                    <button 
+                        class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
+                        hx-post="/api/integration/{{ integration.driver_id }}/update-inplace?version={{ integration.latest_version }}"
+                        hx-target="#card-{{ integration.driver_id }}"
+                        hx-swap="outerHTML"
+                        hx-indicator="#overlay-{{ integration.driver_id }}"
+                        title="Update to {{ integration.latest_version }} (in-place, configuration preserved)">
+                        <i class="fa-solid fa-upload h-3 w-3 mr-1"></i>
+                        {{ integration.latest_version }}
+                    </button>
+                    {% elif integration.can_auto_update %}
                     {# Can do automated backup/restore - direct update #}
                     <button 
                         class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-xs font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"

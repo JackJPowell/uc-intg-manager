@@ -119,6 +119,16 @@ class RemoteAPIClient:
         except aiohttp.ClientError as e:
             raise RemoteAPIError(f"Connection error: {e}") from e
 
+    async def get_firmware_version(self) -> str:
+        """Return the installed firmware version string, or '0.0.0' on failure."""
+        try:
+            result = await self._request("GET", "/pub/version")
+            if result and isinstance(result, dict):
+                return result.get("os", "0.0.0")
+        except RemoteAPIError:
+            pass
+        return "0.0.0"
+
     async def get_integration_instances(self) -> list[dict[str, Any]]:
         """
         Get list of installed integration instances.

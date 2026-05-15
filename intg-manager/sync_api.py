@@ -357,6 +357,16 @@ class RemoteClient:
             _LOG.error("Failed to delete driver %s: %s", driver_id, e)
             raise
 
+    async def get_firmware_version(self) -> str:
+        """Return the installed firmware version string, or '0.0.0' on failure."""
+        try:
+            result = await self._request("GET", "/pub/version", timeout=CONNECT_TIMEOUT)
+            if result and isinstance(result, dict):
+                return result.get("os", "0.0.0")
+        except SyncAPIError:
+            pass
+        return "0.0.0"
+
     async def install_integration(
         self, archive_data: bytes, filename: str
     ) -> dict[str, Any]:
@@ -390,6 +400,46 @@ class RemoteClient:
                     return {"status": "ok"}
             except aiohttp.ClientError as e:
                 raise SyncAPIError(f"Install request failed: {e}") from e
+
+    async def install_integration_inplace(
+        self, archive_data: bytes, filename: str
+    ) -> dict[str, Any]:
+        """Update an integration in-place using the firmware 2.9.3+ update flag.
+
+        Calls POST /intg/install?update=true which updates the driver without
+        the backup/delete/restore cycle, preserving all configuration.
+        """
+        url = f"{self._base_url}/intg/install"
+        install_timeout = aiohttp.ClientTimeout(connect=30, total=150)
+        async with self._make_session(install_timeout) as session:
+            try:
+                form = aiohttp.FormData()
+                form.add_field(
+                    "file",
+                    archive_data,
+                    filename=filename,
+                    content_type="application/x-gzip",
+                )
+                async with session.post(
+                    url, params={"update": "true"}, data=form
+                ) as response:
+                    if response.status == 401:
+                        raise SyncAPIError(
+                            "Authentication failed. Check PIN or API key."
+                        )
+                    if response.status == 403:
+                        raise SyncAPIError("Access forbidden. PIN may have changed.")
+                    if response.status >= 400:
+                        text = await response.text()
+                        raise SyncAPIError(
+                            f"In-place update failed: {response.status} - {text}"
+                        )
+                    text = await response.text()
+                    if text:
+                        return await response.json(content_type=None)
+                    return {"status": "ok"}
+            except aiohttp.ClientError as e:
+                raise SyncAPIError(f"In-place update request failed: {e}") from e
 
     async def start_setup(
         self, driver_id: str, reconfigure: bool = True
