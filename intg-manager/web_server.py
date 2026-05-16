@@ -727,6 +727,11 @@ async def _get_installed_integrations(
         supports_backup = registry_item.get("supports_backup", False)
         self_managed = registry_item.get("self_managed", False)
 
+        # Prefer registry author so sponsor lookup (keyed by developers[].name) matches.
+        # Driver metadata may report a different name format than the registry.
+        if registry_item.get("author"):
+            developer = registry_item["author"]
+
         if not home_page and registry_item.get("repository"):
             home_page: str = registry_item.get("repository", "")
         # Also use registry if driver home_page doesn't have github.com
@@ -855,6 +860,10 @@ async def _get_installed_integrations(
         # Use fuzzy matching since driver_id may not match registry id exactly
         registry_item = find_registry_item(driver_id, driver_name)
         supports_backup = registry_item.get("supports_backup", False)
+
+        # Prefer registry author so sponsor lookup (keyed by developers[].name) matches.
+        if registry_item.get("author"):
+            developer = registry_item["author"]
 
         # Use registry repository as fallback for home_page
         if not home_page and registry_item.get("repository"):
