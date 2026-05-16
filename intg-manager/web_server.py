@@ -307,10 +307,18 @@ def _get_localized_name(
     return fallback
 
 
-# Cached version data for integrations
-_cached_version_data: dict = {}
-_version_check_timestamp: str | None = None
-_cached_driver_ids: set = set()  # Track installed driver IDs to detect changes
+# Cached version data for integrations, keyed by remote_id.
+_cached_version_data: dict[str, dict] = {}
+_version_check_timestamp: dict[str, str] = {}
+_cached_driver_ids: dict[str, set] = {}  # remote_id -> installed driver IDs
+
+
+def _get_version_cache(remote_id: str | None) -> dict:
+    """Return version cache dict for given remote (empty dict if none)."""
+    if not remote_id:
+        return {}
+    return _cached_version_data.get(remote_id, {})
+
 
 # System update info cache keyed by remote_id
 _system_update_cache: dict[str, dict] = {}
@@ -523,13 +531,11 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
 
     :param remote_id: Remote identifier to refresh cache for (uses active if None)
     """
-    global _cached_version_data, _version_check_timestamp, _cached_driver_ids
-
     if remote_id is None:
         remote_id = get_active_remote_id()
 
     client = _remote_clients.get(remote_id) if remote_id else None
-    if not client or not _github_client:
+    if not client or not _github_client or not remote_id:
         return
 
     try:
@@ -612,11 +618,15 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
                     "Failed to check version for %s: %s", integration.driver_id, e
                 )
 
-        _cached_version_data = version_updates
-        _version_check_timestamp = datetime.now().isoformat()
-        _cached_driver_ids = current_driver_ids
+        _cached_version_data[remote_id] = version_updates
+        _version_check_timestamp[remote_id] = datetime.now().isoformat()
+        _cached_driver_ids[remote_id] = current_driver_ids
 
-        _LOG.info("Version cache refreshed: %d integrations", len(version_updates))
+        _LOG.info(
+            "[%s] Version cache refreshed: %d integrations",
+            remote_id,
+            len(version_updates),
+        )
     except Exception as e:
         _LOG.error("Failed to refresh version cache: %s", e)
 
@@ -768,8 +778,9 @@ async def _get_installed_integrations(
 
         # Check for updates using cached version data from background checks
         # This ensures consistent version info regardless of when page is loaded
-        if is_custom and driver_id in _cached_version_data:
-            version_info = _cached_version_data[driver_id]
+        _remote_cache = _get_version_cache(remote_id)
+        if is_custom and driver_id in _remote_cache:
+            version_info = _remote_cache[driver_id]
             if version_info.get("has_update"):
                 # Always mark that an update is available (for badge display)
                 info.update_available = True
@@ -900,8 +911,9 @@ async def _get_installed_integrations(
         )
 
         # Check for updates using cached version data (for unconfigured drivers too)
-        if is_custom and driver_id in _cached_version_data:
-            version_info = _cached_version_data[driver_id]
+        _remote_cache = _get_version_cache(remote_id)
+        if is_custom and driver_id in _remote_cache:
+            version_info = _remote_cache[driver_id]
             if version_info.get("has_update"):
                 # Always mark that an update is available (for badge display)
                 info.update_available = True
@@ -1029,6 +1041,7 @@ async def _get_available_integrations(
         return (False, False, False, "", "", "")
 
     available = []
+    _remote_cache = _get_version_cache(remote_id)
     for item in registry:
         # Derive official status from custom field (official = not custom)
         is_official = not item.get("custom", True)
@@ -1056,8 +1069,8 @@ async def _get_available_integrations(
 
         if is_installed and not is_official and not is_external:
             # Use the actual driver_id from the remote (not registry id) for cache lookup
-            if actual_driver_id and actual_driver_id in _cached_version_data:
-                version_info = _cached_version_data[actual_driver_id]
+            if actual_driver_id and actual_driver_id in _remote_cache:
+                version_info = _remote_cache[actual_driver_id]
                 if version_info.get("has_update"):
                     # Always mark that an update is available (for badge display)
                     update_available = True
@@ -1107,8 +1120,8 @@ async def _get_available_integrations(
                 _LOG.debug("Failed to get repo info for %s: %s", name, e)
 
         # Get download count from version cache (populated during version checks)
-        if actual_driver_id and actual_driver_id in _cached_version_data:
-            downloads = _cached_version_data[actual_driver_id].get("downloads", 0)
+        if actual_driver_id and actual_driver_id in _remote_cache:
+            downloads = _remote_cache[actual_driver_id].get("downloads", 0)
 
         _cat_map = _get_category_name_map()
         categories_list = [_cat_map.get(c, c) for c in item.get("categories", [])]
@@ -1345,8 +1358,10 @@ async def get_integrations_list():
 
         # Check if driver list changed (new/removed drivers) and refresh cache if needed
         current_driver_ids = {i.driver_id for i in integrations}
-        if current_driver_ids != _cached_driver_ids:
-            _LOG.info("Driver list changed, refreshing version cache...")
+        if remote_id and current_driver_ids != _cached_driver_ids.get(remote_id, set()):
+            _LOG.info(
+                "[%s] Driver list changed, refreshing version cache...", remote_id
+            )
             await _refresh_version_cache(remote_id)
             # Re-fetch integrations with updated cache
             integrations = await _get_installed_integrations(remote_id)
@@ -2576,21 +2591,24 @@ async def _perform_update_integration(
 
         # Update the cache entry for this driver instead of full refresh
         # This avoids GitHub rate limiting issues
-        if integration.driver_id in _cached_version_data:
-            _cached_version_data[integration.driver_id]["has_update"] = False
-            _cached_version_data[integration.driver_id]["current"] = (
-                _cached_version_data[integration.driver_id]["latest"]
-            )
+        _remote_cache = _get_version_cache(remote_id)
+        if integration.driver_id in _remote_cache:
+            _remote_cache[integration.driver_id]["has_update"] = False
+            _remote_cache[integration.driver_id]["current"] = _remote_cache[
+                integration.driver_id
+            ]["latest"]
             _LOG.debug(
-                "Updated cache for %s: marked as current version", integration.driver_id
+                "[%s] Updated cache for %s: marked as current version",
+                remote_id,
+                integration.driver_id,
             )
 
             # Clear the notified update state since user has updated
             try:
-                nm = get_notification_manager(get_active_remote_id())
+                nm = get_notification_manager(remote_id)
                 nm.clear_update_notification(
                     integration.driver_id,
-                    _cached_version_data[integration.driver_id]["latest"],
+                    _remote_cache[integration.driver_id]["latest"],
                 )
             except Exception as notify_error:
                 _LOG.debug(
@@ -2916,19 +2934,22 @@ async def update_driver(driver_id: str):
 
         # Update just this driver's cache entry instead of refreshing everything
         # This avoids GitHub rate limiting issues from rapid consecutive API calls
-        if driver_id in _cached_version_data:
+        _remote_cache = _get_version_cache(remote_id)
+        if driver_id in _remote_cache:
             # Driver was updated to latest version, so no update is available anymore
-            _cached_version_data[driver_id]["has_update"] = False
-            _cached_version_data[driver_id]["current"] = _cached_version_data[
-                driver_id
-            ]["latest"]
-            _LOG.debug("Updated cache for %s: marked as current version", driver_id)
+            _remote_cache[driver_id]["has_update"] = False
+            _remote_cache[driver_id]["current"] = _remote_cache[driver_id]["latest"]
+            _LOG.debug(
+                "[%s] Updated cache for %s: marked as current version",
+                remote_id,
+                driver_id,
+            )
 
             # Clear the notified update state since user has updated
             try:
-                nm = get_notification_manager(get_active_remote_id())
+                nm = get_notification_manager(remote_id)
                 nm.clear_update_notification(
-                    driver_id, _cached_version_data[driver_id]["latest"]
+                    driver_id, _remote_cache[driver_id]["latest"]
                 )
             except Exception as notify_error:
                 _LOG.debug(
@@ -4945,16 +4966,19 @@ async def check_versions():
                     "Failed to check version for %s: %s", integration.driver_id, e
                 )
 
-        global _cached_version_data, _version_check_timestamp
-        _cached_version_data = version_updates
-        _version_check_timestamp = datetime.now().isoformat()
+        if remote_id:
+            _cached_version_data[remote_id] = version_updates
+            _version_check_timestamp[remote_id] = datetime.now().isoformat()
+            ts = _version_check_timestamp[remote_id]
+        else:
+            ts = datetime.now().isoformat()
 
         return jsonify(
             {
                 "status": "ok",
                 "checked": checked,
                 "updates_available": updates_available,
-                "timestamp": _version_check_timestamp,
+                "timestamp": ts,
                 "versions": version_updates,
             }
         )
@@ -4966,11 +4990,12 @@ async def check_versions():
 
 @app.route("/api/versions", methods=["GET"])
 async def get_versions():
-    """Get cached version data for all integrations."""
+    """Get cached version data for all integrations on the active remote."""
+    remote_id = get_active_remote_id()
     return jsonify(
         {
-            "timestamp": _version_check_timestamp,
-            "versions": _cached_version_data,
+            "timestamp": _version_check_timestamp.get(remote_id) if remote_id else None,
+            "versions": _get_version_cache(remote_id),
         }
     )
 
