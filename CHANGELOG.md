@@ -11,9 +11,26 @@ _Changes in the next release_
 
 ---
 
-## v2.0.0 - 2025-05-15
+## v2.0.1 - 2025-05-16
 
-## No meaningful changes until the final release. No need to update
+### Fixes
+
+- Fix sponsor links on `Your Integrations` page in certain situations. Thanks @henrikwidlund! #34
+- When multiple remotes are configured and are running the same integrations, installing an update on one would cause the other remote to incorrectly report the update status. Thanks @henrikwidlund! #35
+
+## Previous v2.0.0 changes
+
+### Changes
+
+- The webserver port is changing. If you navigate to 8088 the remote will present a splash screen notifying you of the new port `9999` and will redirect you after 10 seconds. If you have any bookmarks or saved links, please update them after the redirect occurs.
+
+### Added
+
+- If you are running firmware 2.9.3 or later, all integrations can be updated in place! If you are running a version less than 2.9.3, functionality will remain for now but will be removed eventually.
+
+---
+
+## v2.0.0 - 2025-05-15
 
 ### Changes
 
