@@ -319,6 +319,7 @@ def _get_version_cache(remote_id: str | None) -> dict:
         return {}
     return _cached_version_data.get(remote_id, {})
 
+
 # System update info cache keyed by remote_id
 _system_update_cache: dict[str, dict] = {}
 
@@ -1348,9 +1349,7 @@ async def get_integrations_list():
 
         # Check if driver list changed (new/removed drivers) and refresh cache if needed
         current_driver_ids = {i.driver_id for i in integrations}
-        if remote_id and current_driver_ids != _cached_driver_ids.get(
-            remote_id, set()
-        ):
+        if remote_id and current_driver_ids != _cached_driver_ids.get(remote_id, set()):
             _LOG.info(
                 "[%s] Driver list changed, refreshing version cache...", remote_id
             )
@@ -2583,12 +2582,12 @@ async def _perform_update_integration(
 
         # Update the cache entry for this driver instead of full refresh
         # This avoids GitHub rate limiting issues
-        _remote_cache = _cached_version_data.get(remote_id, {}) if remote_id else {}
+        _remote_cache = _get_version_cache(remote_id)
         if integration.driver_id in _remote_cache:
             _remote_cache[integration.driver_id]["has_update"] = False
-            _remote_cache[integration.driver_id]["current"] = (
-                _remote_cache[integration.driver_id]["latest"]
-            )
+            _remote_cache[integration.driver_id]["current"] = _remote_cache[
+                integration.driver_id
+            ]["latest"]
             _LOG.debug(
                 "[%s] Updated cache for %s: marked as current version",
                 remote_id,
@@ -2926,7 +2925,7 @@ async def update_driver(driver_id: str):
 
         # Update just this driver's cache entry instead of refreshing everything
         # This avoids GitHub rate limiting issues from rapid consecutive API calls
-        _remote_cache = _cached_version_data.get(remote_id, {}) if remote_id else {}
+        _remote_cache = _get_version_cache(remote_id)
         if driver_id in _remote_cache:
             # Driver was updated to latest version, so no update is available anymore
             _remote_cache[driver_id]["has_update"] = False
@@ -4987,7 +4986,7 @@ async def get_versions():
     return jsonify(
         {
             "timestamp": _version_check_timestamp.get(remote_id) if remote_id else None,
-            "versions": _cached_version_data.get(remote_id, {}) if remote_id else {},
+            "versions": _get_version_cache(remote_id),
         }
     )
 
