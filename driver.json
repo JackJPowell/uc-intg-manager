@@ -1,6 +1,6 @@
 {
   "driver_id": "intg_manager_driver",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "min_core_api": "0.20.0",
   "name": {
     "en": "Integration Manager",
@@ -40,5 +40,5 @@
       }
     ]
   },
-  "release_date": "2026-05-16"
+  "release_date": "2026-05-17"
 }

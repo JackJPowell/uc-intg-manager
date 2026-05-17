@@ -11,6 +11,30 @@ _Changes in the next release_
 
 ---
 
+## v2.0.2 - 2025-05-17
+
+### Fixes
+
+- You will no longer receive notifications for beta releases if you do not have the setting `Show Beta Releses` checked
+  - *NB* If the integration is released as final and then later changed to pre-release, a notification may still be sent
+- When running in docker, integration manager will no longer offer an update button when an update is available
+- No longer show `Select Version` option for integrations running in docker
+
+## Previous v2.0.0 changes
+
+### Changes
+
+- The webserver port is changing. If you navigate to 8088 the remote will present a splash screen notifying you of the new port `9999` and will redirect you after 10 seconds. If you have any bookmarks or saved links, please update them after the redirect occurs.
+
+### Added
+
+- If you are running firmware 2.9.3 or later, all integrations can be updated in place! If you are running a version less than 2.9.3, functionality will remain for now but will be removed eventually.
+
+- Fix sponsor links on `Your Integrations` page in certain situations. Thanks @henrikwidlund! #34
+- When multiple remotes are configured and are running the same integrations, installing an update on one would cause the other remote to incorrectly report the update status. Thanks @henrikwidlund! #35
+
+---
+
 ## v2.0.1 - 2025-05-16
 
 ### Fixes
