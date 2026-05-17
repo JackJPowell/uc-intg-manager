@@ -545,6 +545,7 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
         integrations = await _get_installed_integrations(remote_id)
         version_updates = {}
         current_driver_ids = set()
+        settings = Settings.load(remote_id=remote_id)
 
         for integration in integrations:
             current_driver_ids.add(integration.driver_id)
@@ -593,26 +594,36 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
                         #     current_version,
                         #     latest_version,
                         # )
-                        try:
-                            nm = get_notification_manager(remote_id)
+                        if (
+                            release.get("prerelease", False)
+                            and not settings.show_beta_releases
+                        ):
                             _LOG.debug(
-                                "Sending notification for %s",
-                                integration.name,
-                            )
-                            await nm.notify_integration_update_available(
-                                integration.driver_id,
-                                integration.name,
-                                current_version,
+                                "Skipping notification for prerelease %s (show_beta_releases disabled)",
                                 latest_version,
                             )
-                            _LOG.debug(
-                                "send_notification_sync completed for %s",
-                                integration.name,
-                            )
-                        except Exception as notify_error:
-                            _LOG.error(
-                                "Failed to send update notification: %s", notify_error
-                            )
+                        else:
+                            try:
+                                nm = get_notification_manager(remote_id)
+                                _LOG.debug(
+                                    "Sending notification for %s",
+                                    integration.name,
+                                )
+                                await nm.notify_integration_update_available(
+                                    integration.driver_id,
+                                    integration.name,
+                                    current_version,
+                                    latest_version,
+                                )
+                                _LOG.debug(
+                                    "send_notification_sync completed for %s",
+                                    integration.name,
+                                )
+                            except Exception as notify_error:
+                                _LOG.error(
+                                    "Failed to send update notification: %s",
+                                    notify_error,
+                                )
             except Exception as e:
                 _LOG.debug(
                     "Failed to check version for %s: %s", integration.driver_id, e
@@ -4902,6 +4913,7 @@ async def check_versions():
         version_updates = {}
         checked = 0
         updates_available = 0
+        settings = Settings.load(remote_id=remote_id)
 
         for integration in integrations:
             if integration.official:
@@ -4941,26 +4953,36 @@ async def check_versions():
                         #     current_version,
                         #     latest_version,
                         # )
-                        try:
-                            nm = get_notification_manager(get_active_remote_id())
-                            _LOG.info(
-                                "Calling send_notification_sync for %s",
-                                integration.name,
-                            )
-                            await nm.notify_integration_update_available(
-                                integration.driver_id,
-                                integration.name,
-                                current_version,
+                        if (
+                            release.get("prerelease", False)
+                            and not settings.show_beta_releases
+                        ):
+                            _LOG.debug(
+                                "Skipping notification for prerelease %s (show_beta_releases disabled)",
                                 latest_version,
                             )
-                            _LOG.info(
-                                "send_notification_sync completed for %s",
-                                integration.name,
-                            )
-                        except Exception as notify_error:
-                            _LOG.error(
-                                "Failed to send update notification: %s", notify_error
-                            )
+                        else:
+                            try:
+                                nm = get_notification_manager(get_active_remote_id())
+                                _LOG.info(
+                                    "Calling send_notification_sync for %s",
+                                    integration.name,
+                                )
+                                await nm.notify_integration_update_available(
+                                    integration.driver_id,
+                                    integration.name,
+                                    current_version,
+                                    latest_version,
+                                )
+                                _LOG.info(
+                                    "send_notification_sync completed for %s",
+                                    integration.name,
+                                )
+                            except Exception as notify_error:
+                                _LOG.error(
+                                    "Failed to send update notification: %s",
+                                    notify_error,
+                                )
             except Exception as e:
                 _LOG.debug(
                     "Failed to check version for %s: %s", integration.driver_id, e
@@ -6015,9 +6037,11 @@ def _get_category_name_map() -> dict[str, str]:
 @app.context_processor
 async def inject_sponsors():
     """Inject sponsors lookup dict and firmware context into all templates."""
+    uc_config_home = os.getenv("UC_CONFIG_HOME", "")
     return {
         "sponsors": _get_sponsors(),
         "supports_inplace_update": _supports_inplace_update(),
+        "is_docker": uc_config_home.startswith("/config"),
     }
 
 

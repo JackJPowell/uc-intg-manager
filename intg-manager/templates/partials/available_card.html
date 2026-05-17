@@ -203,6 +203,9 @@
                 {% set owner = path_parts[0] %}
                 {% set repo = path_parts[1] %}
                 {% if integration.update_available %}
+                {% if is_docker %}
+                <span class="text-xs text-blue-700 dark:text-blue-400 italic">Managed via Docker</span>
+                {% else %}
                 <a href="#"
                    hx-get="/api/release-notes/{{ owner }}/{{ repo }}/v{{ integration.version }}"
                    hx-target="#modal-content"
@@ -261,6 +264,7 @@
                         </div>
                     </div>
                 </div>
+                {% endif %}
                 {% else %}
                 <span class="text-xs text-gray-500 dark:text-gray-400 italic">Up to date</span>
                 {% endif %}

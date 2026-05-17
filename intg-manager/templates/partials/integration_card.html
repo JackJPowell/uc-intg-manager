@@ -163,7 +163,7 @@
             </div>
             {% endif %}
             <!-- Action icons first -->
-            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% if integration.home_page and 'github.com' in integration.home_page and not integration.external and not is_docker %}
             {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
             {% set path_parts = repo_path.split('/') %}
             {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
@@ -414,7 +414,7 @@
             {% if integration.state == 'NOT_CONFIGURED' %}
             <!-- Unconfigured driver - link to remote configurator -->
             <!-- Version selector button for custom integrations with GitHub repo -->
-            {% if not integration.official and integration.home_page and 'github.com' in integration.home_page %}
+            {% if not integration.official and not integration.external and integration.home_page and 'github.com' in integration.home_page and not is_docker%}
             {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
             {% set path_parts = repo_path.split('/') %}
             {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
@@ -458,12 +458,13 @@
             </a>
             {% elif integration.self_managed %}
             <!-- Self-managed integration (Integration Manager itself) - must come before custom -->
-            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% if integration.home_page and 'github.com' in integration.home_page and not integration.external and not is_docker %}
             {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
             {% set path_parts = repo_path.split('/') %}
             {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
             {% set owner = path_parts[0] %}
             {% set repo = path_parts[1] %}
+            {% if not is_docker %}
             <button
                 hx-get="/api/version-selector/{{ owner }}/{{ repo }}/{{ integration.driver_id }}?self_update=true"
                 hx-target="#modal-content"
@@ -473,6 +474,7 @@
                 title="Select version">
                 <i class="fa-solid fa-list-ul h-4 w-4"></i>
             </button>
+            {% endif %}
             {% endif %}
             {% endif %}
 
@@ -495,7 +497,9 @@
             {% endif %}
 
             {% if integration.update_available %}
-            {% if integration.home_page and 'github.com' in integration.home_page %}
+            {% if is_docker %}
+            <span class="text-xs text-blue-700 dark:text-blue-400 italic">Managed via Docker</span>
+            {% elif integration.home_page and 'github.com' in integration.home_page %}
             {% set repo_path = integration.home_page.split('github.com/')[1].rstrip('/').split('?')[0].split('#')[0] %}
             {% set path_parts = repo_path.split('/') %}
             {% if path_parts|length >= 2 and path_parts[0] and path_parts[1] %}
