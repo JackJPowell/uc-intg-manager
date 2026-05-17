@@ -123,7 +123,7 @@ jobs:
   docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-24.04
-    needs: [ build ]
+    needs: [build]
     permissions:
       contents: read
       packages: write
@@ -162,7 +162,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-24.04
-    needs: [ build ]
+    needs: [build]
     permissions:
       contents: write
 
@@ -202,11 +202,22 @@ jobs:
         run: |
           for filename in *.tar.gz; do echo "sha256  `sha256sum $filename`" >> ${{needs.build.outputs.driver_id}}.hash; done;
 
+      - name: Check if pre-release
+        id: prerelease_check
+        run: |
+          VERSION="${{needs.build.outputs.version}}"
+          if echo "$VERSION" | grep -qE '(b[0-9]|beta)'; then
+            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create release
         uses: ncipollo/release-action@v1
         with:
           artifacts: "*.tar.gz,${{needs.build.outputs.driver_id}}.hash"
           draft: false
+          prerelease: ${{steps.prerelease_check.outputs.IS_PRERELEASE}}
           bodyFile: /tmp/release/release_notes.md
           artifactErrorsFailBuild: true
           tag: v${{needs.build.outputs.version}}
