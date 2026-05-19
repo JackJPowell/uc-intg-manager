@@ -63,37 +63,12 @@
     </div>
 
     <!-- Live ping status -->
-    <div id="ping-target" class="hidden"></div>
+    <div id="ping-target" class="hidden" data-inplace="{{ 'true' if inplace else 'false' }}"></div>
 
     <!-- Fallback manual link shown after 90 s -->
     <p id="fallback-msg" class="hidden text-sm text-gray-500 dark:text-gray-400 text-center">
         Taking longer than expected?
         <a href="/" class="text-uc-primary hover:underline">Click here to go to the dashboard</a>
     </p>
-
-    <script>
-        // For inplace updates /health returns "UPDATING" while the download is in
-        // flight, so we can start polling immediately — no need to wait for the old
-        // IM to be torn down first.  For the bootstrapper flow we wait 15 s to let
-        // the bootstrapper uninstall the old IM before polling begins.
-        var pollDelay = {{ 'true' if inplace else 'false' }} ? 3000 : 15000;
-
-        setTimeout(function() {
-            var el = document.getElementById('ping-target');
-            if (!el) return;
-            el.setAttribute('hx-get', '/health');
-            el.setAttribute('hx-trigger', 'every 3s');
-            el.setAttribute('hx-swap', 'none');
-            el.setAttribute('hx-on::after-request',
-                "if(event.detail.xhr.status === 200 && event.detail.xhr.responseText.trim() === 'OK') { window.location.href = '/'; }");
-            htmx.process(el);
-        }, pollDelay);
-
-        // Show fallback link after 90 seconds in case something went wrong
-        setTimeout(function() {
-            var msg = document.getElementById('fallback-msg');
-            if (msg) msg.classList.remove('hidden');
-        }, 90000);
-    </script>
 </div>
 {% endblock %}

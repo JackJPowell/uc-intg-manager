@@ -6,90 +6,22 @@
     <title>{% block title %}Integration Manager{% endblock %} - Unfolded Circle</title>
     
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
     
     <!-- Tailwind CSS via local build -->
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/css/style.css">
     
     <!-- Theme detection with localStorage override -->
-    <script>
-        function applyTheme() {
-            const themeOverride = localStorage.getItem('theme');
-
-            if (themeOverride === 'dark') {
-                document.documentElement.classList.add('dark');
-            } else if (themeOverride === 'light') {
-                document.documentElement.classList.remove('dark');
-            } else {
-                const prefersDark =
-                    window.matchMedia &&
-                    window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-                document.documentElement.classList.toggle('dark', prefersDark);
-            }
-        }
-
-        function updateThemeButtons() {
-            const theme = localStorage.getItem('theme') || 'system';
-
-            document.querySelectorAll('.theme-option').forEach(button => {
-                button.classList.remove(
-                    'border-blue-500',
-                    'bg-blue-50',
-                    'dark:bg-blue-900/30'
-                );
-
-                button.classList.add('border-transparent');
-            });
-
-            const activeButton = document.getElementById(`theme-${theme}`);
-
-            activeButton?.classList.remove('border-transparent');
-            activeButton?.classList.add(
-                'border-blue-500',
-                'bg-blue-50',
-                'dark:bg-blue-900/30'
-            );
-        }
-
-        function refreshThemeUI() {
-            applyTheme();
-            updateThemeButtons();
-        }
-
-        applyTheme();
-
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-            const themeOverride = localStorage.getItem('theme');
-
-            if (!themeOverride) {
-                refreshThemeUI();
-            }
-        });
-
-        window.setTheme = function(theme) {
-            if (theme === 'system') {
-                localStorage.removeItem('theme');
-            } else {
-                localStorage.setItem('theme', theme);
-            }
-
-            refreshThemeUI();
-
-            window.dispatchEvent(new CustomEvent('themeChanged', {
-                detail: { theme }
-            }));
-        };
-
-        window.addEventListener('themeChanged', updateThemeButtons);
-        document.addEventListener('DOMContentLoaded', updateThemeButtons);
-    </script>
-    
     <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="/static/vendor/htmx.org-1.9.10.min.js"></script>
+
+
+    <!-- Application JavaScript -->
+    <script src="/static/js/templates.js" defer></script>
+    <script src="/static/js/partials.js" defer></script>
 
     <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="/static/vendor/font-awesome-7.0.0.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
     
 
 </head>
@@ -106,7 +38,7 @@
                         </button>
                         
                         <div class="flex-shrink-0 flex items-center space-x-2 sm:space-x-3">
-                            <img src="/static/logo.svg" class="h-6 sm:h-8 w-6 sm:w-8 logo-radius" alt="Integration Manager Logo">
+                            <img src="/static/img/logo.svg" class="h-6 sm:h-8 w-6 sm:w-8 logo-radius" alt="Integration Manager Logo">
                             <div>
                                 <h1 class="text-base sm:text-xl font-bold text-gray-900 dark:text-white">Integration Manager</h1>
                             </div>
@@ -277,128 +209,7 @@
             </div>
         </footer>
     </div>
-    
-    <script>
-        // Random footer quotes
-        const quotes = [
-            "Macros are just good manners",
-            "HDMI-CEC works perfectly. Until it doesn't",
-            "Smart TVs get dumb updates",
-            "Local control beats cloud convenience",
-            "Automation is empathy",
-            "Convenience shouldn't need an account",
-            "If it's smart, it should be quiet",
-            "Cloud outages shouldn't turn off your lights",
-            "The network is the product",
-            "Firmware updates are a trust exercise",
-            "Every workaround becomes permanent",
-            "Offline is a feature",
-            "Local control is peace of mind",
-            "Automation should work without the internet",
-            "Deterministic beats magical",
-            "If it works offline, it works",
-            "State matters",
-            "Automation is about trust",
-            "Inputs should never surprise you",
-            "Power state is not a suggestion",
-            "Volume is not a number, it's a feeling",
-            "HDMI is a negotiated settlement",
-            "Good macros feel invisible",
-            "HDMI is adversarial",
-            "CEC remembers nothing",
-            "CEC is a suggestion",
-            "CEC breaks macros",
-            "Manual control is the fallback",
-            "The LAN is home",
-            "CEC never read the spec",
-            "CEC needs a reboot",
-            "The cloud always picks the worst moment",
-            "Firmware updates ship hope",
-            "Everything works until it doesn't",
-            "Magic is just undocumented behavior",
-            "Abstractions leak at movie night",
-            "State drift is inevitable",
-            "AV gear lies politely",
-            "Power order matters",
-            "Sync is always off by one",
-            "It worked yesterday",
-            "This should have been local",
-            "It's always DNS",
-            "HDMI is non-deterministic",
-            "The spec allows this"
-        ];
-        
-        // Select and display a random quote
-        const randomQuote = quotes[Math.floor(Math.random() * quotes.length)];
-        document.getElementById('footer-quote').textContent = randomQuote;
-    </script>
-    
-    <!-- Mobile Menu Toggle Script -->
-    <script>
-        function toggleMobileMenu() {
-            const sidebar = document.getElementById('mobile-sidebar');
-            const overlay = document.getElementById('mobile-overlay');
-            const menuIcon = document.getElementById('menu-icon');
-            const closeIcon = document.getElementById('close-icon');
-            
-            sidebar.classList.toggle('-translate-x-full');
-            overlay.classList.toggle('hidden');
-            menuIcon.classList.toggle('hidden');
-            closeIcon.classList.toggle('hidden');
-        }
-        
-        // Toggle dropdown menu
-        function toggleDropdown(event, dropdownId, forceClose = false) {
-            event.stopPropagation();
-            const dropdown = document.getElementById(dropdownId);
-            const chevronId = dropdownId.replace('dropdown-', 'chevron-');
-            const chevron = document.getElementById(chevronId);
-            
-            if (forceClose || !dropdown.classList.contains('hidden')) {
-                dropdown.classList.add('hidden');
-                if (chevron) chevron.classList.remove('fa-rotate-180');
-            } else {
-                // Close all other dropdowns first
-                document.querySelectorAll('[id^="dropdown-"]').forEach(d => {
-                    if (d.id !== dropdownId) {
-                        d.classList.add('hidden');
-                        const otherId = d.id.replace('dropdown-', 'chevron-');
-                        const otherChevron = document.getElementById(otherId);
-                        if (otherChevron) otherChevron.classList.remove('fa-rotate-180');
-                    }
-                });
-                dropdown.classList.remove('hidden');
-                if (chevron) chevron.classList.add('fa-rotate-180');
-            }
-        }
-        
-        // Close dropdowns when clicking outside
-        document.addEventListener('click', function(event) {
-            if (!event.target.closest('[id^="dropdown-"]') && !event.target.closest('button')) {
-                document.querySelectorAll('[id^="dropdown-"]').forEach(d => {
-                    d.classList.add('hidden');
-                    const chevronId = d.id.replace('dropdown-', 'chevron-');
-                    const chevron = document.getElementById(chevronId);
-                    if (chevron) chevron.classList.remove('fa-rotate-180');
-                });
-            }
-        });
-        
-        // Close menu when clicking a link on mobile
-        document.addEventListener('DOMContentLoaded', function() {
-            const sidebar = document.getElementById('mobile-sidebar');
-            const links = sidebar.querySelectorAll('a');
-            links.forEach(link => {
-                link.addEventListener('click', function() {
-                    if (window.innerWidth < 1024) {
-                        toggleMobileMenu();
-                    }
-                });
-            });
-        });
-    </script>
-    
-    <!-- Reusable Modal Component -->
+<!-- Reusable Modal Component -->
     {% include 'partials/modal.html' %}
 </body>
 </html>
