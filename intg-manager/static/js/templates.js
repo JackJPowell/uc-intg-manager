@@ -177,9 +177,39 @@
         try {
             const resp = await fetch('/api/diagnostics/system-update-check', { method: 'POST' });
             const data = await resp.json();
-            $('firmware-installed') && ($('firmware-installed').textContent = data.installed_version || '—');
+            if (!data.success) {
+                alert('Update check failed: ' + (data.message || 'Unknown error'));
+                return;
+            }
+            if ($('firmware-installed')) $('firmware-installed').textContent = data.installed_version || '—';
+            const statusBlock = $('firmware-status-block');
+            const iconEl = $('firmware-icon-i');
+            const iconWrap = $('firmware-icon');
+            if (data.update_available) {
+                if (iconWrap) iconWrap.className = 'w-10 h-10 bg-yellow-500/20 rounded-lg flex items-center justify-center';
+                if (iconEl) iconEl.className = 'fa-solid fa-microchip text-yellow-400 text-lg';
+                const notesLink = data.release_notes_url
+                    ? `<a href="${data.release_notes_url}" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-400 hover:text-blue-300 underline ml-1">Release Notes</a>`
+                    : '';
+                if (statusBlock) statusBlock.innerHTML = `
+                    <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Update Available</div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm font-semibold text-yellow-400">${data.available_version}</span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">— ${data.title}</span>
+                        ${notesLink}
+                    </div>`;
+            } else {
+                if (iconWrap) iconWrap.className = 'w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center';
+                if (iconEl) iconEl.className = 'fa-solid fa-microchip text-green-400 text-lg';
+                if (statusBlock) statusBlock.innerHTML = `
+                    <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Status</div>
+                    <div class="flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-check text-green-400 text-sm"></i>
+                        <span class="text-sm text-green-400 font-medium">Up to date</span>
+                    </div>`;
+            }
         } catch (e) {
-            alert('Failed to check firmware update: ' + e);
+            alert('Update check failed: ' + e.message);
         } finally {
             btn.disabled = false;
             icon?.classList.remove('fa-spin');
