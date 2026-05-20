@@ -11,6 +11,15 @@ _Changes in the next release_
 
 ---
 
+## v2.0.3 - 2025-05-20
+
+### Fixes
+
+- Corrects the issue where pages would load but would be unstyled. Thanks @jstnjx!
+- CSS and JS refractoring. Thanks @jstnjx!
+
+---
+
 ## v2.0.2 - 2025-05-17
 
 ### Fixes
