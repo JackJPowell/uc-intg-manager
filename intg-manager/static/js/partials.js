@@ -4,21 +4,21 @@
 
   function $(id) { return document.getElementById(id); }
 
-// Open modal with optional title and content
-    function openModal(title = 'Modal', content = null) {
-        const overlay = document.getElementById('modal-overlay');
-        const container = document.getElementById('modal-container');
-        const titleElement = document.getElementById('modal-title');
-        const contentElement = document.getElementById('modal-content');
-        
-        // Set title
-        titleElement.textContent = title;
-        
-        // Set content if provided, otherwise show loading spinner
-        if (content) {
-            contentElement.innerHTML = content;
-        } else {
-            contentElement.innerHTML = `
+  // Open modal with optional title and content
+  function openModal(title = 'Modal', content = null) {
+    const overlay = document.getElementById('modal-overlay');
+    const container = document.getElementById('modal-container');
+    const titleElement = document.getElementById('modal-title');
+    const contentElement = document.getElementById('modal-content');
+
+    // Set title
+    titleElement.textContent = title;
+
+    // Set content if provided, otherwise show loading spinner
+    if (content) {
+      contentElement.innerHTML = content;
+    } else {
+      contentElement.innerHTML = `
                 <div class="flex items-center justify-center py-12">
                     <svg class="animate-spin h-8 w-8 text-uc-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -26,96 +26,96 @@
                     </svg>
                 </div>
             `;
-        }
-        
-        // Show overlay
-        overlay.classList.remove('hidden');
-        
-        // Trigger animation after a brief delay
-        setTimeout(() => {
-            overlay.classList.add('opacity-100');
-            container.classList.remove('scale-95', 'opacity-0');
-            container.classList.add('scale-100', 'opacity-100');
-        }, 10);
-        
-        // Prevent body scroll
-        document.body.style.overflow = 'hidden';
-        
-        // Add escape key listener
-        document.addEventListener('keydown', handleEscapeKey);
     }
-    
-    // Close modal with animation
-    function closeModal(event) {
-        // If event is provided and it's not from clicking the overlay, ignore
-        if (event && event.target.id !== 'modal-overlay') {
-            return;
-        }
-        
-        const overlay = document.getElementById('modal-overlay');
-        const container = document.getElementById('modal-container');
-        
-        // Trigger close animation
-        overlay.classList.remove('opacity-100');
-        container.classList.remove('scale-100', 'opacity-100');
-        container.classList.add('scale-95', 'opacity-0');
-        
-        // Hide after animation
-        setTimeout(() => {
-            overlay.classList.add('hidden');
-            // Clear content
-            document.getElementById('modal-content').innerHTML = '';
-            // Reset footer
-            document.getElementById('modal-footer').classList.add('hidden');
-        }, 300);
-        
-        // Restore body scroll
-        document.body.style.overflow = '';
-        
-        // Remove escape key listener
-        document.removeEventListener('keydown', handleEscapeKey);
+
+    // Show overlay
+    overlay.classList.remove('hidden');
+
+    // Trigger animation after a brief delay
+    setTimeout(() => {
+      overlay.classList.add('opacity-100');
+      container.classList.remove('scale-95', 'opacity-0');
+      container.classList.add('scale-100', 'opacity-100');
+    }, 10);
+
+    // Prevent body scroll
+    document.body.style.overflow = 'hidden';
+
+    // Add escape key listener
+    document.addEventListener('keydown', handleEscapeKey);
+  }
+
+  // Close modal with animation
+  function closeModal(event) {
+    // If event is provided and it's not from clicking the overlay, ignore
+    if (event && event.target.id !== 'modal-overlay') {
+      return;
     }
-    
-    // Handle escape key
-    function handleEscapeKey(event) {
-        if (event.key === 'Escape') {
-            closeModal();
-        }
+
+    const overlay = document.getElementById('modal-overlay');
+    const container = document.getElementById('modal-container');
+
+    // Trigger close animation
+    overlay.classList.remove('opacity-100');
+    container.classList.remove('scale-100', 'opacity-100');
+    container.classList.add('scale-95', 'opacity-0');
+
+    // Hide after animation
+    setTimeout(() => {
+      overlay.classList.add('hidden');
+      // Clear content
+      document.getElementById('modal-content').innerHTML = '';
+      // Reset footer
+      document.getElementById('modal-footer').classList.add('hidden');
+    }, 300);
+
+    // Restore body scroll
+    document.body.style.overflow = '';
+
+    // Remove escape key listener
+    document.removeEventListener('keydown', handleEscapeKey);
+  }
+
+  // Handle escape key
+  function handleEscapeKey(event) {
+    if (event.key === 'Escape') {
+      closeModal();
     }
-    
-    // Update modal content (useful for HTMX responses)
-    function updateModalContent(content) {
-        document.getElementById('modal-content').innerHTML = content;
+  }
+
+  // Update modal content (useful for HTMX responses)
+  function updateModalContent(content) {
+    document.getElementById('modal-content').innerHTML = content;
+  }
+
+  // Update modal title
+  function updateModalTitle(title) {
+    document.getElementById('modal-title').textContent = title;
+  }
+
+  // Show modal footer
+  function showModalFooter(content) {
+    const footer = document.getElementById('modal-footer');
+    footer.innerHTML = content;
+    footer.classList.remove('hidden');
+  }
+
+  // Hide modal footer
+  function hideModalFooter() {
+    document.getElementById('modal-footer').classList.add('hidden');
+  }
+
+  // Listen for HTMX afterSwap to update modal title if data attribute exists
+  document.body.addEventListener('htmx:afterSwap', function (event) {
+    // Check if the swap target was the modal content
+    if (event.target && event.target.id === 'modal-content') {
+      // Look for data-modal-title attribute in the swapped content
+      const content = event.target.querySelector('[data-modal-title]');
+      if (content && content.dataset.modalTitle) {
+        updateModalTitle(content.dataset.modalTitle);
+      }
     }
-    
-    // Update modal title
-    function updateModalTitle(title) {
-        document.getElementById('modal-title').textContent = title;
-    }
-    
-    // Show modal footer
-    function showModalFooter(content) {
-        const footer = document.getElementById('modal-footer');
-        footer.innerHTML = content;
-        footer.classList.remove('hidden');
-    }
-    
-    // Hide modal footer
-    function hideModalFooter() {
-        document.getElementById('modal-footer').classList.add('hidden');
-    }
-    
-    // Listen for HTMX afterSwap to update modal title if data attribute exists
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        // Check if the swap target was the modal content
-        if (event.target && event.target.id === 'modal-content') {
-            // Look for data-modal-title attribute in the swapped content
-            const content = event.target.querySelector('[data-modal-title]');
-            if (content && content.dataset.modalTitle) {
-                updateModalTitle(content.dataset.modalTitle);
-            }
-        }
-    });
+  });
   window.openModal = openModal;
   window.closeModal = closeModal;
 
@@ -189,12 +189,12 @@
     fetch('/api/active-remote')
       .then(response => response.json())
       .then(data => {
-        if (data.active_remote_id !== storedRemoteId) {
+        if (data.id !== storedRemoteId) {
           return fetch('/api/active-remote', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ remote_id: storedRemoteId })
-          }).then(() => window.location.reload());
+          }).then(res => { if (res.ok) window.location.reload(); });
         }
       })
       .catch(error => console.debug('Remote sync skipped:', error));
