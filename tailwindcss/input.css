@@ -1,0 +1,351 @@
+/*
+ * Custom styles for Integration Manager
+ * Most styling is handled by Tailwind CSS via local build
+ */
+
+@import "tailwindcss";
+
+
+
+@source "../intg-manager/templates/**/*.html";
+
+/* Classes used only inside JavaScript strings / template literals */
+@source inline("-rotate-90 -translate-x-full animate-spin bg-blue-50 bg-blue-500/20 bg-gray-100 bg-green-500/20 bg-green-600 bg-red-500/20 bg-red-600 bg-yellow-500/20 border border-blue-500 border-blue-500/30 border-green-500 border-green-700 border-red-500 border-red-500/30 border-transparent dark:bg-blue-900/30 dark:bg-gray-600 dark:bg-green-500/20 dark:border-green-500/30 dark:text-gray-400 dark:text-green-300 dark:text-green-400 dark:text-red-400 dark:text-white dark:text-yellow-400 duration-300 fixed flex focus:border-red-500 font-medium font-semibold gap-1.5 gap-2 h-10 h-4 h-8 hidden hover:text-blue-300 italic items-center justify-center left-4 mb-1 ml-1 mr-1 mr-2 opacity-0 opacity-25 opacity-75 opacity-100 p-4 py-12 right-4 rotate-180 rounded-lg scale-95 scale-100 shadow-2xl sm:-translate-x-1/2 sm:left-1/2 sm:max-w-md sm:right-auto sm:transform sm:w-full text-blue-300 text-blue-400 text-gray-500 text-gray-900 text-green-400 text-green-600 text-lg text-red-300 text-red-400 text-red-500 text-red-600 text-sm text-uc-primary text-white text-xs text-yellow-400 text-yellow-600 top-2 tracking-wide transition-all underline uppercase w-10 w-4 w-8 z-50");
+
+/* Theme colors for use in Tailwind utilities and custom CSS */
+@theme {
+    --color-uc-primary: #1e40af;
+    --color-uc-secondary: #1e3a8a;
+    --color-uc-accent: #2563eb;
+
+    --color-uc-dark: #1e293b;
+    --color-uc-darker: #0f172a;
+
+    --color-uc-card: rgba(21, 38, 65, 1);
+    --color-uc-border: rgba(37, 58, 92, 1);
+
+    --color-uc-light-bg: #f1f5f9;
+    --color-uc-light-card: #ffffff;
+    --color-uc-light-border: #e2e8f0;
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* =========================================================
+   Utility Classes
+========================================================= */
+
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.logo-radius {
+    border-radius: 0.85rem;
+}
+
+/* =========================================================
+   HTMX States & Overlays
+========================================================= */
+
+.htmx-indicator {
+    display: none;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    display: inline-block;
+}
+
+/* Generic overlay targeting */
+[id^="upgrade-overlay-"].htmx-request,
+[id^="backup-overlay-"].htmx-request,
+[id^="overlay-"].htmx-request {
+    display: flex !important;
+    pointer-events: auto !important;
+}
+
+/* Fade-in animation for HTMX content */
+.htmx-added {
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* =========================================================
+   Spinner
+========================================================= */
+
+.spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top: 2px solid #fff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* =========================================================
+   Integration Cards
+========================================================= */
+
+.integration-card {
+    overflow: visible;
+    transition: box-shadow 0.2s ease;
+}
+
+.integration-card:hover {
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+}
+
+/* Light mode hover effect */
+@media (prefers-color-scheme: light) {
+    .integration-card:hover {
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+}
+
+/* =========================================================
+   Release Notes Markdown Styling
+========================================================= */
+
+.release-notes h1 {
+    margin: 1.5rem 0 0.75rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #111827;
+}
+
+.release-notes h2 {
+    margin: 1.25rem 0 0.5rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #111827;
+}
+
+.release-notes h3 {
+    margin: 1rem 0 0.5rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.release-notes h4 {
+    margin: 0.75rem 0 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #374151;
+}
+
+.dark .release-notes h1,
+.dark .release-notes h2,
+.dark .release-notes strong {
+    color: white;
+}
+
+.dark .release-notes h3 {
+    color: white;
+}
+
+.dark .release-notes h4 {
+    color: #e5e7eb;
+}
+
+.release-notes p {
+    margin-bottom: 0.75rem;
+    line-height: 1.625;
+    color: #374151;
+}
+
+.dark .release-notes p {
+    color: #d1d5db;
+}
+
+.release-notes ul,
+.release-notes ol {
+    margin-bottom: 0.75rem;
+    padding-left: 1rem;
+}
+
+.release-notes ul {
+    list-style-type: disc;
+    list-style-position: inside;
+}
+
+.release-notes ol {
+    list-style-type: decimal;
+    list-style-position: inside;
+}
+
+.release-notes ul li,
+.release-notes ol li,
+.release-notes li {
+    margin-bottom: 0.25rem;
+    color: #4b5563;
+}
+
+.dark .release-notes li {
+    color: #d1d5db;
+}
+
+.release-notes code {
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    background-color: #e5e7eb;
+    color: #1e40af;
+    font-size: 0.875rem;
+    font-family: ui-monospace, monospace;
+}
+
+.dark .release-notes code {
+    background-color: #1a1d24;
+    color: #60a5fa;
+}
+
+.release-notes pre {
+    margin-bottom: 0.75rem;
+    padding: 1rem;
+    overflow-x: auto;
+    border-radius: 0.5rem;
+    background-color: #f3f4f6;
+}
+
+.dark .release-notes pre {
+    background-color: #1a1d24;
+}
+
+.release-notes pre code {
+    padding: 0;
+    background-color: transparent;
+}
+
+.release-notes a {
+    color: #2563eb;
+    text-decoration: underline;
+}
+
+.release-notes a:hover {
+    color: #1d4ed8;
+}
+
+.dark .release-notes a {
+    color: #60a5fa;
+}
+
+.dark .release-notes a:hover {
+    color: #93c5fd;
+}
+
+.release-notes blockquote {
+    margin: 0.75rem 0;
+    padding-left: 1rem;
+    border-left: 4px solid #d1d5db;
+    color: #6b7280;
+    font-style: italic;
+}
+
+.dark .release-notes blockquote {
+    border-left-color: #374151;
+    color: #9ca3af;
+}
+
+.release-notes table {
+    width: 100%;
+    margin-bottom: 0.75rem;
+    border-collapse: collapse;
+}
+
+.release-notes th,
+.release-notes td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+}
+
+.release-notes th {
+    background-color: #f3f4f6;
+    font-weight: 600;
+    text-align: left;
+}
+
+.dark .release-notes th {
+    background-color: #1a1d24;
+    border-color: #374151;
+}
+
+.dark .release-notes td {
+    border-color: #374151;
+}
+
+.release-notes hr {
+    margin: 1rem 0;
+    border-color: #d1d5db;
+}
+
+.dark .release-notes hr {
+    border-color: #374151;
+}
+
+.release-notes img {
+    max-width: 100%;
+    height: auto;
+    margin: 0.75rem 0;
+    border-radius: 0.5rem;
+}
+
+.release-notes strong {
+    font-weight: 600;
+    color: #111827;
+}
+
+.release-notes em {
+    font-style: italic;
+}
+
+/* =========================================================
+   Message Content
+========================================================= */
+
+.message-content p {
+    margin-bottom: 0.5rem;
+}
+
+.message-content ul {
+    margin-bottom: 0.5rem;
+    margin-left: 1.5rem;
+    list-style-type: disc;
+}
+
+.message-content li {
+    margin-bottom: 0.25rem;
+}
+
+.message-content strong {
+    font-weight: 600;
+    color: #111827;
+}
+
+.dark .message-content strong {
+    color: white;
+}

@@ -59,23 +59,4 @@
     <input type="checkbox" id="auto-refresh" class="rounded text-blue-500 focus:ring-blue-500 bg-gray-600 border-gray-500">
     <label for="auto-refresh" class="text-gray-400 text-sm">Auto-refresh every 10 seconds</label>
 </div>
-
-<script>
-    // Auto-refresh functionality
-    let refreshInterval = null;
-    const checkbox = document.getElementById('auto-refresh');
-    
-    checkbox.addEventListener('change', function() {
-        if (this.checked) {
-            refreshInterval = setInterval(function() {
-                htmx.ajax('GET', '/api/logs/entries', '#log-entries');
-            }, 10000);
-        } else {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-                refreshInterval = null;
-            }
-        }
-    });
-</script>
 {% endblock %}

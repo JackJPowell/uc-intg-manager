@@ -249,39 +249,6 @@
         <div id="backup-list" class="mt-4"></div>
         <div id="backup-content"></div>
     </div>
-    
-    <script>
-        function uploadBackupFile(input) {
-            const file = input.files[0];
-            if (!file) return;
-            
-            const formData = new FormData();
-            formData.append('file', file);
-            
-            fetch('/api/backups/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                const resultDiv = document.getElementById('backup-result');
-                if (data.status === 'ok') {
-                    resultDiv.innerHTML = '<div class=\"text-green-400\">' + data.message + '</div>';
-                    // Refresh backup list
-                    htmx.trigger('#backup-list', 'load');
-                } else {
-                    resultDiv.innerHTML = '<div class=\"text-red-400\">Error: ' + data.message + '</div>';
-                }
-                // Clear file input
-                input.value = '';
-            })
-            .catch(error => {
-                document.getElementById('backup-result').innerHTML = 
-                    '<div class=\"text-red-400\">Upload failed: ' + error + '</div>';
-                input.value = '';
-            });
-        }
-    </script>
 </div>
 
 <!-- Remote Connection Info -->
@@ -325,52 +292,4 @@
         <div id="resume-ops-result" class="flex items-center text-sm mt-2"></div>
     </div>
 </div>
-
-<script>
-    async function checkLockStatus() {
-        try {
-            const resp = await fetch('/api/operation-lock/status');
-            const data = await resp.json();
-            const btn = document.getElementById('resume-ops-btn');
-            const hint = document.getElementById('resume-ops-hint');
-            if (data.locked) {
-                btn.disabled = false;
-                const mins = data.elapsed_seconds !== null ? Math.floor(data.elapsed_seconds / 60) : null;
-                hint.textContent = mins !== null
-                    ? `An operation has been stuck for about ${mins} minute${mins !== 1 ? 's' : ''}. Click to unblock installs and updates.`
-                    : 'An operation appears to be stuck. Click to unblock installs and updates.';
-                hint.classList.add('text-yellow-600', 'dark:text-yellow-400');
-                hint.classList.remove('text-gray-500', 'dark:text-gray-400');
-            } else {
-                btn.disabled = true;
-                hint.textContent = 'No stuck operations detected.';
-                hint.classList.remove('text-yellow-600', 'dark:text-yellow-400');
-                hint.classList.add('text-gray-500', 'dark:text-gray-400');
-            }
-        } catch (e) {
-            document.getElementById('resume-ops-hint').textContent = 'Could not check status.';
-        }
-    }
-
-    async function resumeOperations() {
-        const btn = document.getElementById('resume-ops-btn');
-        const result = document.getElementById('resume-ops-result');
-        btn.disabled = true;
-        try {
-            const resp = await fetch('/api/operation-lock/release', { method: 'POST' });
-            const data = await resp.json();
-            if (data.status === 'ok' && data.was_locked) {
-                result.innerHTML = '<span class="text-green-600 dark:text-green-400"><i class="fa-solid fa-circle-check mr-1"></i>Operations unblocked.</span>';
-            } else {
-                result.innerHTML = '<span class="text-gray-500 dark:text-gray-400">No lock was active.</span>';
-            }
-        } catch (e) {
-            result.innerHTML = '<span class="text-red-500">Failed to release lock.</span>';
-        }
-        await checkLockStatus();
-    }
-
-    checkLockStatus();
-</script>
-
 {% endblock %}
