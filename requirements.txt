@@ -1,6 +1,6 @@
 # Core dependencies
 ucapi==0.7.0
-ucapi-framework==1.9.3
+ucapi-framework==1.9.5
 pyee>=9.0
 
 # Web framework
