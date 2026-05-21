@@ -1,0 +1,46 @@
+<!-- Reusable operation confirmation modal content -->
+{% set danger = tone == 'danger' %}
+<div class="space-y-4" data-modal-title="{{ title }}">
+    <div class="flex items-start gap-4 p-4 rounded-lg border {% if danger %}bg-red-50 dark:bg-red-500/10 border-red-400 dark:border-red-500/30{% else %}bg-yellow-50 dark:bg-yellow-500/10 border-yellow-400 dark:border-yellow-500/30{% endif %}">
+        <div class="flex-shrink-0 w-11 h-11 rounded-full {% if danger %}bg-red-600/20 dark:bg-red-500/20{% else %}bg-yellow-600/20 dark:bg-yellow-500/20{% endif %} flex items-center justify-center">
+            <i class="fa-solid {{ icon }} {% if danger %}text-red-600 dark:text-red-400{% else %}text-yellow-600 dark:text-yellow-400{% endif %} text-xl"></i>
+        </div>
+        <div class="min-w-0">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">{{ heading }}</h3>
+            <p class="text-sm text-gray-700 dark:text-gray-300">{{ message }}</p>
+        </div>
+    </div>
+
+    {% if current_version or target_version %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {% if current_version %}
+        <div class="bg-gray-100 dark:bg-uc-darker rounded-lg p-3 border border-gray-300 dark:border-uc-border">
+            <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Current Version</div>
+            <div class="font-mono text-sm text-gray-900 dark:text-white">{{ current_version }}</div>
+        </div>
+        {% endif %}
+        {% if target_version %}
+        <div class="bg-gray-100 dark:bg-uc-darker rounded-lg p-3 border border-gray-300 dark:border-uc-border">
+            <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Target Version</div>
+            <div class="font-mono text-sm text-gray-900 dark:text-white">{{ target_version }}</div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if danger %}
+    <div class="bg-red-50 dark:bg-red-950/30 border border-red-300 dark:border-red-500/30 rounded-lg p-3 text-sm text-red-800 dark:text-red-300">
+        <i class="fa-solid fa-shield-halved mr-2"></i>
+        Recommended: create or verify a backup before continuing.
+    </div>
+    {% endif %}
+
+    <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 pt-4 border-t border-gray-300 dark:border-uc-border">
+        <button type="button" id="operation-confirm-cancel" class="px-4 py-2 bg-gray-200 dark:bg-uc-card hover:bg-gray-300 dark:hover:bg-uc-darker text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white text-sm font-medium rounded-lg transition-colors border border-gray-300 dark:border-uc-border">
+            Cancel
+        </button>
+        <button type="button" id="operation-confirm-submit" class="px-4 py-2 {% if danger %}bg-red-600 hover:bg-red-700 border-red-700 dark:bg-red-500/20 dark:hover:bg-red-500/30 dark:border-red-500/30 dark:text-red-300{% else %}bg-yellow-600 hover:bg-yellow-700 border-yellow-700 dark:bg-yellow-500/20 dark:hover:bg-yellow-500/30 dark:border-yellow-500/30 dark:text-yellow-300{% endif %} text-white text-sm font-medium rounded-lg transition-colors border">
+            <i class="fa-solid {{ icon }} mr-2"></i>{{ confirm_label }}
+        </button>
+    </div>
+</div>

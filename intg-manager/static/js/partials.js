@@ -136,50 +136,87 @@
   };
 
   function initRemoteSelector(root = document) {
-    const button = root.querySelector?.('#remote-selector-button') || $('remote-selector-button');
-    const menu = root.querySelector?.('#remote-selector-menu') || $('remote-selector-menu');
+    const scope = root && root.querySelector ? root : document;
+    const button = scope.querySelector('#remote-selector-button');
+    const menu = scope.querySelector('#remote-selector-menu');
     if (!button || !menu || button.dataset.bound) return;
     button.dataset.bound = 'true';
 
+    function closeThisMenu() {
+      menu.classList.add('hidden');
+      button.setAttribute('aria-expanded', 'false');
+    }
+
     button.addEventListener('click', function (event) {
       event.stopPropagation();
-      menu.classList.toggle('hidden');
+      const isHidden = menu.classList.toggle('hidden');
+      button.setAttribute('aria-expanded', isHidden ? 'false' : 'true');
     });
 
-    root.querySelectorAll?.('.remote-selector-item').forEach(item => {
+    scope.querySelectorAll('.remote-selector-item').forEach(item => {
       if (item.dataset.bound) return;
       item.dataset.bound = 'true';
-      item.addEventListener('click', function () {
+      item.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
         const remoteId = this.dataset.remoteId;
+        const remoteName = this.textContent.trim().replace(/\s+/g, ' ');
+        closeThisMenu();
+        button.disabled = true;
+
+        // The desktop and mobile selectors can both exist in the DOM. Keep their labels in sync.
+        document.querySelectorAll('#selected-remote-name').forEach(label => {
+          if (remoteName) label.textContent = remoteName;
+        });
+
         fetch('/api/active-remote', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'HX-Request': 'true' },
+          credentials: 'same-origin',
           body: JSON.stringify({ remote_id: remoteId })
         })
-          .then(response => response.json())
+          .then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            return data;
+          })
           .then(data => {
             if (data.status === 'ok') {
-              localStorage.setItem('active_remote_id', remoteId);
-              window.location.reload();
+              const canonicalRemoteId = data.active_remote_id || remoteId;
+              localStorage.setItem('active_remote_id', canonicalRemoteId);
+              if (window.invalidateShellPageCache) window.invalidateShellPageCache();
+              const refreshIslands = window.refreshShellIslands ? Promise.resolve(window.refreshShellIslands({ force: true })) : Promise.resolve();
+              refreshIslands.finally(() => {
+                if (window.refreshCurrentPageContent) {
+                  window.refreshCurrentPageContent({ refreshNav: true, cache: false });
+                } else {
+                  window.location.assign(window.location.href);
+                }
+              });
             } else {
-              console.error('Failed to switch remote:', data.error);
-              alert('Failed to switch remote: ' + data.error);
+              throw new Error(data.error || 'Unknown error');
             }
           })
           .catch(error => {
             console.error('Error switching remote:', error);
-            alert('Error switching remote: ' + error);
+            alert('Error switching remote: ' + error.message);
+          })
+          .finally(() => {
+            button.disabled = false;
           });
       });
     });
   }
 
   document.addEventListener('click', function (event) {
-    const button = $('remote-selector-button');
-    const menu = $('remote-selector-menu');
-    if (button && menu && !button.contains(event.target) && !menu.contains(event.target)) {
-      menu.classList.add('hidden');
-    }
+    document.querySelectorAll('#remote-selector-menu').forEach(menu => {
+      const container = menu.closest('[data-shell-island]') || menu.parentElement;
+      const button = container ? container.querySelector('#remote-selector-button') : null;
+      if (button && !button.contains(event.target) && !menu.contains(event.target)) {
+        menu.classList.add('hidden');
+        button.setAttribute('aria-expanded', 'false');
+      }
+    });
   });
 
   function syncStoredRemote() {
@@ -189,12 +226,19 @@
     fetch('/api/active-remote')
       .then(response => response.json())
       .then(data => {
-        if (data.active_remote_id !== storedRemoteId) {
+        const activeRemoteId = data.active_remote_id || data.id;
+        if (activeRemoteId !== storedRemoteId) {
           return fetch('/api/active-remote', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'HX-Request': 'true' },
+            credentials: 'same-origin',
             body: JSON.stringify({ remote_id: storedRemoteId })
-          }).then(() => window.location.reload());
+          }).then(() => {
+            if (window.invalidateShellPageCache) window.invalidateShellPageCache();
+            if (window.refreshShellIslands) window.refreshShellIslands({ force: true });
+            if (window.refreshCurrentPageContent) window.refreshCurrentPageContent({refreshNav: true, cache: false});
+            else window.location.assign(window.location.href);
+          });
         }
       })
       .catch(error => console.debug('Remote sync skipped:', error));
@@ -242,6 +286,177 @@
     return 0;
   }
 
+
+  function operationNeedsConfirmation(url) {
+    if (!url) return false;
+    return /\/api\/(?:integration\/[^/]+\/(?:update|update-alt|update-inplace)|driver\/[^/]+\/update|self-update(?:-inplace)?)(?:\?|$)/.test(url);
+  }
+
+  function selectedOperationVersion(elt, url) {
+    try {
+      const u = new URL(url, window.location.href);
+      const fromUrl = u.searchParams.get('version');
+      if (fromUrl) return fromUrl;
+    } catch (_) {}
+    const form = elt?.closest?.('form') || (elt?.tagName === 'FORM' ? elt : null);
+    const inputVersion = form?.querySelector?.('input[name="version"]')?.value;
+    return inputVersion || '';
+  }
+
+  function currentVersionForOperation(elt) {
+    const targetId = elt?.getAttribute?.('hx-target');
+    if (targetId && targetId.startsWith('#card-')) {
+      const driverId = targetId.replace('#card-', '');
+      const overlay = document.getElementById('upgrade-overlay-' + driverId);
+      return overlay?.getAttribute('data-current-version') || '';
+    }
+    const card = elt?.closest?.('[id^="card-"]');
+    if (card) {
+      const driverId = card.id.replace('card-', '');
+      const overlay = document.getElementById('upgrade-overlay-' + driverId);
+      return overlay?.getAttribute('data-current-version') || '';
+    }
+    return '';
+  }
+
+  function operationConfirmationDetails(elt, url) {
+    const targetVersion = selectedOperationVersion(elt, url);
+    const currentVersion = currentVersionForOperation(elt);
+    const isDowngrade = currentVersion && targetVersion && compareVersions(targetVersion, currentVersion) < 0;
+    const isSelfUpdate = /\/api\/self-update/.test(url || '');
+
+    if (isDowngrade) {
+      return {
+        title: 'Confirm Downgrade',
+        tone: 'danger',
+        icon: 'fa-triangle-exclamation',
+        heading: `Downgrade from ${currentVersion} to ${targetVersion}?`,
+        message: 'Downgrading can break functionality, invalidate migrations, or cause data/configuration loss. Continue only if you have a verified backup and know this version is compatible.',
+        confirmLabel: 'Downgrade anyway',
+        currentVersion,
+        targetVersion
+      };
+    }
+
+    if (targetVersion && currentVersion) {
+      return {
+        title: 'Confirm Version Change',
+        tone: 'warning',
+        icon: 'fa-arrows-rotate',
+        heading: `Change version from ${currentVersion} to ${targetVersion}?`,
+        message: 'This may restart the integration and can affect configuration, entity registration, or active automations.',
+        confirmLabel: 'Change version',
+        currentVersion,
+        targetVersion
+      };
+    }
+
+    if (targetVersion) {
+      return {
+        title: isSelfUpdate ? 'Confirm Integration Manager Update' : 'Confirm Version Change',
+        tone: 'warning',
+        icon: 'fa-arrows-rotate',
+        heading: `Install ${targetVersion}?`,
+        message: isSelfUpdate ? 'Integration Manager will update and restart. The UI may be temporarily unavailable.' : 'This may restart the integration and can affect configuration or entity registration.',
+        confirmLabel: isSelfUpdate ? 'Update Integration Manager' : 'Install version',
+        currentVersion: '',
+        targetVersion
+      };
+    }
+
+    return {
+      title: 'Confirm Integration Update',
+      tone: 'warning',
+      icon: 'fa-arrows-rotate',
+      heading: 'Update this integration?',
+      message: 'This may restart the integration and can affect configuration or entity registration.',
+      confirmLabel: 'Update integration',
+      currentVersion: '',
+      targetVersion: ''
+    };
+  }
+
+  async function fetchOperationConfirmationModal(details) {
+    const response = await fetch('/api/modal/operation-confirm', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'HX-Request': 'true'
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify(details)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to load confirmation modal (${response.status})`);
+    }
+
+    return response.text();
+  }
+
+  document.body.addEventListener('htmx:confirm', function (event) {
+    const elt = event.detail && event.detail.elt;
+    const url = elt?.getAttribute?.('hx-post') || '';
+    if (!operationNeedsConfirmation(url)) return;
+
+    event.preventDefault();
+    const details = operationConfirmationDetails(elt, url);
+
+    openModal(details.title);
+
+    fetchOperationConfirmationModal(details)
+      .then(function (html) {
+        const content = document.getElementById('modal-content');
+        if (content) content.innerHTML = html;
+
+        const titleSource = content?.querySelector?.('[data-modal-title]');
+        if (titleSource?.dataset?.modalTitle) {
+          updateModalTitle(titleSource.dataset.modalTitle);
+        }
+
+        const submit = document.getElementById('operation-confirm-submit');
+        const cancel = document.getElementById('operation-confirm-cancel');
+
+        cancel?.addEventListener('click', function () {
+          closeModal();
+        }, { once: true });
+
+        submit?.addEventListener('click', function () {
+          const driverId = (elt.getAttribute('hx-target') || '').replace('#card-', '');
+          const overlay = driverId ? document.getElementById('upgrade-overlay-' + driverId) : null;
+          const textElement = overlay?.querySelector('.upgrade-text');
+          if (overlay) overlay.classList.remove('hidden');
+          if (textElement && details.targetVersion && details.currentVersion) {
+            textElement.textContent = details.tone === 'danger' ? 'Downgrading...' : 'Upgrading...';
+          }
+          closeModal();
+          event.detail.issueRequest(true);
+        }, { once: true });
+      })
+      .catch(function (error) {
+        const content = document.getElementById('modal-content');
+        if (content) {
+          content.innerHTML = `
+            <div class="space-y-4" data-modal-title="Confirmation Error">
+              <div class="flex items-start gap-3 p-4 bg-red-50 dark:bg-red-500/10 border border-red-400 dark:border-red-500/30 rounded-lg">
+                <i class="fa-solid fa-circle-exclamation text-red-600 dark:text-red-400 text-xl mt-0.5"></i>
+                <div>
+                  <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">Could not load confirmation</h3>
+                  <p id="operation-confirm-error-message" class="text-sm text-gray-700 dark:text-gray-300"></p>
+                </div>
+              </div>
+              <div class="flex justify-end pt-4 border-t border-gray-300 dark:border-uc-border">
+                <button type="button" onclick="closeModal()" class="px-4 py-2 bg-gray-200 dark:bg-uc-card hover:bg-gray-300 dark:hover:bg-uc-darker text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors border border-gray-300 dark:border-uc-border">Close</button>
+              </div>
+            </div>
+          `;
+          const message = document.getElementById('operation-confirm-error-message');
+          if (message) message.textContent = String(error.message || error);
+        }
+        updateModalTitle('Confirmation Error');
+      });
+  });
+
   function initVersionSelector(root = document) {
     root.querySelectorAll?.('[hx-post]').forEach(button => {
       if (button.dataset.versionHandlerBound) return;
@@ -268,6 +483,8 @@
     initRemoteSelector(root);
     initVersionSelector(root);
   }
+
+  window.initPartialBehaviors = initPartialBehaviors;
 
   document.addEventListener('DOMContentLoaded', function () {
     initPartialBehaviors(document);

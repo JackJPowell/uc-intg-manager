@@ -349,3 +349,155 @@
 .dark .message-content strong {
     color: white;
 }
+
+/* =========================================================
+   Buttons & Interactive Elements
+========================================================= */
+
+a[href],
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+input[type="button"]:not(:disabled),
+input[type="submit"]:not(:disabled),
+input[type="reset"]:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+select:not(:disabled),
+summary,
+label[for],
+.cursor-pointer {
+    cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled,
+[aria-disabled="true"],
+.cursor-not-allowed {
+    cursor: not-allowed;
+}
+
+/* =========================================================
+   App Shell Layout
+========================================================= */
+
+:root {
+    --im-header-height: 4rem;
+    --im-footer-height: 3.5rem;
+}
+
+html,
+body {
+    height: 100%;
+    overflow: hidden;
+}
+
+#app-shell-root {
+    height: 100vh;
+    overflow: hidden;
+}
+
+#top-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--im-header-height);
+    z-index: 60;
+}
+
+#header-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    height: 100%;
+    width: 100%;
+    column-gap: 0.75rem;
+}
+
+#header-brand {
+    grid-column: 1;
+    justify-self: start;
+    align-self: center;
+    min-width: 0;
+}
+
+#status-indicator {
+    grid-column: 2;
+    justify-self: center;
+    align-self: center;
+}
+
+#remote-selector-container {
+    grid-column: 3;
+    justify-self: end;
+    align-self: center;
+    min-width: 0;
+}
+
+#app-body {
+    position: fixed;
+    top: var(--im-header-height);
+    bottom: var(--im-footer-height);
+    left: 0;
+    right: 0;
+    z-index: 10;
+    display: flex;
+    align-items: stretch;
+    overflow: hidden;
+}
+
+#mobile-sidebar {
+    top: var(--im-header-height);
+    bottom: var(--im-footer-height);
+    height: calc(100vh - var(--im-header-height) - var(--im-footer-height));
+    max-height: calc(100vh - var(--im-header-height) - var(--im-footer-height));
+}
+
+#mobile-overlay {
+    top: var(--im-header-height);
+    bottom: var(--im-footer-height);
+}
+
+#main-scroll-container {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+#app-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: var(--im-footer-height);
+    z-index: 60;
+}
+
+@media (min-width: 1024px) {
+    #mobile-sidebar {
+        position: relative !important;
+        top: auto;
+        bottom: auto;
+        height: 100%;
+        max-height: 100%;
+        transform: none !important;
+    }
+}
+
+@media (max-width: 767px) {
+    #header-grid {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    #header-brand {
+        grid-column: 1;
+    }
+
+    #remote-selector-container {
+        grid-column: 2;
+    }
+}
