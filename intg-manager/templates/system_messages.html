@@ -3,7 +3,7 @@
 {% block title %}System Messages - Integration Manager{% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto">
+<div class="mx-auto">
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-3xl font-bold text-gray-900 dark:text-white flex items-center">
             <i class="fa-solid fa-inbox mr-3 text-gray-900 dark:text-white"></i>
@@ -13,9 +13,12 @@
             id="refreshBtn"
             hx-post="/api/system-messages/refresh" 
             hx-swap="none"
-            class="px-4 py-2 bg-gray-200 dark:bg-uc-card hover:bg-uc-primary hover:text-white text-gray-700 dark:text-white rounded-lg transition-colors flex items-center">
-            <i class="fa-solid fa-arrows-rotate mr-2"></i>
-            Refresh
+            hx-on::before-request="this.disabled=true; document.getElementById('system-messages-refresh-icon')?.classList.add('fa-spin')"
+            hx-on::after-request="this.disabled=false; document.getElementById('system-messages-refresh-icon')?.classList.remove('fa-spin'); if(window.refreshCurrentPageContent) window.refreshCurrentPageContent({ refreshNav: true })"
+            hx-on::response-error="this.disabled=false; document.getElementById('system-messages-refresh-icon')?.classList.remove('fa-spin')"
+            class="px-4 py-2 bg-gray-200 dark:bg-uc-card hover:bg-uc-primary hover:text-white disabled:opacity-70 disabled:cursor-wait text-gray-700 dark:text-white rounded-lg transition-colors flex items-center gap-2">
+            <i id="system-messages-refresh-icon" class="fa-solid fa-arrows-rotate"></i>
+            <span>Refresh</span>
         </button>
     </div>
 

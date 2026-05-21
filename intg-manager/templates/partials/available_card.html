@@ -223,7 +223,7 @@
                         hx-post="{% if supports_inplace_update %}/api/self-update-inplace{% else %}/api/self-update{% endif %}?version={{ integration.latest_version }}"
                         hx-swap="none"
                         hx-on::before-request="document.querySelector('[id^=upgrade-overlay-]') && document.querySelector('[id^=upgrade-overlay-]').classList.remove('hidden');"
-                        hx-on::after-request="if(event.detail.successful) window.location.href='/updating?version={{ integration.latest_version }}'; else { var ov=document.querySelector('[id^=upgrade-overlay-]'); if(ov) ov.classList.add('hidden'); }"
+                        hx-on::after-request="if(event.detail.successful){ if(window.IMNavigate){window.IMNavigate.go('/updating?version={{ integration.latest_version }}');}else{window.location.href='/updating?version={{ integration.latest_version }}';} } else { var ov=document.querySelector('[id^=upgrade-overlay-]'); if(ov) ov.classList.add('hidden'); }"
                         title="{% if integration.latest_version < integration.version %}Downgrade{% else %}Update{% endif %} Integration Manager to {{ integration.latest_version }}">
                         <i class="fa-solid {% if integration.latest_version < integration.version %}fa-download{% else %}fa-upload{% endif %} h-3 w-3 mr-1"></i>
                         {{ integration.latest_version }}

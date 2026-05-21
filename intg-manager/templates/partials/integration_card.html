@@ -106,37 +106,37 @@
     {% if integration.update_available and integration.can_update and not integration.official and not integration.external and not integration.self_managed %}
     <!-- Two-row layout on mobile (centered), single-row on desktop (split left/right) when update is available -->
     <div class="pt-3 border-t border-uc-border">
-        <div class="flex flex-col sm:flex-row items-center justify-center sm:justify-between gap-2">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-center sm:justify-between gap-3 min-w-0">
             <!-- Status badge -->
             {% if integration.state == 'NOT_CONFIGURED' %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-600 dark:bg-yellow-500/10 text-white dark:text-yellow-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-600 dark:bg-yellow-500/10 text-white dark:text-yellow-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-yellow-400 rounded-full"></span>
                 Needs Configuration
             </span>
             {% elif integration.state == 'CONNECTED' or integration.state == 'OK' %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-600 dark:bg-green-500/10 text-white dark:text-green-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-600 dark:bg-green-500/10 text-white dark:text-green-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-green-400 rounded-full"></span>
                 Connected
             </span>
             {% elif integration.state == 'DISCONNECTED' or integration.state == 'ERROR' %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-600 dark:bg-red-500/10 text-white dark:text-red-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-600 dark:bg-red-500/10 text-white dark:text-red-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-red-400 rounded-full"></span>
                 Disconnected
             </span>
             {% else %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-600 dark:bg-gray-500/10 text-white dark:text-gray-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-600 dark:bg-gray-500/10 text-white dark:text-gray-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-gray-400 rounded-full"></span>
                 {{ integration.state }}
             </span>
             {% endif %}
             
             <!-- Action buttons and version upgrade -->
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
             <!-- Sponsor button -->
             {% set _spo = sponsors.get(integration.developer) %}
             {% if _spo and _spo.links %}
             <div class="group relative">
-                <button class="p-1.5 text-pink-500 dark:text-pink-400 hover:bg-uc-card rounded-lg transition-colors">
+                <button class="p-1.5 text-pink-500 dark:text-pink-400 hover:bg-uc-card rounded-lg transition-colors flex-shrink-0">
                     <i class="fa-solid fa-heart h-4 w-4"></i>
                 </button>
                 <div class="absolute left-0 bottom-full pb-2 hidden group-hover:block z-[9999]">
@@ -174,7 +174,7 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Select Version')"
-                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Select version">
                 <i class="fa-solid fa-list-ul h-4 w-4"></i>
             </button>
@@ -186,14 +186,14 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Delete Integration')"
-                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Delete integration">
                 <i class="fa-solid fa-trash-alt h-4 w-4"></i>
             </button>
             
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -219,19 +219,19 @@
                hx-swap="innerHTML"
                hx-on::before-request="openModal('Release Notes - v{{ integration.version }}')"
                onclick="event.preventDefault();"
-               class="text-xs text-gray-400 hover:text-uc-primary dark:hover:text-gray-300 transition-colors cursor-pointer" 
+               class="text-xs text-gray-400 hover:text-uc-primary dark:hover:text-gray-300 transition-colors cursor-pointer flex-shrink-0" 
                title="View release notes for v{{ integration.version }}">
                 v{{ integration.version }}
             </a>
-            <span class="text-gray-500">→</span>
+            <span class="text-gray-500 flex-shrink-0">→</span>
             
             <!-- Split button: Main action + Dropdown for alternative -->
-            <div class="relative inline-flex rounded-lg shadow-sm">
+            <div class="relative inline-flex max-w-full flex-shrink-0 rounded-lg shadow-sm">
                 <!-- Main Update Button -->
                 {% if supports_inplace_update %}
                 {# Firmware >= 2.9.3: in-place update, preserves config with no backup/restore needed #}
                 <button 
-                    class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
+                    class="inline-flex items-center min-w-0 px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
                     hx-post="/api/integration/{{ integration.driver_id }}/update-inplace?version={{ integration.latest_version }}"
                     hx-target="#card-{{ integration.driver_id }}"
                     hx-swap="outerHTML"
@@ -243,7 +243,7 @@
                 {% elif integration.can_auto_update %}
                 {# Can do automated backup/restore - direct update #}
                 <button 
-                    class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
+                    class="inline-flex items-center min-w-0 px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
                     hx-post="{% if integration.instance_id %}/api/integration/{{ integration.instance_id }}/update?version={{ integration.latest_version }}{% else %}/api/driver/{{ integration.driver_id }}/update?version={{ integration.latest_version }}{% endif %}"
                     hx-target="#card-{{ integration.driver_id }}"
                     hx-swap="outerHTML"
@@ -255,7 +255,7 @@
                 {% else %}
                 {# Cannot do automated backup - show warning modal first #}
                 <button 
-                    class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
+                    class="inline-flex items-center min-w-0 px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
                     hx-get="/api/integration/{{ integration.driver_id }}/update-confirm"
                     hx-target="#modal-content"
                     hx-swap="innerHTML"
@@ -269,14 +269,14 @@
                 <!-- Dropdown Toggle Button -->
                 <button 
                     type="button"
-                    class="inline-flex items-center px-2 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-r-lg transition-colors"
+                    class="inline-flex items-center flex-shrink-0 px-2 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-medium rounded-r-lg transition-colors"
                     onclick="toggleDropdown(event, 'dropdown-{{ integration.driver_id }}')"
                     title="More options">
                     <i id="chevron-{{ integration.driver_id }}" class="fa-solid fa-chevron-down h-3 w-3 transition-transform duration-200"></i>
                 </button>
                 
                 <!-- Dropdown Menu -->
-                <div id="dropdown-{{ integration.driver_id }}" class="hidden absolute right-0 top-full mt-1 w-56 rounded-lg shadow-lg bg-uc-light-card dark:bg-uc-card border border-uc-light-border dark:border-uc-border z-[9999]">
+                <div id="dropdown-{{ integration.driver_id }}" class="hidden absolute right-0 top-full mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-lg shadow-lg bg-uc-light-card dark:bg-uc-card border border-uc-light-border dark:border-uc-border z-[9999]">
                     <div class="py-1">
                         {% if integration.can_auto_update %}
                         {# Can do automated backup/restore - show alternate update option #}
@@ -355,37 +355,37 @@
     </div>
     {% else %}
     <!-- Single-row layout for all other states -->
-    <div class="flex items-center justify-between gap-2 pt-3 border-t border-uc-border">
-        <div class="flex items-center gap-2">
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-3 border-t border-uc-border min-w-0">
+        <div class="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
             {% if integration.state == 'NOT_CONFIGURED' %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-600 dark:bg-yellow-500/10 text-white dark:text-yellow-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-600 dark:bg-yellow-500/10 text-white dark:text-yellow-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-yellow-400 rounded-full"></span>
                 Needs Configuration
             </span>
             {% elif integration.state == 'CONNECTED' or integration.state == 'OK' %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-600 dark:bg-green-500/10 text-white dark:text-green-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-600 dark:bg-green-500/10 text-white dark:text-green-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-green-400 rounded-full"></span>
                 Connected
             </span>
             {% elif integration.state == 'DISCONNECTED' or integration.state == 'ERROR' %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-600 dark:bg-red-500/10 text-white dark:text-red-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-600 dark:bg-red-500/10 text-white dark:text-red-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-red-400 rounded-full"></span>
                 Disconnected
             </span>
             {% else %}
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-600 dark:bg-gray-500/10 text-white dark:text-gray-300">
+            <span class="inline-flex flex-shrink-0 items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-600 dark:bg-gray-500/10 text-white dark:text-gray-300">
                 <span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-gray-400 rounded-full"></span>
                 {{ integration.state }}
             </span>
             {% endif %}
         </div>
         
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
             <!-- Sponsor button -->
             {% set _spo = sponsors.get(integration.developer) %}
             {% if _spo and _spo.links %}
             <div class="group relative">
-                <button class="p-1.5 text-pink-500 dark:text-pink-400 hover:bg-uc-card rounded-lg transition-colors">
+                <button class="p-1.5 text-pink-500 dark:text-pink-400 hover:bg-uc-card rounded-lg transition-colors flex-shrink-0">
                     <i class="fa-solid fa-heart h-4 w-4"></i>
                 </button>
                 <div class="absolute left-0 bottom-full pb-2 hidden group-hover:block z-[9999]">
@@ -425,7 +425,7 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Select Version')"
-                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Select version">
                 <i class="fa-solid fa-list-ul h-4 w-4"></i>
             </button>
@@ -438,14 +438,14 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Delete Integration')"
-                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Delete integration">
                 <i class="fa-solid fa-trash-alt h-4 w-4"></i>
             </button>
             
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -470,7 +470,7 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Select Version')"
-                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Select version">
                 <i class="fa-solid fa-list-ul h-4 w-4"></i>
             </button>
@@ -483,14 +483,14 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Delete Integration')"
-                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Delete integration">
                 <i class="fa-solid fa-trash-alt h-4 w-4"></i>
             </button>
 
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -507,9 +507,9 @@
             {% set repo = path_parts[1] %}
             <span class="text-xs text-gray-500 dark:text-gray-400 font-mono">v{{ integration.version }}</span>
             <span class="text-gray-500 dark:text-gray-600">→</span>
-            <div class="relative inline-flex rounded-lg shadow-sm">
+            <div class="relative inline-flex max-w-full flex-shrink-0 rounded-lg shadow-sm">
                 <button
-                    class="inline-flex items-center px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-semibold rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
+                    class="inline-flex items-center min-w-0 px-3 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm font-semibold rounded-l-lg transition-colors border-r border-yellow-700 dark:border-yellow-500/30"
                     hx-post="{% if supports_inplace_update %}/api/self-update-inplace{% else %}/api/self-update{% endif %}?version={{ integration.latest_version }}"
                     hx-swap="none"
                     hx-on::before-request="document.getElementById('upgrade-overlay-{{ integration.driver_id }}').classList.remove('hidden');"
@@ -520,7 +520,7 @@
                 </button>
                 <button
                     type="button"
-                    class="inline-flex items-center px-2 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm rounded-r-lg transition-colors"
+                    class="inline-flex items-center flex-shrink-0 px-2 py-1.5 bg-yellow-600 dark:bg-yellow-500/10 hover:bg-yellow-700 dark:hover:bg-yellow-500/30 text-white dark:text-yellow-300 text-sm rounded-r-lg transition-colors"
                     onclick="toggleDropdown(event, 'dropdown-self-nc-{{ integration.driver_id }}')"
                     title="More update options">
                     <i class="fa-solid fa-chevron-down h-3 w-3"></i>
@@ -593,7 +593,7 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Select Version')"
-                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Select version">
                 <i class="fa-solid fa-list-ul h-4 w-4"></i>
             </button>
@@ -606,14 +606,14 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Delete Integration')"
-                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Delete integration">
                 <i class="fa-solid fa-trash-alt h-4 w-4"></i>
             </button>
             
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -640,14 +640,14 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Delete Integration')"
-                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Delete integration">
                 <i class="fa-solid fa-trash-alt h-4 w-4"></i>
             </button>
             
             {% if integration.home_page %}
             <a href="{{ integration.home_page }}" target="_blank" rel="noopener"
-               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5"
+               class="text-gray-400 hover:text-white hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                title="View on GitHub">
                 <i class="fa-brands fa-github h-4 w-4"></i>
             </a>
@@ -677,7 +677,7 @@
                 hx-target="#modal-content"
                 hx-swap="innerHTML"
                 hx-on::before-request="openModal('Delete Integration')"
-                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5"
+                class="text-gray-400 hover:text-red-400 hover:bg-uc-card rounded-lg transition-colors p-1.5 flex-shrink-0"
                 title="Delete integration">
                 <i class="fa-solid fa-trash-alt h-4 w-4"></i>
             </button>

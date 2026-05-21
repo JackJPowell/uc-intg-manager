@@ -21,12 +21,15 @@
                 </div>
                 <div class="ml-6">
                     <p class="text-sm text-gray-400">Installed Integrations</p>
-                    <p class="text-2xl font-semibold text-gray-900 dark:text-white" 
+                    <p class="text-2xl font-semibold text-gray-900 dark:text-white flex items-center min-h-[2rem]" 
                        id="installed-count"
                        hx-get="/api/stats/installed-count"
                        hx-trigger="load"
                        hx-swap="innerHTML">
-                        <span class="spinner"></span>
+                        <span class="inline-flex items-center gap-2 text-sm font-medium text-gray-500 dark:text-gray-400">
+                            <span class="spinner"></span>
+                            Loading…
+                        </span>
                     </p>
                 </div>
             </div>
@@ -39,12 +42,15 @@
                 </div>
                 <div class="ml-6">
                     <p class="text-sm text-gray-400">Updates Available</p>
-                    <p class="text-2xl font-semibold text-gray-900 dark:text-white" 
+                    <p class="text-2xl font-semibold text-gray-900 dark:text-white flex items-center min-h-[2rem]" 
                        id="updates-count"
                        hx-get="/api/stats/updates-count"
                        hx-trigger="load"
                        hx-swap="innerHTML">
-                        <span class="spinner"></span>
+                        <span class="inline-flex items-center gap-2 text-sm font-medium text-gray-500 dark:text-gray-400">
+                            <span class="spinner"></span>
+                            Loading…
+                        </span>
                     </p>
                 </div>
             </div>

@@ -3,15 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Integration Manager{% endblock %} - Unfolded Circle</title>
+    <title id="document-title">{% block title %}Integration Manager{% endblock %} - Unfolded Circle</title>
     
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
     
     <!-- Tailwind CSS via local build -->
     <link rel="stylesheet" href="/static/css/style.css">
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="/static/vendor/font-awesome-7.0.0.min.css">
+    <link rel="preload" href="/static/vendor/webfonts/fa-solid-900.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/vendor/webfonts/fa-brands-400.woff2" as="font" type="font/woff2" crossorigin>
     
-    <!-- Theme detection with localStorage override -->
     <!-- HTMX -->
     <script src="/static/vendor/htmx.org-1.9.10.min.js"></script>
 
@@ -20,18 +24,16 @@
     <script src="/static/js/templates.js" defer></script>
     <script src="/static/js/partials.js" defer></script>
 
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="/static/vendor/font-awesome-7.0.0.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
-    
+
 
 </head>
-<body class="min-h-screen bg-uc-darker dark:bg-uc-darker bg-uc-light-bg text-gray-900 dark:text-gray-100">
-    <div class="min-h-screen flex flex-col">
+<body class="h-screen overflow-hidden bg-uc-darker dark:bg-uc-darker bg-uc-light-bg text-gray-900 dark:text-gray-100" data-page-url="{{ request.path }}">
+    <div id="app-shell-root">
         <!-- Header -->
-        <header class="bg-uc-dark dark:bg-uc-dark bg-white border-b border-uc-border dark:border-uc-border border-uc-light-border">
-            <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8">
-                <div class="flex items-center justify-between h-16">
-                    <div class="flex items-center space-x-2 sm:space-x-3">
+        <header id="top-header" class="bg-uc-dark dark:bg-uc-dark bg-white border-b border-uc-border dark:border-uc-border border-uc-light-border">
+            <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8 h-full">
+                <div id="header-grid">
+                    <div id="header-brand" class="flex items-center justify-start space-x-2 sm:space-x-3 pr-3">
                         <!-- Mobile menu button -->
                         <button id="mobile-menu-button" type="button" class="lg:hidden p-2 text-gray-400 dark:text-gray-400 text-gray-600 hover:text-white dark:hover:text-white hover:text-gray-900 hover:bg-uc-card dark:hover:bg-uc-card hover:bg-gray-100 rounded-lg transition-colors focus:outline-none" onclick="toggleMobileMenu()">
                             <i class="fa-solid fa-bars h-6 w-6"></i>
@@ -44,50 +46,61 @@
                             </div>
                         </div>
                     </div>
-                    <div id="status-indicator" 
-                         hx-get="/api/status/html" 
-                         hx-trigger="load, every 30s"
-                         hx-swap="innerHTML"
-                         class="hidden md:flex items-center gap-2">
-                        <span class="htmx-indicator spinner"></span>
+                    <div id="status-indicator"
+                         data-shell-island="status"
+                         data-url="/api/status/html"
+                         data-interval="30000"
+                         class="hidden md:flex items-center justify-center gap-2 min-w-[14rem] min-h-[2.5rem] text-center">
+                        <span class="spinner inline-block"></span>
                     </div>
                     
                     <!-- Remote Selector -->
                     <div id="remote-selector-container"
-                         hx-get="/api/remotes/list"
-                         hx-trigger="load, every 30s"
-                         hx-swap="innerHTML"
-                         class="ml-2 md:ml-4">
+                         data-shell-island="remote-selector"
+                         data-url="/api/remotes/list"
+                         data-interval="30000"
+                         class="hidden md:flex items-center justify-end pl-3 min-h-[2.5rem]">
                     </div>
                 </div>
             </div>
         </header>
 
         <!-- Main Content -->
-        <div class="flex-1 flex relative">
+        <div id="app-body">
             <!-- Mobile Overlay -->
-            <div id="mobile-overlay" class="hidden lg:hidden fixed inset-0 bg-black bg-opacity-50 z-20" onclick="toggleMobileMenu()"></div>
+            <div id="mobile-overlay" class="hidden lg:hidden fixed left-0 right-0 bg-black bg-opacity-50 z-40" onclick="toggleMobileMenu()"></div>
             
             <!-- Sidebar Navigation -->
-            <nav id="mobile-sidebar" class="fixed lg:static inset-y-0 left-0 transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out z-30 w-64 bg-uc-dark dark:bg-uc-dark bg-white border-r border-uc-border dark:border-uc-border border-uc-light-border flex-shrink-0 flex flex-col overflow-y-auto">
+            <nav id="mobile-sidebar"
+                 class="fixed lg:relative left-0 transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out z-50 lg:z-20 w-64 bg-uc-dark dark:bg-uc-dark bg-white border-r border-uc-border dark:border-uc-border border-uc-light-border flex-shrink-0 flex flex-col overflow-y-auto">
                 <div class="p-4 space-y-2 flex-1">
+                    <div id="mobile-remote-selector-container"
+                         data-shell-island="remote-selector-mobile"
+                         data-url="/api/remotes/list"
+                         data-interval="30000"
+                         class="lg:hidden mb-4 pb-4 border-b border-uc-border dark:border-uc-border border-uc-light-border">
+                        <div class="flex items-center justify-center py-2">
+                            <span class="spinner inline-block"></span>
+                        </div>
+                    </div>
+
                     <h2 class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
                         Management
                     </h2>
                     
-                    <a href="/" 
+                    <a href="/" data-nav-link data-nav-path="/"
                        class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'index' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                         <i class="fa-regular fa-house mr-3 text-lg"></i>
                         Dashboard
                     </a>
                     
-                    <a href="/integrations" 
+                    <a href="/integrations" data-nav-link data-nav-path="/integrations"
                        class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'integrations_page' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                         <i class="fa-solid fa-list-check mr-3 text-lg"></i>
                         Your Integrations
                     </a>
                     
-                    <a href="/available" 
+                    <a href="/available" data-nav-link data-nav-path="/available"
                        class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'available_page' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                         <i class="fa-solid fa-plus mr-3 text-lg"></i>
                         Available Integrations
@@ -99,13 +112,13 @@
                             Remote
                         </h2>
 
-                        <a href="{{ remote_configurator_url }}" target="_blank" rel="noopener"
+                        <a href="{{ remote_configurator_url }}" target="_blank" rel="noopener" hx-boost="false"
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white transition-colors">
                             <i class="fa-solid fa-arrow-up-right-from-square mr-3 text-lg"></i>
                             Web Configurator
                         </a>
 
-                        <a href="{{ remote_configurator_url }}/doc/core-rest/" target="_blank" rel="noopener"
+                        <a href="{{ remote_configurator_url }}/doc/core-rest/" target="_blank" rel="noopener" hx-boost="false"
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white transition-colors">
                             <i class="fa-solid fa-arrow-up-right-from-square mr-3 text-lg"></i>
                             Core REST API
@@ -118,51 +131,49 @@
                             System
                         </h2>
                         
-                        <a href="/settings" 
+                        <a href="/settings" data-nav-link data-nav-path="/settings"
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'settings_page' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                             <i class="fa-solid fa-gear mr-3 text-lg"></i>
                             Settings
                         </a>
                         
-                        <a href="/notifications" 
+                        <a href="/notifications" data-nav-link data-nav-path="/notifications"
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'notifications_page' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                             <i class="fa-solid fa-bell mr-3 text-lg"></i>
                             Notifications
                         </a>
                         
-                        <a href="/diagnostics" 
+                        <a href="/diagnostics" data-nav-link data-nav-path="/diagnostics"
                            class="flex items-center justify-between px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'diagnostics_page' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                             <div class="flex items-center">
                                 <i class="fa-solid fa-stethoscope mr-3 text-lg"></i>
                                 Diagnostics
                             </div>
-                            {% if orphaned_entities_count > 0 %}
-                            <span class="ml-2 px-2 py-0.5 text-xs font-bold bg-orange-500 dark:bg-orange-500 bg-orange-600 text-white rounded-full">
-                                {{ orphaned_entities_count }}
-                            </span>
-                            {% endif %}
+                            <span id="nav-diagnostics-pill"
+                                  data-shell-island="diagnostics-pill"
+                                  data-url="/api/nav/diagnostics-count"
+                                  data-interval="60000">{% if orphaned_entities_count > 0 %}<span class="ml-2 px-2 py-0.5 text-xs font-bold bg-orange-500 dark:bg-orange-500 bg-orange-600 text-white rounded-full">{{ orphaned_entities_count }}</span>{% endif %}</span>
                         </a>
                         
-                        <a href="/system-messages" 
+                        <a href="/system-messages" data-nav-link data-nav-path="/system-messages"
                            class="flex items-center justify-between px-4 py-3 text-sm font-medium rounded-lg {% if request.endpoint == 'system_messages_page' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                             <div class="flex items-center">
                                 <i class="fa-solid fa-inbox mr-3 text-lg"></i>
                                 System Messages
                             </div>
-                            {% if unread_messages_count > 0 %}
-                            <span class="ml-2 px-2 py-0.5 text-xs font-bold bg-blue-600 dark:bg-uc-primary text-white rounded-full">
-                                {{ unread_messages_count }}
-                            </span>
-                            {% endif %}
+                            <span id="nav-system-messages-pill"
+                                  data-shell-island="system-messages-pill"
+                                  data-url="/api/nav/system-messages-count"
+                                  data-interval="60000">{% if unread_messages_count > 0 %}<span class="ml-2 px-2 py-0.5 text-xs font-bold bg-blue-600 dark:bg-uc-primary text-white rounded-full">{{ unread_messages_count }}</span>{% endif %}</span>
                         </a>
                         
-                        <a href="/logs" 
+                        <a href="/logs" data-nav-link data-nav-path="/logs"
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/logs' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                             <i class="fa-solid fa-clipboard-list mr-3 text-lg"></i>
                             Manager Logs
                         </a>
                         
-                        <a href="/integration-logs" 
+                        <a href="/integration-logs" data-nav-link data-nav-path="/integration-logs"
                            class="flex items-center px-4 py-3 text-sm font-medium rounded-lg {% if request.path == '/integration-logs' %}bg-uc-primary text-white{% else %}text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-uc-card hover:text-gray-900 dark:hover:text-white{% endif %} transition-colors">
                             <i class="fa-solid fa-file-code mr-3 text-lg"></i>
                             Integration Logs
@@ -172,8 +183,8 @@
             </nav>
 
             <!-- Main Content Area -->
-            <main class="flex-1 overflow-auto">
-                <div class="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+            <main id="main-scroll-container" class="flex-1 min-w-0">
+                <div id="page-content" class="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-8" hx-history-elt>
                     {% if active_remote_id and not active_remote_online %}
                     <div class="mb-4 p-4 rounded-lg border border-amber-400 bg-amber-50 dark:border-yellow-500/50 dark:bg-yellow-500/10 flex items-center gap-3">
                         <i class="fa-solid fa-circle-exclamation text-amber-500 dark:text-yellow-400"></i>
@@ -188,9 +199,9 @@
         </div>
 
         <!-- Footer -->
-        <footer class="bg-uc-dark dark:bg-uc-dark bg-white border-t border-uc-border dark:border-uc-border border-uc-light-border">
-            <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8 py-4">
-                <div class="flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-0 text-xs sm:text-sm text-gray-400">
+        <footer id="app-footer" class="bg-uc-dark dark:bg-uc-dark bg-white border-t border-uc-border dark:border-uc-border border-uc-light-border">
+            <div class="max-w-12xl mx-auto px-3 sm:px-6 lg:px-8 h-full">
+                <div class="h-full flex flex-col sm:flex-row items-center justify-center sm:justify-between gap-1 sm:gap-0 text-xs sm:text-sm text-gray-400">
                     <div id="footer-quote">
                         <!-- Random quote will be inserted here -->
                     </div>

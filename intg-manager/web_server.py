@@ -1238,6 +1238,59 @@ async def _can_backup_integration(
     return True, ""
 
 
+
+
+def _is_shell_request() -> bool:
+    """Return True for HTMX shell navigation requests."""
+    return (
+        request.headers.get("X-Shell-Navigation") == "true"
+        or request.args.get("__shell") == "1"
+    )
+
+
+async def _render_page_template(template_name: str, **context: Any):
+    """Render either the full application shell or only #page-content.
+
+    Shell navigation requests do not need the persistent header/sidebar/footer.
+    Rendering against page_content_base.html avoids rebuilding the full shell,
+    reduces response size, and skips expensive shell-only context where possible.
+    """
+    if _is_shell_request():
+        context.setdefault("layout_template", "page_content_base.html")
+        response = await render_template(template_name, **context)
+        return response
+
+    return await render_template(template_name, **context)
+
+
+async def _diagnostics_count_badge() -> str:
+    client = _get_active_remote_client()
+    remote_id = get_active_remote_id()
+    if not client or not is_remote_online(remote_id):
+        return ""
+    try:
+        orphaned_entities = await client.find_orphan_entities()
+        activity_ids = {e.get("activity_id") for e in orphaned_entities if e.get("activity_id")}
+        orphaned_codesets = await find_orphaned_ir_codesets(client)
+        total = len(activity_ids) + len(orphaned_codesets)
+        if total <= 0:
+            return ""
+        return f'<span class="ml-2 px-2 py-0.5 text-xs font-bold bg-orange-500 dark:bg-orange-500 bg-orange-600 text-white rounded-full">{total}</span>'
+    except Exception as e:
+        _LOG.debug("Failed to build diagnostics badge: %s", e)
+        return ""
+
+
+async def _system_messages_count_badge() -> str:
+    try:
+        count = get_system_messages_service().get_unread_count()
+        if count <= 0:
+            return ""
+        return f'<span class="ml-2 px-2 py-0.5 text-xs font-bold bg-blue-600 dark:bg-uc-primary text-white rounded-full">{count}</span>'
+    except Exception as e:
+        _LOG.debug("Failed to build system message badge: %s", e)
+        return ""
+
 # =============================================================================
 # Routes
 # =============================================================================
@@ -1275,19 +1328,19 @@ async def get_registry():
 @app.route("/")
 async def index():
     """Render the main dashboard page."""
-    return await render_template("index.html")
+    return await _render_page_template("index.html")
 
 
 @app.route("/integrations")
 async def integrations_page():
     """Render the integrations management page."""
-    return await render_template("integrations.html")
+    return await _render_page_template("integrations.html")
 
 
 @app.route("/available")
 async def available_page():
     """Render the available integrations page."""
-    return await render_template("available.html")
+    return await _render_page_template("available.html")
 
 
 @app.route("/updating")
@@ -1295,7 +1348,7 @@ async def updating_page():
     """Render the self-update waiting page."""
     target_version = request.args.get("version", "")
     inplace = request.args.get("inplace", "").lower() in ("true", "1", "yes")
-    return await render_template(
+    return await _render_page_template(
         "updating.html", target_version=target_version, inplace=inplace
     )
 
@@ -3384,6 +3437,47 @@ async def get_update_confirmation(driver_id: str):
         return f"<p class='text-red-600 dark:text-red-400'>Error: {str(e)}</p>"
 
 
+@app.route("/api/modal/operation-confirm", methods=["POST"])
+async def operation_confirm_modal():
+    """Render the reusable operation confirmation modal content."""
+    payload = await request.get_json(silent=True) or {}
+
+    def text_value(key: str, default: str = "") -> str:
+        value = payload.get(key, default)
+        if value is None:
+            return default
+        return str(value)[:500]
+
+    tone = text_value("tone", "warning")
+    if tone not in {"warning", "danger"}:
+        tone = "warning"
+
+    icon = text_value("icon", "fa-arrows-rotate")
+    allowed_icons = {
+        "fa-arrows-rotate",
+        "fa-triangle-exclamation",
+        "fa-upload",
+        "fa-download",
+    }
+    if icon not in allowed_icons:
+        icon = "fa-arrows-rotate"
+
+    return await render_template(
+        "partials/modal_operation_confirm.html",
+        title=text_value("title", "Confirm Operation"),
+        tone=tone,
+        icon=icon,
+        heading=text_value("heading", "Confirm this operation?"),
+        message=text_value(
+            "message",
+            "This operation may restart the integration or affect its configuration.",
+        ),
+        confirm_label=text_value("confirmLabel", "Continue"),
+        current_version=text_value("currentVersion"),
+        target_version=text_value("targetVersion"),
+    )
+
+
 @app.route("/api/integration/<driver_id>/delete-confirm")
 async def get_delete_confirmation(driver_id: str):
     """
@@ -5088,7 +5182,7 @@ async def settings_page():
     _LOG.info(
         f"Settings page: UC_CONFIG_HOME='{uc_config_home}', is_external={is_external}"
     )
-    return await render_template(
+    return await _render_page_template(
         "settings.html",
         settings=settings,
         ui_prefs=ui_prefs,
@@ -5178,6 +5272,45 @@ async def update_sort_settings():
         return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>", 500
 
 
+
+def _compact_remote_identifier(value: str | None) -> str:
+    """Return a comparison-safe remote identifier."""
+    return (value or "").replace(":", "").replace("_", "").replace("-", "").lower()
+
+
+def _resolve_remote_id(remote_id: str | None) -> str | None:
+    """Resolve posted remote identifiers to the canonical configured remote id."""
+    if not remote_id:
+        return None
+
+    if remote_id in _remote_configs:
+        return remote_id
+    if remote_id in _remote_clients:
+        return remote_id
+
+    candidates = {remote_id, remote_id.replace(":", "_"), remote_id.replace("_", ":")}
+    for candidate in candidates:
+        if candidate in _remote_configs or candidate in _remote_clients:
+            return candidate
+
+    compact = _compact_remote_identifier(remote_id)
+    for configured_id, config in _remote_configs.items():
+        if compact == _compact_remote_identifier(configured_id):
+            return configured_id
+        if compact == _compact_remote_identifier(getattr(config, "identifier", "")):
+            return configured_id
+        if remote_id == getattr(config, "address", None):
+            return configured_id
+        if remote_id == getattr(config, "name", None):
+            return configured_id
+
+    for configured_id in _remote_clients.keys():
+        if compact == _compact_remote_identifier(configured_id):
+            return configured_id
+
+    return None
+
+
 # ============================================================================
 # Remote Switching Routes
 # ============================================================================
@@ -5195,6 +5328,7 @@ async def get_active_remote():
     return jsonify(
         {
             "id": remote_id,
+            "active_remote_id": remote_id,
             "name": config.name,
             "address": config.address,
             "connected": is_remote_online(remote_id),
@@ -5212,8 +5346,11 @@ async def set_active_remote():
         if not remote_id:
             return jsonify({"error": "remote_id required"}), 400
 
-        if remote_id not in _remote_clients:
-            return jsonify({"error": "Invalid remote_id"}), 400
+        resolved_remote_id = _resolve_remote_id(remote_id)
+        if not resolved_remote_id or resolved_remote_id not in _remote_configs:
+            return jsonify({"error": "Invalid remote_id", "remote_id": remote_id}), 400
+
+        remote_id = resolved_remote_id
 
         # Update session
         session["active_remote_id"] = remote_id
@@ -5257,6 +5394,19 @@ async def get_remotes_list():
     )
 
 
+
+
+@app.route("/api/nav/diagnostics-count")
+async def nav_diagnostics_count():
+    """Dynamic diagnostics badge for the persistent sidebar."""
+    return await _diagnostics_count_badge()
+
+
+@app.route("/api/nav/system-messages-count")
+async def nav_system_messages_count():
+    """Dynamic unread system-message badge for the persistent sidebar."""
+    return await _system_messages_count_badge()
+
 # ============================================================================
 # Notification Routes
 # ============================================================================
@@ -5267,7 +5417,7 @@ async def notifications_page():
     """Render the notifications settings page."""
 
     notification_settings = NotificationSettings.load(remote_id=get_active_remote_id())
-    return await render_template(
+    return await _render_page_template(
         "notifications.html",
         notification_settings=notification_settings,
     )
@@ -5667,7 +5817,7 @@ async def save_notification_triggers():
 async def logs_page():
     """Render the logs page."""
     entries = get_log_entries()
-    return await render_template(
+    return await _render_page_template(
         "logs.html",
         entries=entries,
         log_count=len(entries),
@@ -5711,7 +5861,7 @@ async def clear_logs():
 async def integration_logs_page():
     """Render the integration logs page."""
     if not _get_active_remote_client() or not is_remote_online(get_active_remote_id()):
-        return await render_template(
+        return await _render_page_template(
             "integration_logs.html",
             services=[],
             entries=[],
@@ -5761,7 +5911,7 @@ async def integration_logs_page():
         # Sort by display name
         active_services.sort(key=lambda x: x.get("display_name", ""))
 
-        return await render_template(
+        return await _render_page_template(
             "integration_logs.html",
             services=active_services,
             entries=[],
@@ -5769,7 +5919,7 @@ async def integration_logs_page():
         )
     except SyncAPIError as e:
         _LOG.error("Failed to fetch log services: %s", e)
-        return await render_template(
+        return await _render_page_template(
             "integration_logs.html",
             services=[],
             entries=[],
@@ -5924,7 +6074,9 @@ async def inject_remote_configurator_url():
 
 @app.context_processor
 async def inject_system_messages_count():
-    """Inject unread system messages count into all templates."""
+    """Inject unread system messages count into full-shell renders only."""
+    if _is_shell_request():
+        return {"unread_messages_count": 0}
     try:
         messages_service = get_system_messages_service()
         return {"unread_messages_count": messages_service.get_unread_count()}
@@ -5935,11 +6087,13 @@ async def inject_system_messages_count():
 
 @app.context_processor
 async def inject_orphaned_entities_count():
-    """Inject orphaned entities + IR codesets count into all templates.
+    """Inject orphaned entities + IR codesets count into full-shell renders only.
 
-    Skipped entirely when the active remote is offline so page renders never
-    block on a remote that is in standby/unreachable.
+    Shell navigation updates the persistent nav badge through /api/nav/diagnostics-count,
+    so the remote lookup must not run during page-body swaps.
     """
+    if _is_shell_request():
+        return {"orphaned_entities_count": 0}
     client = _get_active_remote_client()
     remote_id = get_active_remote_id()
     if not client or not is_remote_online(remote_id):
@@ -6036,8 +6190,14 @@ def _get_category_name_map() -> dict[str, str]:
 
 @app.context_processor
 async def inject_sponsors():
-    """Inject sponsors lookup dict and firmware context into all templates."""
+    """Inject sponsors lookup dict and firmware context."""
     uc_config_home = os.getenv("UC_CONFIG_HOME", "")
+    if _is_shell_request():
+        return {
+            "sponsors": {},
+            "supports_inplace_update": _supports_inplace_update(),
+            "is_docker": uc_config_home.startswith("/config"),
+        }
     return {
         "sponsors": _get_sponsors(),
         "supports_inplace_update": _supports_inplace_update(),
@@ -6060,14 +6220,14 @@ async def system_messages_page():
             message_ids = [msg.id for msg in unread_messages]
             messages_service.mark_messages_as_read(message_ids)
 
-        return await render_template(
+        return await _render_page_template(
             "system_messages.html",
             unread_messages=unread_messages,
             read_messages=read_messages,
         )
     except Exception as e:
         _LOG.error("Failed to load system messages: %s", e)
-        return await render_template(
+        return await _render_page_template(
             "system_messages.html",
             unread_messages=[],
             read_messages=[],
@@ -6100,14 +6260,26 @@ async def refresh_system_messages():
 
 @app.route("/diagnostics")
 async def diagnostics_page():
-    """Render the diagnostics page."""
+    """Render the diagnostics page with current firmware status when available."""
     remote_id = get_active_remote_id()
+    client = _get_active_remote_client()
     system_update = _system_update_cache.get(remote_id, {}) if remote_id else {}
-    return await render_template(
+
+    # Hydrate the firmware status on first visit/navigation so the diagnostics
+    # page does not show an empty "click Check for Updates" state until the user
+    # manually presses the button. Keep failures non-fatal: the page should still
+    # render and the user can retry with the explicit check button.
+    if client and remote_id and is_remote_online(remote_id) and not system_update:
+        try:
+            system_update = await client.check_system_update()
+            _system_update_cache[remote_id] = system_update
+        except Exception as e:
+            _LOG.warning("Failed to hydrate system update status for diagnostics page: %s", e)
+            system_update = {}
+
+    return await _render_page_template(
         "diagnostics.html",
-        remote_address=_get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-        if _get_active_remote_client()
-        else "localhost",
+        remote_address=client._address if client else "localhost",  # ty:ignore[unresolved-attribute]
         system_update=system_update,
     )
 

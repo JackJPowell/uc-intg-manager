@@ -3,14 +3,14 @@
 {% block title %}Notifications{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-8 max-w-6xl">
-    <div class="mb-6 sm:mb-8">
+<div class="space-y-6">
+    <div>
         <h1 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-2">Notification Settings</h1>
         <p class="text-gray-600 dark:text-gray-400">Configure how you want to be notified about integration updates, errors, and events.</p>
     </div>
 
-    <!-- Success/Error Messages - Fixed at top -->
-    <div id="notification-message" class="hidden fixed top-2 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-50 sm:max-w-md sm:w-full shadow-2xl transition-all duration-300"></div>
+    <!-- Success/Error Messages -->
+    <div id="notification-message" class="hidden fixed top-20 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-[9999] sm:max-w-md sm:w-full shadow-2xl transition-all duration-300"></div>
 
     <!-- Notification Providers Cards -->
     <div class="space-y-6">
