@@ -11,6 +11,14 @@ _Changes in the next release_
 
 ---
 
+## v2.0.4 - 2025-05-24
+
+### Fixes
+
+- When running in docker no longer bind to the legacy web server port (8088)
+  
+---
+
 ## v2.0.3 - 2025-05-20
 
 ### Fixes
