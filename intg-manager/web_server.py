@@ -6904,17 +6904,18 @@ class WebServer:
 
         self._shutdown_event = _asyncio.Event()
         try:
+            is_docker = os.environ.get("UC_CONFIG_HOME", "").startswith("/config")
             _LOG.info(
-                "Creating Hypercorn server on %s:%d (legacy notice on :%d)",
+                "Creating Hypercorn server on %s:%d%s",
                 self._host,
                 self._port,
-                LEGACY_WEB_SERVER_PORT,
+                "" if is_docker else f" (legacy notice on :{LEGACY_WEB_SERVER_PORT})",
             )
             config = HypercornConfig()
-            config.bind = [
-                f"{self._host}:{self._port}",
-                f"{self._host}:{LEGACY_WEB_SERVER_PORT}",
-            ]
+            bindings = [f"{self._host}:{self._port}"]
+            if not is_docker:
+                bindings.append(f"{self._host}:{LEGACY_WEB_SERVER_PORT}")
+            config.bind = bindings
             config.loglevel = "WARNING"
             _LOG.info("Server configured, starting to serve...")
             loop = _asyncio.new_event_loop()
