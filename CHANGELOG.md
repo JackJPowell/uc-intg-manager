@@ -5,9 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v2.0.6 - 2026-07-17
 
-_Changes in the next release_
+### Added
+
+- Firmware update notifications now include associated docks as well as the remote. The existing firmware-update notification preference controls both device types.
 
 ---
 
