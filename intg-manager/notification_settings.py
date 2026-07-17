@@ -107,7 +107,7 @@ class NotificationTriggers:
     """Notify when orphaned entities are detected in activities."""
 
     firmware_update_available: bool = True
-    """Notify when a firmware update is available for the remote."""
+    """Notify when a firmware update is available for the remote or an associated dock."""
 
 
 @dataclass

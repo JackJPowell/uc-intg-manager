@@ -394,6 +394,41 @@ class NotificationManager:
         :param available_version: Version available for update
         :param title: Update title from the API
         """
+        await self._notify_firmware_update(
+            notification_key=available_version,
+            device_name="Remote",
+            installed_version=installed_version,
+            available_version=available_version,
+            title=title,
+        )
+
+    async def notify_dock_firmware_update(
+        self,
+        dock_id: str,
+        installed_version: str,
+        available_version: str,
+        title: str,
+    ) -> None:
+        """Notify when a firmware update is available for a dock."""
+        await self._notify_firmware_update(
+            notification_key=f"dock:{dock_id}:{available_version}",
+            device_name=f"Dock {dock_id}",
+            installed_version=installed_version,
+            available_version=available_version,
+            title=title,
+            data={"device_type": "dock", "dock_id": dock_id},
+        )
+
+    async def _notify_firmware_update(
+        self,
+        notification_key: str,
+        device_name: str,
+        installed_version: str,
+        available_version: str,
+        title: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Send one firmware update notification per device and version."""
         settings = self._load_settings()
         if (
             not self._should_notify(settings)
@@ -401,16 +436,20 @@ class NotificationManager:
         ):
             return
 
-        if available_version in self._notified_firmware_versions:
+        if notification_key in self._notified_firmware_versions:
             _LOG.debug(
-                "[%s] Already notified for firmware version %s",
+                "[%s] Already notified for %s firmware version %s",
                 self._remote_id,
+                device_name,
                 available_version,
             )
             return
 
         notification_title = self._remote_title("Firmware Update Available")
-        message = f"{title} ({available_version}) is available. Currently installed: {installed_version}"
+        message = (
+            f"{device_name} firmware update {title} ({available_version}) is available. "
+            f"Currently installed: {installed_version}"
+        )
 
         _LOG.info(
             "[%s] Sending firmware update notification: %s -> %s",
@@ -425,12 +464,14 @@ class NotificationManager:
                 message,
                 data=self._remote_data(
                     {
+                        "device_type": "remote",
                         "installed_version": installed_version,
                         "available_version": available_version,
+                        **(data or {}),
                     }
                 ),
             )
-            self._notified_firmware_versions.add(available_version)
+            self._notified_firmware_versions.add(notification_key)
             self._save_notification_state()
             _LOG.info(
                 "[%s] Sent firmware update notification for %s",

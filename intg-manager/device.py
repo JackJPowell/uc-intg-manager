@@ -478,6 +478,9 @@ class IntegrationManagerDevice(PollingDevice):
                 # Per-remote task: Check for system firmware updates
                 await self._check_system_update()
 
+                # Per-remote task: Check firmware updates for associated docks
+                await self._check_dock_updates()
+
                 # Shared task: Fetch repository batch (owner only)
                 if self._is_owner():
                     web_server.fetch_repository_batch()
@@ -718,6 +721,61 @@ class IntegrationManagerDevice(PollingDevice):
             _LOG.debug("[%s] Failed to check system update: %s", self.log_id, e)
         except Exception as e:
             _LOG.warning("[%s] Error checking system update: %s", self.log_id, e)
+
+    async def _check_dock_updates(self) -> None:
+        """Check associated docks for firmware updates and send notifications."""
+        try:
+            docks = await self._client.get_docks()
+        except RemoteAPIError as e:
+            _LOG.debug("[%s] Failed to get associated docks: %s", self.log_id, e)
+            return
+
+        for dock in docks:
+            dock_id = dock.get("dock_id") if isinstance(dock, dict) else None
+            if not dock_id:
+                _LOG.debug("[%s] Skipping dock without an ID: %s", self.log_id, dock)
+                continue
+
+            try:
+                update_info = await self._client.get_dock_update(dock_id)
+            except RemoteAPIError as e:
+                _LOG.debug(
+                    "[%s] Failed to check update for dock %s: %s",
+                    self.log_id,
+                    dock_id,
+                    e,
+                )
+                continue
+
+            if not update_info.get("update_available"):
+                continue
+
+            firmware_update = update_info.get("firmware_update") or {}
+            available_version = firmware_update.get("version", "")
+            installed_version = update_info.get("version", "")
+            if not available_version:
+                _LOG.warning(
+                    "[%s] Dock %s reports an update without a version",
+                    self.log_id,
+                    dock_id,
+                )
+                continue
+
+            model = firmware_update.get("model", "Dock")
+            _LOG.info(
+                "[%s] %s %s firmware update available: %s -> %s",
+                self.log_id,
+                model,
+                dock_id,
+                installed_version,
+                available_version,
+            )
+            await _get_nm(self.identifier).notify_dock_firmware_update(
+                dock_id=dock_id,
+                installed_version=installed_version,
+                available_version=available_version,
+                title=model,
+            )
 
     def _is_backup_time(self, backup_time_str: str) -> bool:
         """
