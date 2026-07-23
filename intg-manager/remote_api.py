@@ -253,6 +253,15 @@ class RemoteAPIClient:
         """
         return await self._request("GET", "/system/update") or {}
 
+    async def get_docks(self) -> list[dict[str, Any]]:
+        """Return the docks associated with this remote."""
+        docks = await self._request("GET", "/docks")
+        return docks if isinstance(docks, list) else []
+
+    async def get_dock_update(self, dock_id: str) -> dict[str, Any]:
+        """Return firmware update information for a dock."""
+        return await self._request("GET", f"/docks/devices/{dock_id}/update") or {}
+
     async def is_docked(self) -> bool:
         """
         Check if the remote is currently charging (docked or wireless).
