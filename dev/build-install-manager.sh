@@ -37,6 +37,10 @@ echo "==> Building Integration Manager (driver_id=${DRIVER_ID}) for aarch64..."
 
 cd "$WORKSPACE"
 
+echo "==> Building React UI..."
+npm --prefix "$WORKSPACE/ui" ci
+npm --prefix "$WORKSPACE/ui" run build
+
 rm -rf "$WORKSPACE/dist/intg-${DRIVER_ID}" "$WORKSPACE/build/intg-${DRIVER_ID}"
 
 docker run --rm --name builder \
@@ -51,7 +55,6 @@ docker run --rm --name builder \
                 --collect-all zeroconf \
                 --collect-all quart \
                 --collect-all hypercorn \
-                --add-data 'intg-${INTG_NAME}/templates:templates' \
                 --add-data 'intg-${INTG_NAME}/static:static' \
                 intg-${INTG_NAME}/driver.py"
 
@@ -62,6 +65,7 @@ mkdir -p "$ARTIFACT_DIR/bin"
 mv "$WORKSPACE/dist/intg-${DRIVER_ID}"/* "$ARTIFACT_DIR/bin/"
 mv "$ARTIFACT_DIR/bin/intg-${DRIVER_ID}" "$ARTIFACT_DIR/bin/driver"
 cp "$WORKSPACE/driver.json" "$ARTIFACT_DIR/driver.json"
+cp "$WORKSPACE/intg-manager/static/img/intg-manager.png" "$ARTIFACT_DIR/intg-manager.png"
 
 tar czf "$WORKSPACE/${ARCHIVE_NAME}" -C "$ARTIFACT_DIR" .
 

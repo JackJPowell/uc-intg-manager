@@ -15,17 +15,18 @@ import io
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from html import unescape
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any
 
 import aiohttp
-import markdown
 from backup_service import (
     backup_all_integrations,
     backup_integration,
@@ -52,7 +53,6 @@ from quart import (
     Response,
     jsonify,
     redirect,
-    render_template,
     request,
     send_file,
     session,
@@ -101,19 +101,13 @@ else:
     # Running as regular Python script
     BASE_DIR = os.path.dirname(__file__)
 
-TEMPLATE_DIR = os.path.abspath(os.path.join(BASE_DIR, "templates"))
 STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "static"))
 
-# Create Flask app with cache disabled for read-only filesystems
+# Create the API/static application with cache disabled for read-only filesystems.
 app = Quart(
     __name__,
-    template_folder=TEMPLATE_DIR,
     static_folder=STATIC_DIR,
 )
-# Disable Jinja2 bytecode cache to avoid writing to read-only filesystem
-app.jinja_env.auto_reload = True
-app.jinja_env.cache = {}
-app.jinja_env.bytecode_cache = None
 # Additional config for read-only filesystem
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -157,10 +151,10 @@ async def _redirect_legacy_port() -> Response | None:
     host = request.host  # e.g. "192.168.1.100:8088"
     if host.endswith(f":{LEGACY_WEB_SERVER_PORT}"):
         # Allow through: the notice page itself and any static assets it needs
-        if request.path not in ("/port-moved",) and not request.path.startswith(
+        if request.path not in ("/manager/port-moved",) and not request.path.startswith(
             "/static/"
         ):
-            return redirect("/port-moved", 302)  # ty:ignore[invalid-return-type]
+            return redirect("/manager/port-moved", 302)  # ty:ignore[invalid-return-type]
 
 
 def get_active_remote_id() -> str | None:
@@ -219,16 +213,6 @@ def is_remote_online(remote_id: str | None) -> bool:
         caller,
     )
     return result
-
-
-def _render_offline_partial() -> str:
-    """Return a small HTML partial used by HTMX endpoints when the active remote is offline."""
-    return (
-        "<div class='p-6 text-center text-gray-500 dark:text-gray-400'>"
-        "<i class='fa-solid fa-plug-circle-xmark mr-2'></i>"
-        "Remote is offline. When it comes back online, refresh the page to load data."
-        "</div>"
-    )
 
 
 def get_notification_manager(remote_id: str | None = None):
@@ -488,6 +472,116 @@ class AvailableIntegration:
     def __post_init__(self):
         if self.categories is None:
             self.categories = []
+
+
+def _api_error(code: str, message: str, status: int = 400):
+    """Return the single JSON error shape used by the React client."""
+    return jsonify({"error": {"code": code, "message": message}}), status
+
+
+def _developer_api_model(developer: str) -> dict[str, Any] | None:
+    """Expose optional developer and donation links as catalog data."""
+    if not developer:
+        return None
+    try:
+        registry_data = load_registry_data()
+        developers = registry_data.get("developers", []) if isinstance(registry_data, dict) else []
+        for entry in developers:
+            if isinstance(entry, dict) and entry.get("name") == developer:
+                templates = {
+                    "github": "https://github.com/sponsors/{}",
+                    "buy_me_a_coffee": "https://www.buymeacoffee.com/{}",
+                    "paypal": "https://www.paypal.com/paypalme/{}",
+                    "patreon": "https://www.patreon.com/{}",
+                    "ko-fi": "https://ko-fi.com/{}",
+                    "venmo": "https://venmo.com/{}",
+                    "cashapp": "https://cash.app/${}",
+                }
+                raw_links = entry.get("sponsorship_links", entry.get("links", {}))
+                links = {
+                    platform: value if value.startswith("http") else templates[platform].format(value)
+                    for platform, value in raw_links.items()
+                    if isinstance(value, str) and value and (value.startswith("http") or platform in templates)
+                } if isinstance(raw_links, dict) else {}
+                return {
+                    "homepage": entry.get("homepage") or None,
+                    "supportLinks": [
+                        {"platform": platform, "url": url}
+                        for platform, url in links.items()
+                    ] if isinstance(links, dict) else [],
+                }
+    except Exception as e:
+        _LOG.debug("Unable to load developer links for %s: %s", developer, e)
+    return None
+
+
+def _plain_text(value: str) -> str:
+    """Expose user-facing text through JSON without rendered HTML."""
+    return unescape(re.sub(r"<[^>]+>", "", value)).strip()
+
+
+def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) -> dict:
+    """Serialize an integration as data and capabilities, never as UI markup."""
+    is_available = isinstance(integration, AvailableIntegration)
+    management = (
+        "official"
+        if integration.official
+        else "external"
+        if integration.external
+        else "self_managed"
+        if integration.self_managed
+        else "custom"
+    )
+    if is_available:
+        install_state = integration.install_status
+        connection_state = "unknown"
+        installed = integration.installed
+        driver_installed = integration.driver_installed
+    else:
+        install_state = "configured" if integration.instance_id else "installed"
+        connection_state = integration.state.lower()
+        installed = True
+        driver_installed = True
+
+    can_mutate = management == "custom"
+    developer = _developer_api_model(integration.developer)
+    return {
+        "id": integration.driver_id,
+        "instanceId": integration.instance_id or None,
+        "source": "catalog" if is_available else "installed",
+        "name": integration.name,
+        "description": integration.description,
+        "version": integration.version or None,
+        "latestVersion": integration.latest_version or None,
+        "developer": integration.developer or None,
+        "developerHomepage": developer.get("homepage") if developer else None,
+        "supportLinks": developer.get("supportLinks", []) if developer else [],
+        "homepage": integration.home_page or None,
+        "categories": list(integration.categories or []) if is_available else [],
+        "repository": {
+            "stars": integration.stars if is_available else 0,
+            "downloads": integration.downloads if is_available else 0,
+            "createdAt": integration.created_at if is_available else None,
+            "updatedAt": integration.pushed_at if is_available else None,
+        },
+        "originalIndex": integration.original_index if is_available else 0,
+        "management": management,
+        "installState": install_state,
+        "connectionState": connection_state,
+        "updateAvailable": integration.update_available,
+        "installed": installed,
+        "driverInstalled": driver_installed,
+        "configuredEntities": getattr(integration, "configured_entities", 0),
+        "capabilities": {
+            "install": is_available and can_mutate and not driver_installed,
+            "update": can_mutate and integration.can_update,
+            "backup": can_mutate and integration.supports_backup,
+            "automatedBackupRestore": can_mutate and integration.can_auto_update,
+            "deleteConfiguration": can_mutate and installed,
+            "deleteDriver": can_mutate and driver_installed,
+            "selectVersion": can_mutate and bool(integration.home_page),
+        },
+    }
 
 
 async def _get_latest_release_for_update(
@@ -1253,13 +1347,8 @@ async def health():
 
 @app.route("/port-moved")
 async def port_moved():
-    """Inform users that the Integration Manager has moved to a new port."""
-    host = request.host
-    host_without_port = host.split(":")[0]
-    new_url = f"http://{host_without_port}:{WEB_SERVER_PORT}"
-    return await render_template(
-        "port_moved.html", new_url=new_url, new_port=WEB_SERVER_PORT
-    )
+    """The legacy port notice is now a client-side SPA route."""
+    return "", 404
 
 
 @app.route("/api/registry")
@@ -1274,38 +1363,150 @@ async def get_registry():
 
 @app.route("/")
 async def index():
-    """Render the main dashboard page."""
-    return await render_template("index.html")
+    """Keep the root URL convenient while the manager lives under /manager."""
+    return redirect("/manager", 302)
+
+
+@app.route("/manager")
+@app.route("/manager/")
+@app.route("/manager/<path:client_path>")
+async def manager_spa(client_path: str = ""):
+    """Serve the pre-built React entry point for every client-side route."""
+    entrypoint = os.path.join(STATIC_DIR, "app", "index.html")
+    if not os.path.exists(entrypoint):
+        _LOG.error("React UI asset is missing: %s", entrypoint)
+        return "Integration Manager UI has not been built.", 503
+    return await send_file(entrypoint, mimetype="text/html")
+
+
+# =============================================================================
+# React JSON API (v1)
+# =============================================================================
+
+
+@app.route("/api/v1/bootstrap")
+async def api_v1_bootstrap():
+    """Return app-shell state required to render the SPA."""
+    active_id = get_active_remote_id()
+    remotes = [
+        {
+            "id": remote_id,
+            "name": config.name,
+            "address": config.address,
+            "active": remote_id == active_id,
+            "online": is_remote_online(remote_id),
+        }
+        for remote_id, config in _remote_configs.items()
+    ]
+    client = _get_active_remote_client()
+    remote_configurator_url = f"http://{client._address}" if client else None  # ty:ignore[unresolved-attribute]
+    return jsonify(
+        {
+            "data": {
+                "activeRemoteId": active_id,
+                "remotes": remotes,
+                "remoteConfiguratorUrl": remote_configurator_url,
+            }
+        }
+    )
+
+
+@app.route("/api/v1/status")
+async def api_v1_status():
+    """Return the active remote's connectivity state without HTML badges."""
+    client = _get_active_remote_client()
+    remote_id = get_active_remote_id()
+    if not client or not is_remote_online(remote_id):
+        return jsonify({"data": {"online": False, "docked": None}})
+    try:
+        docked = await client.is_docked()
+        return jsonify({"data": {"online": True, "docked": docked}})
+    except Exception as e:
+        _LOG.warning("Failed to get remote status: %s", e)
+        return jsonify({"data": {"online": False, "docked": None}})
+
+
+@app.route("/api/v1/remotes/active", methods=["POST"])
+async def api_v1_set_active_remote():
+    """Select an active remote without forcing a browser reload."""
+    data = await request.get_json(silent=True) or {}
+    remote_id = data.get("remoteId")
+    if not remote_id:
+        return _api_error("remote_id_required", "remoteId is required")
+    if remote_id not in _remote_clients:
+        return _api_error("invalid_remote", "The selected remote is not configured")
+    session["active_remote_id"] = remote_id
+    session.permanent = True
+    return jsonify({"data": {"activeRemoteId": remote_id}})
+
+
+@app.route("/api/v1/integrations")
+async def api_v1_integrations():
+    """Return installed integration card data for the SPA."""
+    remote_id = get_active_remote_id()
+    if not _get_active_remote_client():
+        return _api_error("service_unavailable", "Integration service is not initialized", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active remote is offline", 503)
+    try:
+        integrations = await _get_installed_integrations(remote_id)
+        return jsonify({"data": [_integration_api_model(item) for item in integrations]})
+    except Exception as e:
+        _LOG.exception("Failed to load installed integrations")
+        return _api_error("integrations_unavailable", str(e), 502)
+
+
+@app.route("/api/v1/catalog/integrations")
+async def api_v1_catalog_integrations():
+    """Return catalog integration card data for the SPA."""
+    remote_id = get_active_remote_id()
+    if remote_id and not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active remote is offline", 503)
+    try:
+        integrations = await _get_available_integrations(remote_id)
+        return jsonify({"data": [_integration_api_model(item) for item in integrations]})
+    except Exception as e:
+        _LOG.exception("Failed to load available integrations")
+        return _api_error("catalog_unavailable", str(e), 502)
+
+
+@app.route("/api/v1/integrations/refresh", methods=["POST"])
+async def api_v1_refresh_integrations():
+    """Refresh the version cache used by installed and catalog lists."""
+    if not _get_active_remote_client() or not _github_client:
+        return _api_error("service_unavailable", "Integration service is not initialized", 503)
+    try:
+        await _refresh_version_cache(get_active_remote_id())
+        return jsonify({"data": {"refreshed": True}})
+    except Exception as e:
+        _LOG.exception("Failed to refresh integration versions")
+        return _api_error("refresh_failed", str(e), 502)
 
 
 @app.route("/integrations")
 async def integrations_page():
-    """Render the integrations management page."""
-    return await render_template("integrations.html")
+    """Retired legacy page route."""
+    return "", 404
 
 
 @app.route("/available")
 async def available_page():
-    """Render the available integrations page."""
-    return await render_template("available.html")
+    """Retired legacy page route."""
+    return "", 404
 
 
 @app.route("/updating")
 async def updating_page():
-    """Render the self-update waiting page."""
-    target_version = request.args.get("version", "")
-    inplace = request.args.get("inplace", "").lower() in ("true", "1", "yes")
-    return await render_template(
-        "updating.html", target_version=target_version, inplace=inplace
-    )
+    """Retired legacy page route."""
+    return "", 404
 
 
 # =============================================================================
-# HTMX Partial Routes
+# API summary routes
 # =============================================================================
 
 
-@app.route("/api/stats/installed-count")
+@app.route("/api/v1/stats/installed-count")
 async def get_installed_count():
     """Get the count of installed integrations.
 
@@ -1315,7 +1516,7 @@ async def get_installed_count():
     """
     remote_id = get_active_remote_id()
     if not _get_active_remote_client() or not is_remote_online(remote_id):
-        return "0"
+        return jsonify({"data": {"count": 0}})
 
     try:
         # Get all installed integrations (includes configured and unconfigured)
@@ -1323,13 +1524,13 @@ async def get_installed_count():
 
         count = len(integrations)
 
-        return str(count)
+        return jsonify({"data": {"count": count}})
     except SyncAPIError as e:
         _LOG.error("Failed to get integrations count: %s", e)
-        return "0"
+        return jsonify({"data": {"count": 0}})
 
 
-@app.route("/api/stats/updates-count")
+@app.route("/api/v1/stats/updates-count")
 async def get_updates_count():
     """Get the count of integrations with available updates."""
     remote_id = get_active_remote_id()
@@ -1338,7 +1539,7 @@ async def get_updates_count():
         or not _github_client
         or not is_remote_online(remote_id)
     ):
-        return "0"
+        return jsonify({"data": {"count": 0}})
 
     try:
         integrations = await _get_installed_integrations(remote_id)
@@ -1347,102 +1548,17 @@ async def get_updates_count():
             for i in integrations
             if i.update_available and not i.official and not i.external
         )
-        return str(count)
+        return jsonify({"data": {"count": count}})
     except Exception as e:
         _LOG.error("Failed to get updates count: %s", e)
-        return "0"
+        return jsonify({"data": {"count": 0}})
 
 
-@app.route("/api/integrations/list")
-async def get_integrations_list():
-    """Get HTML partial with list of installed integrations."""
-    if not _get_active_remote_client():
-        return (
-            "<div class='text-red-600 dark:text-red-400'>Service not initialized</div>"
-        )
-    if not is_remote_online(get_active_remote_id()):
-        return _render_offline_partial()
-
-    try:
-        remote_id = get_active_remote_id()
-        integrations = await _get_installed_integrations(remote_id)
-
-        # Check if driver list changed (new/removed drivers) and refresh cache if needed
-        current_driver_ids = {i.driver_id for i in integrations}
-        if remote_id and current_driver_ids != _cached_driver_ids.get(remote_id, set()):
-            _LOG.info(
-                "[%s] Driver list changed, refreshing version cache...", remote_id
-            )
-            await _refresh_version_cache(remote_id)
-            # Re-fetch integrations with updated cache
-            integrations = await _get_installed_integrations(remote_id)
-
-        settings = Settings.load(remote_id=get_active_remote_id())
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-        current_url = request.headers.get("HX-Current-URL", "")
-        parsed_path = urlparse(current_url).path.rstrip("/")
-        dashboard = parsed_path in ("", "/")
-        return await render_template(
-            "partials/integration_list.html",
-            integrations=integrations,
-            remote_ip=remote_ip,
-            settings=settings,
-            dashboard=dashboard,
-        )
-    except Exception as e:
-        _LOG.error("Failed to get integrations: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>"
-
-
-@app.route("/api/integrations/available")
-async def get_available_list():
-    """Get HTML partial with list of available integrations."""
-    remote_id = get_active_remote_id()
-    if remote_id and not is_remote_online(remote_id):
-        return _render_offline_partial()
-    try:
-        available = await _get_available_integrations(remote_id)
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-        return await render_template(
-            "partials/available_list.html",
-            integrations=available,
-            remote_ip=remote_ip,
-        )
-    except Exception as e:
-        _LOG.error("Failed to get available integrations: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>"
-
-
-@app.route("/api/integrations/refresh-versions", methods=["POST"])
-async def refresh_versions():
-    """Manually refresh version cache for all integrations."""
-    if not _get_active_remote_client() or not _github_client:
-        return jsonify({"status": "error", "message": "Service not initialized"}), 500
-
-    try:
-        _LOG.info("Manual version cache refresh requested")
-        await _refresh_version_cache(get_active_remote_id())
-        return jsonify({"status": "success", "message": "Version cache refreshed"})
-    except Exception as e:
-        _LOG.error("Failed to refresh version cache: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-@app.route("/api/integration/<instance_id>")
+@app.route("/api/v1/integration-instances/<instance_id>")
 async def get_integration_detail(instance_id: str):
-    """Get HTML partial with integration details."""
+    """Get one installed integration by instance ID as JSON."""
     if not _get_active_remote_client():
-        return (
-            "<div class='text-red-600 dark:text-red-400'>Service not initialized</div>"
-        )
+        return _api_error("service_unavailable", "Integration service is not initialized", 503)
 
     try:
         # Find the integration in the list
@@ -1451,13 +1567,11 @@ async def get_integration_detail(instance_id: str):
             (i for i in integrations if i.instance_id == instance_id), None
         )
         if integration:
-            return await render_template(
-                "partials/integration_detail.html", integration=integration
-            )
-        return "<div class='text-yellow-700 dark:text-yellow-400'>Integration not found</div>"
+            return jsonify({"data": _integration_api_model(integration)})
+        return _api_error("integration_not_found", "Integration was not found", 404)
     except Exception as e:
         _LOG.error("Failed to get integration detail: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>"
+        return _api_error("integration_unavailable", str(e), 502)
 
 
 @app.route("/api/integration/<instance_id>/update", methods=["POST"])
@@ -1860,15 +1974,7 @@ async def _perform_update_integration(
                         "Lock released due to connection error for instance %s",
                         instance_id,
                     )
-                return (
-                    f"""
-                    <span class="inline-flex items-center gap-1 text-red-400 text-sm" title="Connection error: {str(e).replace('"', "&quot;")}">
-                        <i class="fas fa-exclamation-circle"></i>
-                        Connection Failed
-                    </span>
-                """,
-                    500,
-                )
+                return _api_error("connection_failed", str(e), 502)
             # For other errors, log warning and continue
             _LOG.warning("Failed to delete driver, continuing anyway: %s", e)
 
@@ -2643,20 +2749,7 @@ async def _perform_update_integration(
         )
 
         if updated_integration:
-            # Return the updated card HTML
-            settings = Settings.load(remote_id=remote_id)
-            remote_ip = (
-                _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-                if _get_active_remote_client()
-                else None
-            )
-            return await render_template(
-                "partials/integration_card.html",
-                integration=updated_integration,
-                remote_ip=remote_ip,
-                settings=settings,
-                just_updated=True,
-            )
+            return jsonify({"data": _integration_api_model(updated_integration), "meta": {"updated": True}})
         else:
             # Fallback: use original integration data with updated flag
             # This shouldn't normally happen, but ensures we return a card
@@ -2664,24 +2757,10 @@ async def _perform_update_integration(
                 "Could not find updated integration %s, using original data",
                 integration.driver_id,
             )
-            settings = Settings.load(remote_id=get_active_remote_id())
-            remote_ip = (
-                _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-                if _get_active_remote_client()
-                else None
-            )
-            return await render_template(
-                "partials/integration_card.html",
-                integration=integration,
-                remote_ip=remote_ip,
-                settings=settings,
-                just_updated=True,
-            )
+            return jsonify({"data": _integration_api_model(integration), "meta": {"updated": True, "stale": True}})
 
     except SyncAPIError as e:
         _LOG.error("Update failed: %s", e)
-        error_msg = str(e).replace('"', "&quot;")
-
         # Release operation lock
         async with _operation_lock:
             _operation_in_progress = False
@@ -2690,19 +2769,9 @@ async def _perform_update_integration(
                 instance_id,
             )
 
-        return (
-            f'''
-            <span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">
-                <i class="fas fa-exclamation-circle"></i>
-                Failed
-            </span>
-        ''',
-            500,
-        )
+        return _api_error("update_failed", str(e), 502)
     except Exception as e:
         _LOG.error("Unexpected error during update: %s", e)
-        error_msg = str(e).replace('"', "&quot;")
-
         # Release operation lock
         async with _operation_lock:
             _operation_in_progress = False
@@ -2711,15 +2780,7 @@ async def _perform_update_integration(
                 instance_id,
             )
 
-        return (
-            f'''
-            <span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">
-                <i class="fas fa-exclamation-circle"></i>
-                Failed
-            </span>
-        ''',
-            500,
-        )
+        return _api_error("update_failed", str(e), 500)
     finally:
         # Safety net: ensure lock is released even on asyncio.CancelledError
         # (CancelledError is BaseException, not Exception, so won't be caught above)
@@ -2902,15 +2963,7 @@ async def update_driver(driver_id: str):
                     _LOG.info(
                         "Lock released due to connection error for driver %s", driver_id
                     )
-                return (
-                    f"""
-                    <span class="inline-flex items-center gap-1 text-red-400 text-sm" title="Connection error: {str(e).replace('"', "&quot;")}">
-                        <i class="fas fa-exclamation-circle"></i>
-                        Connection Failed
-                    </span>
-                """,
-                    500,
-                )
+                return _api_error("connection_failed", str(e), 502)
             # For other errors, log warning and continue
             _LOG.warning("Failed to delete driver, continuing anyway: %s", e)
 
@@ -2982,20 +3035,8 @@ async def update_driver(driver_id: str):
             (i for i in available if i.driver_id == driver_id), None
         )
 
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-
         if updated_integration:
-            # Return the updated card HTML for available list
-            return await render_template(
-                "partials/available_card.html",
-                integration=updated_integration,
-                remote_ip=remote_ip,
-                just_updated=True,
-            )
+            return jsonify({"data": _integration_api_model(updated_integration), "meta": {"updated": True}})
         else:
             # Fallback: Try to find it in installed integrations list
             # This shouldn't normally happen, but ensures we return a card
@@ -3009,14 +3050,7 @@ async def update_driver(driver_id: str):
             )
 
             if integration:
-                settings = Settings.load(remote_id=get_active_remote_id())
-                return await render_template(
-                    "partials/integration_card.html",
-                    integration=integration,
-                    remote_ip=remote_ip,
-                    settings=settings,
-                    just_updated=True,
-                )
+                return jsonify({"data": _integration_api_model(integration), "meta": {"updated": True}})
             else:
                 # Last resort: Create a minimal AvailableIntegration from registry
                 _LOG.error("Could not find driver %s anywhere after update", driver_id)
@@ -3048,17 +3082,10 @@ async def update_driver(driver_id: str):
                     instance_id="",
                     can_update=False,
                 )
-                return await render_template(
-                    "partials/available_card.html",
-                    integration=fallback_integration,
-                    remote_ip=remote_ip,
-                    just_updated=True,
-                )
+                return jsonify({"data": _integration_api_model(fallback_integration), "meta": {"updated": True, "stale": True}})
 
     except SyncAPIError as e:
         _LOG.error("Update failed: %s", e)
-        error_msg = str(e).replace('"', "&quot;")
-
         # Release operation lock
         async with _operation_lock:
             _operation_in_progress = False
@@ -3067,19 +3094,9 @@ async def update_driver(driver_id: str):
                 driver_id,
             )
 
-        return (
-            f'''
-            <span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">
-                <i class="fas fa-exclamation-circle"></i>
-                Failed
-            </span>
-        ''',
-            500,
-        )
+        return _api_error("update_failed", str(e), 502)
     except Exception as e:
         _LOG.error("Unexpected error during update: %s", e)
-        error_msg = str(e).replace('"', "&quot;")
-
         # Release operation lock
         async with _operation_lock:
             _operation_in_progress = False
@@ -3089,30 +3106,16 @@ async def update_driver(driver_id: str):
                 driver_id,
             )
 
-        return (
-            f'''
-            <span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">
-                <i class="fas fa-exclamation-circle"></i>
-                Failed
-            </span>
-        ''',
-            500,
-        )
+        return _api_error("update_failed", str(e), 500)
     finally:
         # Safety net: ensure lock is released even on asyncio.CancelledError
         _operation_in_progress = False
         _operation_lock_acquired_at = None
 
 
-@app.route("/api/integration/<driver_id>/card")
+@app.route("/api/v1/integrations/<driver_id>")
 async def get_integration_card(driver_id: str):
-    """
-    Return the rendered integration card for a single driver.
-
-    Used by the inplace-update reconnection poller: the card is fetched every
-    few seconds until the integration reconnects.  Once the returned card no
-    longer carries the polling trigger, HTMX stops polling automatically.
-    """
+    """Return one integration's data for client-controlled reconnect polling."""
     remote_id = get_active_remote_id()
     integrations = await _get_installed_integrations(remote_id)
     integration = next(
@@ -3124,26 +3127,11 @@ async def get_integration_card(driver_id: str):
         None,
     )
     if not integration:
-        return "", 204
-
-    settings = Settings.load(remote_id=remote_id)
-    remote_ip = (
-        _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-        if _get_active_remote_client()
-        else None
-    )
-
-    reconnecting = integration.state in ("DISCONNECTED", "ERROR")
-    return await render_template(
-        "partials/integration_card.html",
-        integration=integration,
-        settings=settings,
-        remote_ip=remote_ip,
-        reconnecting=reconnecting,
-    )
+        return _api_error("integration_not_found", "Integration was not found", 404)
+    return jsonify({"data": _integration_api_model(integration)})
 
 
-@app.route("/api/integration/<driver_id>/update-inplace", methods=["POST"])
+@app.route("/api/v1/integrations/<driver_id>/update", methods=["POST"])
 async def update_integration_inplace(driver_id: str):
     """
     Update an integration in-place using the firmware 2.9.3+ update flag.
@@ -3274,164 +3262,25 @@ async def update_integration_inplace(driver_id: str):
             lambda: asyncio.ensure_future(_refresh_version_cache(remote_id))
         )
 
-        # The integration will be temporarily DISCONNECTED while it restarts.
-        # Render the real card with reconnecting=True so HTMX polls every 1 s
-        # via the attrs injected into the card's outer div.  Once the integration
-        # comes back, /api/integration/<id>/card returns the card without those
-        # attrs and polling stops automatically.
-        settings = Settings.load(remote_id=remote_id)
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-        return await render_template(
-            "partials/integration_card.html",
-            integration=integration,
-            settings=settings,
-            remote_ip=remote_ip,
-            reconnecting=True,
-        )
+        return jsonify({"data": {"integration": _integration_api_model(integration), "reconnecting": True}})
 
     except SyncAPIError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
         async with _operation_lock:
             _operation_in_progress = False
-        error_msg = str(e).replace('"', "&quot;").replace("'", "&#39;")
-        return (
-            f'<span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">'
-            f'<i class="fas fa-exclamation-circle"></i> Failed</span>',
-            500,
-        )
+        return _api_error("update_failed", str(e), 502)
     except Exception as e:
         _LOG.error("Unexpected error during in-place update of %s: %s", driver_id, e)
         async with _operation_lock:
             _operation_in_progress = False
             _operation_lock_acquired_at = None
-        error_msg = str(e).replace('"', "&quot;").replace("'", "&#39;")
-        return (
-            f'<span class="inline-flex items-center gap-1 text-red-400 text-sm" title="{error_msg}">'
-            f'<i class="fas fa-exclamation-circle"></i> Failed</span>',
-            500,
-        )
+        return _api_error("update_failed", str(e), 500)
     finally:
         _operation_in_progress = False
         _operation_lock_acquired_at = None
 
 
-@app.route("/api/integration/<driver_id>/update-confirm")
-async def get_update_confirmation(driver_id: str):
-    """
-    Get update confirmation modal for integrations without backup support.
-
-    Returns HTML warning that configuration cannot be preserved.
-    """
-    if not _get_active_remote_client():
-        return "<p class='text-red-600 dark:text-red-400'>Service not initialized</p>"
-
-    try:
-        # Get integration details
-        integrations = await _get_installed_integrations(get_active_remote_id())
-        integration = next((i for i in integrations if i.driver_id == driver_id), None)
-
-        if not integration:
-            return "<p class='text-red-600 dark:text-red-400'>Integration not found</p>"
-
-        # Load registry to check backup requirements
-        registry = load_registry()
-        registry_item = None
-        for entry in registry:
-            if entry.get("driver_id") == driver_id or entry.get("id") == driver_id:
-                registry_item = entry
-                break
-
-        # Determine the reason for no backup
-        reason = "no_backup_support"
-        min_version = None
-        if registry_item:
-            min_version = registry_item.get("backup_min_version")
-            if min_version and integration.version:
-                try:
-                    if Version(integration.version) < Version(min_version):
-                        reason = "version_too_old"
-                except (InvalidVersion, TypeError):
-                    pass
-
-        # Determine update URL based on whether there's an instance
-        if integration.instance_id:
-            update_url = f"/api/integration/{integration.instance_id}/update?version={integration.latest_version}"
-            update_target = f"#card-{driver_id}"
-        else:
-            update_url = (
-                f"/api/driver/{driver_id}/update?version={integration.latest_version}"
-            )
-            update_target = f"#card-{driver_id}"
-
-        return await render_template(
-            "partials/modal_update_no_backup.html",
-            driver_id=driver_id,
-            integration_name=integration.name,
-            current_version=integration.version,
-            new_version=integration.latest_version,
-            min_version=min_version,
-            reason=reason,
-            update_url=update_url,
-            update_target=update_target,
-            update_indicator=f"#upgrade-overlay-{driver_id}",
-        )
-    except Exception as e:
-        _LOG.error("Error loading update confirmation for %s: %s", driver_id, e)
-        return f"<p class='text-red-600 dark:text-red-400'>Error: {str(e)}</p>"
-
-
-@app.route("/api/integration/<driver_id>/delete-confirm")
-async def get_delete_confirmation(driver_id: str):
-    """
-    Get delete confirmation modal content for an integration.
-
-    Returns HTML to be displayed in the modal with delete options.
-    """
-    if not _get_active_remote_client():
-        return "<p class='text-red-600 dark:text-red-400'>Service not initialized</p>"
-
-    try:
-        # Get integration name for display
-        remote_id = get_active_remote_id()
-        integrations = await _get_installed_integrations(remote_id)
-        integration = next((i for i in integrations if i.driver_id == driver_id), None)
-
-        # Also check available list for unconfigured drivers
-        if not integration:
-            available = await _get_available_integrations(remote_id)
-            integration = next((i for i in available if i.driver_id == driver_id), None)
-
-        integration_name = integration.name if integration else driver_id
-
-        # Determine if integration is configured (has an instance)
-        is_configured = False
-        if integration:
-            # For IntegrationInfo, check if it has an instance_id and is not NOT_CONFIGURED
-            if hasattr(integration, "instance_id") and hasattr(integration, "state"):
-                is_configured = (
-                    bool(integration.instance_id)
-                    and integration.state != "NOT_CONFIGURED"
-                )
-            # For AvailableIntegration, check the installed flag
-            elif hasattr(integration, "installed"):
-                is_configured = integration.installed
-
-        return await render_template(
-            "partials/modal_delete_confirm.html",
-            driver_id=driver_id,
-            integration_name=integration_name,
-            is_configured=is_configured,
-        )
-    except Exception as e:
-        _LOG.error("Error loading delete confirmation for %s: %s", driver_id, e)
-        return f"<p class='text-red-600 dark:text-red-400'>Error: {str(e)}</p>"
-
-
-@app.route("/api/integration/<driver_id>/delete", methods=["DELETE"])
+@app.route("/api/v1/integrations/<driver_id>", methods=["DELETE"])
 async def delete_integration(driver_id: str):
     """
     Delete an integration - either just the configuration or the entire integration.
@@ -3448,7 +3297,11 @@ async def delete_integration(driver_id: str):
         return conflict
 
     remote_id = get_active_remote_id()
-    delete_type = request.args.get("type", "configuration")
+    payload = await request.get_json(silent=True) or {}
+    delete_type = payload.get("scope")
+    delete_type = delete_type or "configuration"
+    if delete_type not in ("configuration", "full"):
+        return _api_error("invalid_delete_scope", "scope must be configuration or full")
     _LOG.info("Delete request for %s: type=%s", driver_id, delete_type)
 
     try:
@@ -3495,7 +3348,7 @@ async def delete_integration(driver_id: str):
         # Return updated card or empty response
         if delete_type == "full":
             # Full delete - remove the card entirely
-            return "", 200
+            return jsonify({"data": {"driverId": driver_id, "removed": True}})
         else:
             # Configuration delete - return updated card showing unconfigured state
             integrations = await _get_installed_integrations(remote_id)
@@ -3504,21 +3357,10 @@ async def delete_integration(driver_id: str):
             )
 
             if integration:
-                settings = Settings.load(remote_id=remote_id)
-                remote_ip = (
-                    _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-                    if _get_active_remote_client()
-                    else None
-                )
-                return await render_template(
-                    "partials/integration_card.html",
-                    integration=integration,
-                    remote_ip=remote_ip,
-                    settings=settings,
-                )
+                return jsonify({"data": {"integration": _integration_api_model(integration), "removed": False}})
             else:
                 # Driver might have been removed, return empty
-                return "", 200
+                return jsonify({"data": {"driverId": driver_id, "removed": True}})
 
     except Exception as e:
         _LOG.error("Unexpected error during delete for %s: %s", driver_id, e)
@@ -3530,46 +3372,7 @@ async def delete_integration(driver_id: str):
             _LOG.info("Lock released after delete %s", driver_id)
 
 
-async def _build_error_card(driver_id: str, registry: list, error_msg: str) -> str:
-    """Build an error card HTML for a failed install."""
-    registry_item = next((item for item in registry if item.get("id") == driver_id), {})
-
-    # Convert registry item to AvailableIntegration structure
-    _cat_map = _get_category_name_map()
-    categories_list = [_cat_map.get(c, c) for c in registry_item.get("categories", [])]
-    integration = AvailableIntegration(
-        driver_id=driver_id,
-        name=registry_item.get("name", driver_id),
-        description=registry_item.get("description", ""),
-        icon=registry_item.get("icon", "puzzle-piece"),
-        home_page=registry_item.get("repository", ""),
-        developer=registry_item.get("author", ""),
-        version="",
-        category=categories_list[0] if categories_list else "",
-        categories=categories_list,
-        installed=False,
-        driver_installed=False,
-        external=False,
-        custom=True,
-        official=False,
-        update_available=False,
-        latest_version="",
-        instance_id="",
-        can_update=False,
-    )
-
-    remote_ip = (
-        _get_active_remote_client()._address if _get_active_remote_client() else None  # ty:ignore[unresolved-attribute]
-    )
-    return await render_template(
-        "partials/available_card.html",
-        integration=integration,
-        remote_ip=remote_ip,
-        install_error=error_msg,
-    )
-
-
-@app.route("/api/integration/<driver_id>/install", methods=["POST"])
+@app.route("/api/v1/integrations/<driver_id>/install", methods=["POST"])
 async def install_integration(driver_id: str):
     """
     Install a new integration from the registry.
@@ -3716,7 +3519,7 @@ async def install_integration(driver_id: str):
             _operation_in_progress = False
             _LOG.info("Lock released after successful install of %s", driver_id)
 
-        # Return a replacement card HTML for HTMX outerHTML swap
+        # Return the updated integration data for the SPA.
         _cat_map = _get_category_name_map()
         categories_list = [
             _cat_map.get(c, c) for c in integration.get("categories", [])
@@ -3742,21 +3545,10 @@ async def install_integration(driver_id: str):
             can_update=False,
         )
 
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-        return await render_template(
-            "partials/available_card.html",
-            integration=integration_obj,
-            remote_ip=remote_ip,
-            just_installed=True,
-        )
+        return jsonify({"data": {"integration": _integration_api_model(integration_obj), "message": f"Installed {integration_obj.name}"}})
 
     except SyncAPIError as e:
         _LOG.error("Install failed: %s", e)
-        error_msg = str(e).replace('"', "&quot;").replace("'", "&#39;")
 
         # Release operation lock
         async with _operation_lock:
@@ -3766,10 +3558,9 @@ async def install_integration(driver_id: str):
                 driver_id,
             )
 
-        return await _build_error_card(driver_id, registry, error_msg), 200
+        return _api_error("install_failed", str(e), 502)
     except Exception as e:
         _LOG.error("Unexpected error during install: %s", e)
-        error_msg = str(e).replace('"', "&quot;").replace("'", "&#39;")
 
         # Release operation lock
         async with _operation_lock:
@@ -3780,23 +3571,23 @@ async def install_integration(driver_id: str):
                 driver_id,
             )
 
-        return await _build_error_card(driver_id, registry, error_msg), 200
+        return _api_error("install_failed", str(e), 500)
     finally:
         # Safety net: ensure lock is released even on asyncio.CancelledError
         _operation_in_progress = False
         _operation_lock_acquired_at = None
 
 
-@app.route("/api/operation-lock/status")
+@app.route("/api/v1/operations/lock")
 async def get_operation_lock_status():
     """Return whether an install/update operation is currently in progress."""
     elapsed: float | None = None
     if _operation_in_progress and _operation_lock_acquired_at is not None:
         elapsed = round(time.monotonic() - _operation_lock_acquired_at)
-    return jsonify({"locked": _operation_in_progress, "elapsed_seconds": elapsed})
+    return jsonify({"data": {"locked": _operation_in_progress, "elapsedSeconds": elapsed}})
 
 
-@app.route("/api/operation-lock/release", methods=["POST"])
+@app.route("/api/v1/operations/lock/release", methods=["POST"])
 async def release_operation_lock():
     """Manually release a stuck operation lock."""
     global _operation_in_progress, _operation_lock_acquired_at
@@ -3814,11 +3605,10 @@ async def release_operation_lock():
             "Operation lock manually released by user (was held for %s seconds)",
             elapsed,
         )
-    return jsonify(
-        {"status": "ok", "was_locked": was_locked, "elapsed_seconds": elapsed}
-    )
+    return jsonify({"data": {"wasLocked": was_locked, "elapsedSeconds": elapsed}})
 
 
+@app.route("/api/v1/backups", methods=["POST"])
 @app.route("/api/backup/all", methods=["POST"])
 async def backup_all():
     """
@@ -3837,6 +3627,8 @@ async def backup_all():
         successful = sum(1 for v in results.values() if v)
         failed = sum(1 for v in results.values() if not v)
 
+        if request.path.startswith("/api/v1/"):
+            return jsonify({"data": {"successful": successful, "failed": failed, "results": results}})
         return jsonify(
             {
                 "status": "ok",
@@ -3849,6 +3641,7 @@ async def backup_all():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/v1/integrations/<driver_id>/backup", methods=["POST"])
 @app.route("/api/backup/<driver_id>", methods=["POST"])
 async def backup_single(driver_id: str):
     """
@@ -3871,6 +3664,8 @@ async def backup_single(driver_id: str):
         )
         if backup_data:
             _LOG.info("Backup completed successfully for integration: %s", driver_id)
+            if request.path.startswith("/api/v1/"):
+                return jsonify({"data": {"driverId": driver_id, "hasData": True}})
             return jsonify(
                 {
                     "status": "ok",
@@ -3880,6 +3675,8 @@ async def backup_single(driver_id: str):
             )
         else:
             _LOG.warning("No backup data retrieved for integration: %s", driver_id)
+            if request.path.startswith("/api/v1/"):
+                return jsonify({"data": {"driverId": driver_id, "hasData": False}})
             return jsonify(
                 {
                     "status": "warning",
@@ -3924,73 +3721,33 @@ async def list_integration_backups():
     return jsonify(backups)
 
 
-@app.route("/api/release-notes/unavailable/<version>")
+@app.route("/api/v1/release-notes/unavailable/<version>")
 async def get_release_notes_unavailable(version: str):
     """
     Return a user-friendly message when release notes cannot be fetched.
 
     Used when GitHub URL cannot be parsed or release info is unavailable.
     """
-    return await render_template(
-        "partials/modal_release_notes.html",
-        error="Release notes are not available for this integration",
-        version=version,
-        github_url=None,
-    )
+    return _api_error("release_notes_unavailable", f"Release notes are not available for {version}", 404)
 
 
-@app.route("/api/release-notes/<owner>/<repo>/<version>")
+@app.route("/api/v1/release-notes/<owner>/<repo>/<version>")
 async def get_release_notes(owner: str, repo: str, version: str):
     """
-    Get release notes for a specific version and return HTML for modal.
-
-    Renders markdown release notes as HTML.
+    Get release notes for a specific version as raw Markdown and metadata.
     """
     if not _github_client:
-        return await render_template(
-            "partials/modal_release_notes.html",
-            error="GitHub client not available",
-            version=version,
-        )
+        return _api_error("github_unavailable", "GitHub client is not available", 503)
 
     try:
         # Fetch release info from GitHub
         release = await _github_client.get_release_by_tag(owner, repo, version)
 
         if not release:
-            return await render_template(
-                "partials/modal_release_notes.html",
-                error=f"Release notes not found for {version}",
-                version=version,
-                github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
-            )
+            return _api_error("release_notes_not_found", f"Release notes not found for {version}", 404)
 
         # Get release body (markdown)
         release_body = release.get("body", "")
-
-        # Convert markdown to HTML with comprehensive extensions
-        md = markdown.Markdown(
-            extensions=[
-                "markdown.extensions.fenced_code",  # ```code blocks```
-                "markdown.extensions.tables",  # Tables
-                "markdown.extensions.nl2br",  # Newline to <br>
-                "markdown.extensions.sane_lists",  # Better list handling
-                "markdown.extensions.codehilite",  # Code highlighting
-                "markdown.extensions.attr_list",  # Add attributes to elements
-                "markdown.extensions.def_list",  # Definition lists
-                "markdown.extensions.abbr",  # Abbreviations
-                "markdown.extensions.footnotes",  # Footnotes
-                "markdown.extensions.md_in_html",  # Markdown in HTML
-                "markdown.extensions.toc",  # Table of contents
-            ],
-            extension_configs={
-                "markdown.extensions.codehilite": {
-                    "css_class": "highlight",
-                    "linenums": False,
-                },
-            },
-        )
-        release_notes_html = md.convert(release_body) if release_body else ""
 
         # Format the published date
         published_at = release.get("published_at", "")
@@ -4006,34 +3763,15 @@ async def get_release_notes(owner: str, repo: str, version: str):
         # Check if this is a pre-release (beta)
         is_beta = release.get("prerelease", False)
 
-        # Create modal title with Beta prefix if needed
-        modal_title = f"{'Beta ' if is_beta else ''}Release Notes - {version}"
-
-        # Render the release notes template
-        return await render_template(
-            "partials/modal_release_notes.html",
-            version=version,
-            release_date=release_date,
-            release_notes=release_notes_html,
-            release_name=release.get("name", ""),
-            github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
-            author=release.get("author", {}).get("login", ""),
-            is_beta=is_beta,
-            modal_title=modal_title,
-        )
+        return jsonify({"data": {"version": version, "publishedAt": release_date, "notes": release_body, "name": release.get("name", ""), "url": f"https://github.com/{owner}/{repo}/releases/tag/{version}", "author": release.get("author", {}).get("login", ""), "isPrerelease": is_beta}})
     except Exception as e:
         _LOG.error(
             "Error loading release notes for %s/%s %s: %s", owner, repo, version, e
         )
-        return await render_template(
-            "partials/modal_release_notes.html",
-            error=f"Error loading release notes: {str(e)}",
-            version=version,
-            github_url=f"https://github.com/{owner}/{repo}/releases/tag/{version}",
-        )
+        return _api_error("release_notes_unavailable", str(e), 502)
 
 
-@app.route("/api/version-selector/<owner>/<repo>/<driver_id>")
+@app.route("/api/v1/version-selector/<owner>/<repo>/<driver_id>")
 async def get_version_selector(owner: str, repo: str, driver_id: str):
     """
     Get version selector modal content with available releases.
@@ -4047,10 +3785,7 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
     of migration_required_at.
     """
     if not _github_client:
-        return await render_template(
-            "partials/modal_version_selector.html",
-            error="GitHub client not available",
-        )
+        return _api_error("github_unavailable", "GitHub client is not available", 503)
 
     is_self_update = request.args.get("self_update", "").lower() in ("true", "1", "yes")
 
@@ -4092,14 +3827,13 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
             is_update = True
             instance_id = integration.instance_id
 
-        # Fetch releases from GitHub
-        releases_data = await _github_client.get_releases(owner, repo, limit=20)
+        # The compact card picker needs a few releases; the full selector can
+        # explicitly request the complete compatible list.
+        show_all = request.args.get("all", "").lower() in ("true", "1", "yes")
+        releases_data = await _github_client.get_releases(owner, repo, limit=100 if show_all else 20)
 
         if not releases_data:
-            return await render_template(
-                "partials/modal_version_selector.html",
-                error="No releases found for this integration",
-            )
+            return _api_error("versions_not_found", "No releases found for this integration", 404)
 
         # Filter and organize releases
         beta_releases = []
@@ -4171,66 +3905,21 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
                 found_first_stable = True
                 stable_releases.append(release_info)
 
-            # Stop when we have enough stable releases
-            if len(stable_releases) >= 4:
+            # Keep the card menu deliberately short. The full selector has no
+            # artificial release cap.
+            if not show_all and len(stable_releases) >= 4:
                 break
 
         # Combine lists: beta releases first, then stable releases
-        filtered_releases = (beta_releases + stable_releases)[:4]
+        filtered_releases = beta_releases + stable_releases
+        if not show_all:
+            filtered_releases = filtered_releases[:4]
 
-        # Determine the install/update URL
-        # For firmware >= 2.9.3, use the simpler in-place update path for updates
-        use_inplace = _supports_inplace_update(get_active_remote_id())
-
-        if is_self_update and use_inplace:
-            install_url = "/api/self-update-inplace"
-            hx_target = "body"
-            hx_indicator = ""
-        elif is_self_update:
-            install_url = "/api/self-update"
-            hx_target = "body"
-            hx_indicator = ""
-        elif is_update and instance_id and use_inplace:
-            install_url = f"/api/integration/{integration.driver_id}/update-inplace"  # ty:ignore[unresolved-attribute]
-            hx_target = f"#card-{driver_id}"
-            hx_indicator = f"#upgrade-overlay-{driver_id}"
-        elif is_update and instance_id:
-            install_url = f"/api/integration/{instance_id}/update"
-            hx_target = f"#card-{driver_id}"
-            hx_indicator = f"#upgrade-overlay-{driver_id}"
-        elif is_update and use_inplace:
-            # Driver installed but no instance - still use inplace
-            install_url = f"/api/integration/{driver_id}/update-inplace"
-            hx_target = f"#card-{driver_id}"
-            hx_indicator = f"#upgrade-overlay-{driver_id}"
-        elif is_update:
-            # Driver installed but no instance
-            install_url = f"/api/driver/{driver_id}/update"
-            hx_target = f"#card-{driver_id}"
-            hx_indicator = f"#upgrade-overlay-{driver_id}"
-        else:
-            # Fresh install
-            install_url = f"/api/integration/{driver_id}/install"
-            hx_target = f"#card-{driver_id}"
-            hx_indicator = f"#overlay-{driver_id}"
-
-        return await render_template(
-            "partials/modal_version_selector.html",
-            releases=filtered_releases,
-            migration_required_at=version_floor,
-            install_url=install_url,
-            hx_target=hx_target,
-            hx_indicator=hx_indicator,
-            driver_id=driver_id,
-            is_self_update=is_self_update,
-        )
+        return jsonify({"data": {"driverId": driver_id, "releases": filtered_releases, "versionFloor": version_floor, "isUpdate": is_update, "isSelfUpdate": is_self_update}})
 
     except Exception as e:
         _LOG.error("Error loading version selector for %s/%s: %s", owner, repo, e)
-        return await render_template(
-            "partials/modal_version_selector.html",
-            error=f"Error loading versions: {str(e)}",
-        )
+        return _api_error("versions_unavailable", str(e), 502)
 
 
 async def _do_self_update_inplace(
@@ -4288,7 +3977,7 @@ async def _do_self_update_inplace(
             _operation_in_progress = False
 
 
-@app.route("/api/self-update-inplace", methods=["POST"])
+@app.route("/api/v1/self-update/inplace", methods=["POST"])
 async def self_update_inplace():
     """
     Update Integration Manager in-place using the firmware 2.9.3+ update flag.
@@ -4298,18 +3987,16 @@ async def self_update_inplace():
     directory, so manager.json and config.json are kept automatically — no
     serialisation/handoff/restore dance needed.
 
-    Returns HX-Redirect to /updating immediately after queuing the background
-    download+install task so the browser navigates away before the IM process
-    is restarted by the remote.  /health returns "UPDATING" while the task is
-    in flight, preventing /updating from redirecting back to / prematurely.
+    Queues the background install and returns JSON immediately. The SPA owns
+    its pending-state presentation while the Remote restarts the manager.
     """
     global _operation_in_progress, _self_update_pending
 
     if not _get_active_remote_client() or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
-    form = await request.form
-    version = request.args.get("version") or form.get("version")
+    payload = await request.get_json(silent=True) or {}
+    version = payload.get("version") or request.args.get("version")
     if not version:
         return jsonify(
             {"status": "error", "message": "version parameter is required"}
@@ -4370,13 +4057,10 @@ async def self_update_inplace():
         _do_self_update_inplace(im_owner, im_repo, asset_pattern, version)
     )
 
-    clean_version = version.lstrip("v")
-    return Response(
-        "", headers={"HX-Redirect": f"/updating?version={clean_version}&inplace=true"}
-    )
+    return jsonify({"data": {"started": True, "targetVersion": version}})
 
 
-@app.route("/api/self-update", methods=["POST"])
+@app.route("/api/v1/self-update/restore", methods=["POST"])
 async def self_update():
     """
     Trigger a self-update of Integration Manager via the bootstrapper integration.
@@ -4408,15 +4092,14 @@ async def self_update():
           No explicit complete_setup() call is needed — the setup state machine
           is already done by the time send_setup_input returns.
     7. Release the operation lock (IM is about to be replaced)
-    8. Return HX-Redirect to /updating?version=X so the browser switches to the
-       waiting page, which polls /health every 2 s and auto-redirects to / once
-       the new IM instance is back up.
+    8. Return a JSON acknowledgement so the SPA can show the pending state while
+       the new IM instance comes back up.
     """
     if not _get_active_remote_client() or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
-    form = await request.form
-    version = request.args.get("version") or form.get("version")
+    payload = await request.get_json(silent=True) or {}
+    version = payload.get("version") or request.args.get("version")
     if not version:
         return jsonify(
             {"status": "error", "message": "version parameter is required"}
@@ -4698,13 +4381,7 @@ async def self_update():
         async with _operation_lock:
             _operation_in_progress = False
 
-        # Redirect the browser to the waiting page
-        clean_version = version.lstrip("v")
-        response = await render_template("updating.html", target_version=version)
-        return Response(
-            response,
-            headers={"HX-Redirect": f"/updating?version={clean_version}"},
-        )
+        return jsonify({"data": {"started": True, "targetVersion": version}})
 
     except SyncAPIError as e:
         _LOG.error("Self-update failed (SyncAPIError): %s", e)
@@ -4895,7 +4572,7 @@ async def dev_test_bootstrapper_setup():
         return jsonify({"status": "error", "message": str(e), "steps": steps}), 500
 
 
-@app.route("/api/versions/check", methods=["POST"])
+@app.route("/api/v1/versions/check", methods=["POST"])
 async def check_versions():
     """
     Manually trigger a version check for all installed integrations.
@@ -4995,31 +4672,18 @@ async def check_versions():
         else:
             ts = datetime.now().isoformat()
 
-        return jsonify(
-            {
-                "status": "ok",
-                "checked": checked,
-                "updates_available": updates_available,
-                "timestamp": ts,
-                "versions": version_updates,
-            }
-        )
+        return jsonify({"data": {"checked": checked, "updatesAvailable": updates_available, "timestamp": ts, "versions": version_updates}})
 
     except Exception as e:
         _LOG.error("Version check failed: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/api/versions", methods=["GET"])
+@app.route("/api/v1/versions", methods=["GET"])
 async def get_versions():
     """Get cached version data for all integrations on the active remote."""
     remote_id = get_active_remote_id()
-    return jsonify(
-        {
-            "timestamp": _version_check_timestamp.get(remote_id) if remote_id else None,
-            "versions": _get_version_cache(remote_id),
-        }
-    )
+    return jsonify({"data": {"timestamp": _version_check_timestamp.get(remote_id) if remote_id else None, "versions": _get_version_cache(remote_id)}})
 
 
 @app.route("/api/status")
@@ -5046,136 +4710,72 @@ async def get_status():
         )
 
 
-@app.route("/api/status/html")
-async def get_status_html():
-    """Get current system status as HTML badges."""
-    if not _get_active_remote_client():
-        return '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-600 dark:bg-red-500/20 text-white dark:text-red-300">Not Connected</span>'
-    if not is_remote_online(get_active_remote_id()):
-        return '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-700 dark:bg-yellow-500/20 text-white dark:text-yellow-300"><i class="fa-solid fa-plug-circle-xmark mr-1.5"></i>Remote Offline</span>'
-
-    try:
-        is_docked = await _get_active_remote_client().is_docked()  # ty:ignore[unresolved-attribute]
-        docked_badge = (
-            '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-700 dark:bg-green-500/20 text-white dark:text-green-300">'
-            '<i class="fa-solid fa-charging-station mr-1.5"></i>Docked</span>'
-            if is_docked
-            else '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-700 dark:bg-yellow-500/20 text-white dark:text-yellow-300">'
-            '<i class="fa-regular fa-battery-half mr-1.5"></i>On Battery</span>'
-        )
-        server_badge = (
-            '<span class="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-700 dark:bg-green-500/20 text-white dark:text-green-300">'
-            '<span class="w-1.5 h-1.5 mr-1.5 bg-white dark:bg-green-400 rounded-full animate-pulse"></span>Running</span>'
-        )
-        return f"{docked_badge} {server_badge}"
-    except Exception as e:
-        return f'<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-600 dark:bg-red-500/20 text-white dark:text-red-300">Error: {e}</span>'
-
-
 # =============================================================================
 # Settings Routes
 # =============================================================================
 
 
+def _is_external_runtime() -> bool:
+    """Match the device's distinction between an external host and a Remote bundle."""
+    config_home = os.getenv("UC_CONFIG_HOME", "")
+    return not config_home or config_home.startswith("/config")
+
+
 @app.route("/settings")
 async def settings_page():
-    """Render the settings page."""
-    settings = Settings.load(remote_id=get_active_remote_id())
-    ui_prefs = UIPreferences.load()
-    # Detect if running in Docker/external mode
-    uc_config_home = os.getenv("UC_CONFIG_HOME", "")
-    is_external = uc_config_home.startswith("/config")
-    _LOG.info(
-        f"Settings page: UC_CONFIG_HOME='{uc_config_home}', is_external={is_external}"
+    """Retired legacy page route; the SPA owns settings at /manager/settings."""
+    return "", 404
+
+
+@app.route("/api/v1/settings", methods=["GET"])
+async def api_v1_get_settings():
+    """Return settings and UI preferences for the SPA settings form."""
+    return jsonify(
+        {
+            "data": {
+                "settings": Settings.load(remote_id=get_active_remote_id()).to_dict(),
+                "preferences": UIPreferences.load().to_dict(),
+                "runtime": {
+                    "remoteAddress": getattr(_get_active_remote_client(), "_address", None),
+                    "webServerPort": WEB_SERVER_PORT,
+                    "external": _is_external_runtime(),
+                },
+            }
+        }
     )
-    return await render_template(
-        "settings.html",
-        settings=settings,
-        ui_prefs=ui_prefs,
-        remote_address=_get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-        if _get_active_remote_client()
-        else None,
-        web_server_port=WEB_SERVER_PORT,
-        is_external=is_external,
-    )
 
 
-@app.route("/api/settings", methods=["POST"])
-async def save_settings():
-    """Save settings from form submission."""
-    try:
-        settings = Settings.load(remote_id=get_active_remote_id())
-        ui_prefs = UIPreferences.load()
+@app.route("/api/v1/settings", methods=["PUT"])
+async def api_v1_save_settings():
+    """Persist typed JSON settings without accepting form submissions."""
+    payload = await request.get_json(silent=True) or {}
+    values = payload.get("settings", {})
+    preferences = payload.get("preferences", {})
+    if not isinstance(values, dict) or not isinstance(preferences, dict):
+        return _api_error("invalid_settings", "settings and preferences must be objects")
 
-        # Update settings from form data (checkboxes only send value if checked)
-        form = await request.form
-        settings.shutdown_on_battery = form.get("shutdown_on_battery") == "on"
-        settings.auto_update = form.get("auto_update") == "on"
-        settings.backup_configs = form.get("backup_configs") == "on"
-        settings.auto_register_entities = form.get("auto_register_entities") == "on"
-        settings.show_beta_releases = form.get("show_beta_releases") == "on"
-
-        backup_time = form.get("backup_time")
-        if backup_time:
-            settings.backup_time = backup_time
-
-        settings.save(remote_id=get_active_remote_id())
-        ui_prefs.save()
-
-        return """
-        <div class="flex items-center gap-2 text-green-400">
-            <i class="fa-solid fa-check w-5 h-5"></i>
-            Settings saved successfully
-        </div>
-        """
-    except Exception as e:
-        _LOG.error("Failed to save settings: %s", e)
-        return f"""
-        <div class="flex items-center gap-2 text-red-400">
-            <i class="fa-solid fa-xmark w-5 h-5"></i>
-            Error: {e}
-        </div>
-        """
-
-
-@app.route("/api/settings", methods=["GET"])
-async def get_settings():
-    """Get current settings as JSON."""
     settings = Settings.load(remote_id=get_active_remote_id())
-    return jsonify(settings.to_dict())
+    for field in (
+        "shutdown_on_battery",
+        "auto_update",
+        "backup_configs",
+        "auto_register_entities",
+        "show_beta_releases",
+        "backup_time",
+    ):
+        if field in values:
+            setattr(settings, field, values[field])
+    if not isinstance(settings.backup_time, str):
+        return _api_error("invalid_backup_time", "backup_time must be a string")
+    settings.save(remote_id=get_active_remote_id())
 
-
-@app.route("/api/settings/sort", methods=["GET"])
-async def get_sort_settings():
-    """Get current sort settings as JSON."""
     ui_prefs = UIPreferences.load()
-    return jsonify({"sort_by": ui_prefs.sort_by, "sort_reverse": ui_prefs.sort_reverse})
-
-
-@app.route("/api/settings/sort", methods=["POST"])
-async def update_sort_settings():
-    """Update sort settings and return refreshed available integrations list."""
-    try:
-        ui_prefs = UIPreferences.load()
-        form = await request.form
-        ui_prefs.sort_by = form.get("sort_by", "stars")
-        # Convert string 'true'/'false' to boolean
-        sort_reverse_str = form.get("sort_reverse", "false")
-        ui_prefs.sort_reverse = sort_reverse_str == "true"
-        ui_prefs.save()
-
-        # Return refreshed available integrations with new sort
-        available = await _get_available_integrations(get_active_remote_id())
-        client = _get_active_remote_client()
-        remote_ip = client._address if client else None
-        return await render_template(
-            "partials/available_list.html",
-            integrations=available,
-            remote_ip=remote_ip,
-        )
-    except Exception as e:
-        _LOG.error("Failed to update sort settings: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>", 500
+    if "sort_by" in preferences:
+        ui_prefs.sort_by = str(preferences["sort_by"])
+    if "sort_reverse" in preferences:
+        ui_prefs.sort_reverse = bool(preferences["sort_reverse"])
+    ui_prefs.save()
+    return jsonify({"data": {"settings": settings.to_dict(), "preferences": ui_prefs.to_dict(), "runtime": {"remoteAddress": getattr(_get_active_remote_client(), "_address", None), "webServerPort": WEB_SERVER_PORT, "external": _is_external_runtime()}}})
 
 
 # ============================================================================
@@ -5235,28 +4835,6 @@ async def set_active_remote():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/remotes/list")
-async def get_remotes_list():
-    """Get list of all configured remotes with connection status."""
-    active_id = get_active_remote_id()
-
-    remotes = []
-    for remote_id, config in _remote_configs.items():
-        remotes.append(
-            {
-                "id": remote_id,
-                "name": config.name,
-                "address": config.address,
-                "active": remote_id == active_id,
-                "connected": is_remote_online(remote_id),
-            }
-        )
-
-    return await render_template(
-        "partials/remote_selector_dropdown.html", remotes=remotes
-    )
-
-
 # ============================================================================
 # Notification Routes
 # ============================================================================
@@ -5264,13 +4842,28 @@ async def get_remotes_list():
 
 @app.route("/notifications")
 async def notifications_page():
-    """Render the notifications settings page."""
+    """Retired legacy page route; the SPA owns notifications."""
+    return "", 404
 
-    notification_settings = NotificationSettings.load(remote_id=get_active_remote_id())
-    return await render_template(
-        "notifications.html",
-        notification_settings=notification_settings,
-    )
+
+@app.route("/api/v1/notifications", methods=["GET"])
+async def api_v1_get_notifications():
+    """Expose all notification configuration through one JSON resource."""
+    return jsonify({"data": NotificationSettings.load(remote_id=get_active_remote_id()).to_dict()})
+
+
+@app.route("/api/v1/notifications", methods=["PUT"])
+async def api_v1_save_notifications():
+    """Save notification providers and triggers from the SPA."""
+    payload = await request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _api_error("invalid_notifications", "Notification settings must be an object")
+    try:
+        settings = NotificationSettings._parse_settings_data(payload)
+        settings.save(remote_id=get_active_remote_id())
+        return jsonify({"data": settings.to_dict()})
+    except (TypeError, ValueError) as e:
+        return _api_error("invalid_notifications", str(e))
 
 
 @app.route("/api/notifications/home-assistant", methods=["POST"])
@@ -5296,7 +4889,7 @@ async def save_home_assistant_settings():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
-@app.route("/api/notifications/home-assistant/test", methods=["POST"])
+@app.route("/api/v1/notifications/home-assistant/test", methods=["POST"])
 async def test_home_assistant_notification():
     """Send a test notification to Home Assistant."""
 
@@ -5334,7 +4927,7 @@ async def test_home_assistant_notification():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route("/api/notifications/home-assistant/services", methods=["GET"])
+@app.route("/api/v1/notifications/home-assistant/services", methods=["GET"])
 async def get_home_assistant_services():
     """Get available Home Assistant notify services."""
 
@@ -5418,7 +5011,7 @@ async def save_webhook_settings():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
-@app.route("/api/notifications/webhook/test", methods=["POST"])
+@app.route("/api/v1/notifications/webhook/test", methods=["POST"])
 async def test_webhook_notification():
     """Send a test notification via webhook."""
 
@@ -5477,7 +5070,7 @@ async def save_pushover_settings():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
-@app.route("/api/notifications/pushover/test", methods=["POST"])
+@app.route("/api/v1/notifications/pushover/test", methods=["POST"])
 async def test_pushover_notification():
     """Send a test notification via Pushover."""
 
@@ -5536,7 +5129,7 @@ async def save_ntfy_settings():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
-@app.route("/api/notifications/ntfy/test", methods=["POST"])
+@app.route("/api/v1/notifications/ntfy/test", methods=["POST"])
 async def test_ntfy_notification():
     """Send a test notification via ntfy."""
 
@@ -5595,7 +5188,7 @@ async def save_discord_settings():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
-@app.route("/api/notifications/discord/test", methods=["POST"])
+@app.route("/api/v1/notifications/discord/test", methods=["POST"])
 async def test_discord_notification():
     """Send a test notification via Discord."""
 
@@ -5663,43 +5256,19 @@ async def save_notification_triggers():
 # ============================================================================
 
 
-@app.route("/logs")
-async def logs_page():
-    """Render the logs page."""
-    entries = get_log_entries()
-    return await render_template(
-        "logs.html",
-        entries=entries,
-        log_count=len(entries),
-    )
+@app.route("/api/v1/logs")
+async def api_v1_logs():
+    """Return manager log records as JSON."""
+    return jsonify({"data": [entry.to_dict() for entry in get_log_entries()]})
 
 
-@app.route("/api/logs/entries")
-async def get_logs_entries():
-    """Get log entries as HTML partial for HTMX."""
-    entries = get_log_entries()
-    return await render_template("partials/log_entries.html", entries=entries)
-
-
-@app.route("/api/logs/clear-confirm")
-async def get_clear_logs_confirm():
-    """Get confirmation modal for clearing logs."""
-    return await render_template("partials/modal_clear_logs.html")
-
-
-@app.route("/api/logs/clear", methods=["POST"])
-async def clear_logs():
-    """Clear all log entries."""
+@app.route("/api/v1/logs", methods=["DELETE"])
+async def api_v1_clear_logs():
+    """Clear manager logs without an HTML confirmation fragment."""
     handler = get_log_handler()
     if handler:
         handler.clear()
-
-    return """
-    <div class="p-8 text-center text-gray-400">
-        <i class="fa-regular fa-circle-check w-12 h-12 mx-auto mb-3 opacity-50"></i>
-        <p>Logs cleared</p>
-    </div>
-    """
+    return jsonify({"data": {"cleared": True}})
 
 
 # ============================================================================
@@ -5707,138 +5276,44 @@ async def clear_logs():
 # ============================================================================
 
 
-@app.route("/integration-logs")
-async def integration_logs_page():
-    """Render the integration logs page."""
-    if not _get_active_remote_client() or not is_remote_online(get_active_remote_id()):
-        return await render_template(
-            "integration_logs.html",
-            services=[],
-            entries=[],
-            selected_service="",
-        )
-
+@app.route("/api/v1/integration-logs/services")
+async def api_v1_integration_log_services():
+    """List active Remote log services as JSON."""
+    client = _get_active_remote_client()
+    if not client or not is_remote_online(get_active_remote_id()):
+        return jsonify({"data": []})
     try:
-        # Get available log services from the remote
-        services = await _get_active_remote_client().get_log_services()  # ty:ignore[unresolved-attribute]
-
-        _LOG.debug("Fetched %d total log services from remote", len(services))
-
-        # Filter to only active services
-        active_services = [
-            s for s in services if s.get("service") and s.get("active") is True
-        ]
-
-        _LOG.debug(
-            "Found %d active services out of %d total services",
-            len(active_services),
-            len(services),
-        )
-
-        # Get integrations to match driver names for custom services
-        remote_id = get_active_remote_id()
-        integrations = await _get_installed_integrations(remote_id)
-        integration_map = {
-            intg.driver_id: intg.name for intg in integrations if intg.driver_id
-        }
-
-        # Enrich custom services with driver names
-        for service in active_services:
-            service_id = service.get("service", "")
-            # Check if it's a custom integration (starts with "custom-intg-")
-            if service_id.startswith("custom-intg-"):
-                # Remove "custom-intg-" prefix to get driver_id
-                driver_id = service_id.replace("custom-intg-", "", 1)
-                # Look up the driver name from integrations
-                if driver_id in integration_map:
-                    service["display_name"] = integration_map[driver_id]
-                else:
-                    service["display_name"] = service.get("name", service_id)
-            else:
-                # Use the original name for non-custom services
-                service["display_name"] = service.get("name", service_id)
-
-        # Sort by display name
-        active_services.sort(key=lambda x: x.get("display_name", ""))
-
-        return await render_template(
-            "integration_logs.html",
-            services=active_services,
-            entries=[],
-            selected_service="",
-        )
+        services = await client.get_log_services()
+        return jsonify({"data": [{"id": item.get("service"), "name": item.get("name") or item.get("service")} for item in services if item.get("service") and item.get("active")]})
     except SyncAPIError as e:
-        _LOG.error("Failed to fetch log services: %s", e)
-        return await render_template(
-            "integration_logs.html",
-            services=[],
-            entries=[],
-            selected_service="",
-        )
+        return _api_error("log_services_unavailable", str(e), 502)
 
 
-@app.route("/api/integration-logs/entries")
-async def get_integration_logs_entries():
-    """Get integration log entries as HTML partial for HTMX."""
-    if not _get_active_remote_client() or not is_remote_online(get_active_remote_id()):
-        return await render_template(
-            "partials/integration_log_entries.html", entries=[]
-        )
-
-    service_param = request.args.get("service", "")
-    if not service_param:
-        return await render_template(
-            "partials/integration_log_entries.html", entries=[]
-        )
-
-    # Get priority filter from request, default to 7 (all levels)
-    priority_str = request.args.get("priority", "7")
+@app.route("/api/v1/integration-logs")
+async def api_v1_integration_logs():
+    """Read selected Remote log services without returning a template fragment."""
+    client = _get_active_remote_client()
+    services = [item for item in request.args.get("services", "").split(",") if item]
+    if not client or not is_remote_online(get_active_remote_id()):
+        return jsonify({"data": []})
+    if not services:
+        return jsonify({"data": []})
     try:
-        priority = int(priority_str)
-        # Ensure priority is in valid range (0-7)
-        priority = max(0, min(7, priority))
-    except (ValueError, TypeError):
-        priority = 7  # Default to all levels if invalid
-
-    # Support comma-separated service list
-    services = [s.strip() for s in service_param.split(",") if s.strip()]
-
+        priority = max(0, min(7, int(request.args.get("priority", "7"))))
+    except ValueError:
+        priority = 7
     try:
-        if len(services) == 1:
-            logs = await _get_active_remote_client().get_logs(  # ty:ignore[unresolved-attribute]
-                priority=priority,
-                service=services[0],
-                limit=1000,
-                as_text=False,
-            )
-        else:
-            # Fetch logs for each service and merge, sorted newest-first
-            all_logs = []
-            per_service_limit = max(200, 1000 // len(services))
-            for svc in services:
-                svc_logs = await _get_active_remote_client().get_logs(  # ty:ignore[unresolved-attribute]
-                    priority=priority,
-                    service=svc,
-                    limit=per_service_limit,
-                    as_text=False,
-                )
-                if isinstance(svc_logs, list):
-                    all_logs.extend(svc_logs)
-            # Sort merged results by timestamp descending
-            all_logs.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
-            logs = all_logs[:1000]
-
-        return await render_template(
-            "partials/integration_log_entries.html", entries=logs
-        )
+        entries = []
+        for service in services:
+            logs = await client.get_logs(priority=priority, service=service, limit=max(200, 1000 // len(services)), as_text=False)
+            if isinstance(logs, list): entries.extend(logs)
+        entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+        return jsonify({"data": entries[:1000]})
     except SyncAPIError as e:
-        _LOG.error("Failed to fetch integration logs: %s", e)
-        return await render_template(
-            "partials/integration_log_entries.html", entries=[]
-        )
+        return _api_error("logs_unavailable", str(e), 502)
 
 
-@app.route("/api/integration-logs/download")
+@app.route("/api/v1/integration-logs/export")
 async def download_integration_logs():
     """Download integration logs as a text file."""
     if not _get_active_remote_client():
@@ -5913,112 +5388,6 @@ async def download_integration_logs():
 # ============================================================================
 
 
-@app.context_processor
-async def inject_remote_configurator_url():
-    """Inject the active remote's web configurator URL into all templates."""
-    client = _get_active_remote_client()
-    if client and client._address:
-        return {"remote_configurator_url": f"http://{client._address}"}
-    return {"remote_configurator_url": None}
-
-
-@app.context_processor
-async def inject_system_messages_count():
-    """Inject unread system messages count into all templates."""
-    try:
-        messages_service = get_system_messages_service()
-        return {"unread_messages_count": messages_service.get_unread_count()}
-    except Exception as e:
-        _LOG.error("Failed to get unread messages count: %s", e)
-        return {"unread_messages_count": 0}
-
-
-@app.context_processor
-async def inject_orphaned_entities_count():
-    """Inject orphaned entities + IR codesets count into all templates.
-
-    Skipped entirely when the active remote is offline so page renders never
-    block on a remote that is in standby/unreachable.
-    """
-    client = _get_active_remote_client()
-    remote_id = get_active_remote_id()
-    if not client or not is_remote_online(remote_id):
-        return {"orphaned_entities_count": 0}
-
-    try:
-        orphaned_entities = await client.find_orphan_entities()
-        activity_ids = set()
-        for entity in orphaned_entities:
-            activity_id = entity.get("activity_id")
-            if activity_id:
-                activity_ids.add(activity_id)
-
-        orphaned_codesets = await find_orphaned_ir_codesets(client)
-
-        total_count = len(activity_ids) + len(orphaned_codesets)
-        return {"orphaned_entities_count": total_count}
-    except Exception as e:
-        _LOG.debug("Failed to get orphaned entities count: %s", e)
-        return {"orphaned_entities_count": 0}
-
-
-@app.context_processor
-async def inject_active_remote_status():
-    """Inject the active remote's online status into all templates.
-
-    Used to render an offline banner and to gate UI elements that depend on
-    a reachable remote.
-    """
-    remote_id = get_active_remote_id()
-    return {
-        "active_remote_id": remote_id,
-        "active_remote_online": is_remote_online(remote_id),
-        "active_remote_name": (
-            _remote_configs[remote_id].name
-            if remote_id and remote_id in _remote_configs
-            else None
-        ),
-    }
-
-
-_SPONSOR_URL_TEMPLATES: dict[str, str] = {
-    "github": "https://github.com/sponsors/{}",
-    "buy_me_a_coffee": "https://www.buymeacoffee.com/{}",
-    "paypal": "https://www.paypal.com/paypalme/{}",
-    "patreon": "https://www.patreon.com/{}",
-    "ko-fi": "https://ko-fi.com/{}",
-    "venmo": "https://venmo.com/{}",
-    "cashapp": "https://cash.app/${}",
-}
-
-
-def _get_sponsors() -> dict[str, dict]:
-    """Load and normalise developers from registry.json, keyed by developer name."""
-    try:
-        data = load_registry_data()
-        developers_list = data.get("developers", []) if isinstance(data, dict) else []
-        result: dict[str, dict] = {}
-        for developer in developers_list:
-            name = developer.get("name", "")
-            if not name:
-                continue
-            links: dict[str, str] = {}
-            for platform, value in developer.get("sponsorship_links", {}).items():
-                if value.startswith("http"):
-                    links[platform] = value
-                elif platform in _SPONSOR_URL_TEMPLATES:
-                    links[platform] = _SPONSOR_URL_TEMPLATES[platform].format(value)
-            result[name] = {
-                "description": developer.get("description", ""),
-                "homepage": developer.get("homepage", ""),
-                "links": links,
-            }
-        return result
-    except Exception as e:
-        _LOG.debug("Failed to load developers: %s", e)
-        return {}
-
-
 def _get_category_name_map() -> dict[str, str]:
     """Build id → display name lookup from registry categories."""
     try:
@@ -6034,82 +5403,44 @@ def _get_category_name_map() -> dict[str, str]:
     return {}
 
 
-@app.context_processor
-async def inject_sponsors():
-    """Inject sponsors lookup dict and firmware context into all templates."""
-    uc_config_home = os.getenv("UC_CONFIG_HOME", "")
-    return {
-        "sponsors": _get_sponsors(),
-        "supports_inplace_update": _supports_inplace_update(),
-        "is_docker": uc_config_home.startswith("/config"),
-    }
-
-
 @app.route("/system-messages")
 async def system_messages_page():
-    """Render the system messages page and mark displayed messages as read."""
+    """Retired legacy page route; the SPA owns system messages."""
+    return "", 404
+
+
+@app.route("/api/v1/system-messages")
+async def api_v1_system_messages():
+    """Return messages as text data; React owns the message presentation."""
     try:
-        messages_service = get_system_messages_service()
-
-        # Get unread and read messages
-        unread_messages = messages_service.get_unread_messages()
-        read_messages = messages_service.get_read_messages()
-
-        # Mark all currently displayed unread messages as read
-        if unread_messages:
-            message_ids = [msg.id for msg in unread_messages]
-            messages_service.mark_messages_as_read(message_ids)
-
-        return await render_template(
-            "system_messages.html",
-            unread_messages=unread_messages,
-            read_messages=read_messages,
-        )
+        service = get_system_messages_service()
+        unread = service.get_unread_messages()
+        read = service.get_read_messages()
+        if unread:
+            service.mark_messages_as_read([message.id for message in unread])
+        def serialize(message):
+            return {"id": message.id, "date": message.date, "title": message.title, "content": _plain_text(message.content), "priority": message.priority}
+        return jsonify({"data": {"unread": [serialize(item) for item in unread], "read": [serialize(item) for item in read]}})
     except Exception as e:
         _LOG.error("Failed to load system messages: %s", e)
-        return await render_template(
-            "system_messages.html",
-            unread_messages=[],
-            read_messages=[],
-        )
+        return _api_error("messages_unavailable", str(e), 500)
 
 
-@app.route("/api/system-messages/refresh", methods=["POST"])
-async def refresh_system_messages():
-    """Fetch latest system messages from GitHub and reload the page."""
+@app.route("/api/v1/system-messages/refresh", methods=["POST"])
+async def api_v1_refresh_system_messages():
+    """Refresh message data without instructing the browser to reload."""
     try:
-        messages_service = get_system_messages_service()
-        success = messages_service.fetch_from_github()
-
-        if success:
-            _LOG.info("System messages refreshed from GitHub")
-            # Return success response that triggers page reload
-            return jsonify(
-                {"success": True, "message": "Messages refreshed successfully"}
-            )
-        else:
-            _LOG.warning("Failed to refresh system messages from GitHub")
-            return jsonify(
-                {"success": False, "message": "Failed to fetch from GitHub"}
-            ), 500
-
+        if not get_system_messages_service().fetch_from_github():
+            return _api_error("message_refresh_failed", "Failed to fetch system messages", 502)
+        return jsonify({"data": {"refreshed": True}})
     except Exception as e:
-        _LOG.error("Error refreshing system messages: %s", e)
-        return jsonify({"success": False, "message": str(e)}), 500
+        return _api_error("message_refresh_failed", str(e), 500)
 
 
 @app.route("/diagnostics")
 async def diagnostics_page():
-    """Render the diagnostics page."""
-    remote_id = get_active_remote_id()
-    system_update = _system_update_cache.get(remote_id, {}) if remote_id else {}
-    return await render_template(
-        "diagnostics.html",
-        remote_address=_get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-        if _get_active_remote_client()
-        else "localhost",
-        system_update=system_update,
-    )
+    """Retired legacy page route; the SPA owns diagnostics."""
+    return "", 404
 
 
 @app.route("/api/diagnostics/system-update-check", methods=["POST"])
@@ -6148,16 +5479,28 @@ async def system_update_check():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
-@app.route("/api/diagnostics/orphaned-entities")
+@app.route("/api/v1/diagnostics/system-update", methods=["POST"])
+async def api_v1_system_update_check():
+    """Check firmware update status with the v1 JSON envelope."""
+    client = _get_active_remote_client()
+    if not client:
+        return _api_error("remote_unavailable", "No remote connected", 503)
+    try:
+        update_info = await client.check_system_update()
+        available = update_info.get("available", [])
+        latest = available[0] if available else {}
+        return jsonify({"data": {"installedVersion": update_info.get("installed_version", "Unknown"), "updateAvailable": bool(available), "availableVersion": latest.get("version"), "title": latest.get("title"), "releaseNotesUrl": latest.get("release_notes_url")}})
+    except SyncAPIError as e:
+        return _api_error("firmware_check_failed", str(e), 502)
+
+
+@app.route("/api/v1/diagnostics/orphaned-entities")
 async def get_orphaned_entities():
-    """Get orphaned entities data as HTML partial for HTMX."""
+    """Return orphaned entities grouped by activity as JSON."""
     if not _get_active_remote_client():
-        return await render_template(
-            "partials/orphaned_entities.html",
-            orphaned_entities=[],
-        )
+        return jsonify({"data": {"activities": {}}})
     if not is_remote_online(get_active_remote_id()):
-        return _render_offline_partial()
+        return _api_error("remote_offline", "The active remote is offline", 503)
 
     try:
         orphaned_entities = await _get_active_remote_client().find_orphan_entities()  # ty:ignore[unresolved-attribute]
@@ -6192,40 +5535,17 @@ async def get_orphaned_entities():
 
             activities[activity_id]["entities"].append(entity_copy)
 
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-        return await render_template(
-            "partials/orphaned_entities.html",
-            activities=activities,
-            remote_ip=remote_ip,
-        )
+        return jsonify({"data": {"activities": activities}})
     except SyncAPIError as e:
         _LOG.error("Failed to fetch orphaned entities: %s", e)
-        # Return error message
-        return f"""
-        <div class="bg-red-50 dark:bg-red-900/20 border border-red-400 dark:border-red-500/30 rounded-lg p-6">
-            <div class="flex items-start gap-3">
-                <i class="fa-solid fa-triangle-exclamation text-red-600 dark:text-red-400 text-xl"></i>
-                <div>
-                    <h3 class="text-gray-900 dark:text-white font-medium mb-1">Error Loading Diagnostics</h3>
-                    <p class="text-sm text-gray-700 dark:text-gray-300">{e}</p>
-                </div>
-            </div>
-        </div>
-        """
+        return _api_error("orphaned_entities_unavailable", str(e), 502)
 
 
-@app.route("/api/diagnostics/unused-activity-entities")
+@app.route("/api/v1/diagnostics/unused-activity-entities")
 async def get_unused_activity_entities():
-    """Get unused activity entities data as HTML partial for HTMX."""
+    """Return unused activity entities grouped by activity as JSON."""
     if not _get_active_remote_client():
-        return await render_template(
-            "partials/unused_activity_entities.html",
-            activities={},
-        )
+        return jsonify({"data": {"activities": {}}})
 
     try:
         unused = await _get_active_remote_client().find_unused_entities()  # ty:ignore[unresolved-attribute]
@@ -6256,100 +5576,51 @@ async def get_unused_activity_entities():
                 entity_copy["integration"] = integration_copy
             activities[activity_id]["entities"].append(entity_copy)
 
-        remote_ip = (
-            _get_active_remote_client()._address  # ty:ignore[unresolved-attribute]
-            if _get_active_remote_client()
-            else None
-        )
-        return await render_template(
-            "partials/unused_activity_entities.html",
-            activities=activities,
-            remote_ip=remote_ip,
-        )
+        return jsonify({"data": {"activities": activities}})
     except SyncAPIError as e:
         _LOG.error("Failed to fetch unused activity entities: %s", e)
-        return f"""
-        <div class="bg-red-50 dark:bg-red-900/20 border border-red-400 dark:border-red-500/30 rounded-lg p-6">
-            <div class="flex items-start gap-3">
-                <i class="fa-solid fa-triangle-exclamation text-red-600 dark:text-red-400 text-xl"></i>
-                <div>
-                    <h3 class="text-gray-900 dark:text-white font-medium mb-1">Error Loading Diagnostics</h3>
-                    <p class="text-sm text-gray-700 dark:text-gray-300">{e}</p>
-                </div>
-            </div>
-        </div>
-        """
+        return _api_error("unused_entities_unavailable", str(e), 502)
 
 
-@app.route("/api/diagnostics/orphaned-ir-codesets")
+@app.route("/api/v1/diagnostics/orphaned-ir-codesets")
 async def get_orphaned_ir_codesets():
-    """Get orphaned IR codesets data as HTML partial for HTMX."""
+    """Return orphaned custom IR codesets as JSON."""
     client = _get_active_remote_client()
     if not client:
-        return await render_template(
-            "partials/orphaned_ir_codesets.html",
-            orphaned_codesets=[],
-        )
+        return jsonify({"data": []})
     if not is_remote_online(get_active_remote_id()):
-        return _render_offline_partial()
+        return _api_error("remote_offline", "The active remote is offline", 503)
 
     try:
         orphaned_codesets = await find_orphaned_ir_codesets(client)
         _LOG.debug("Found %d orphaned IR codesets", len(orphaned_codesets))
 
-        return await render_template(
-            "partials/orphaned_ir_codesets.html",
-            orphaned_codesets=orphaned_codesets,
-        )
+        return jsonify({"data": orphaned_codesets})
     except SyncAPIError as e:
         _LOG.error("Failed to fetch orphaned IR codesets: %s", e)
-        return f"""
-        <div class="bg-red-50 dark:bg-red-900/20 border border-red-400 dark:border-red-500/30 rounded-lg p-6">
-            <div class="flex items-start gap-3">
-                <i class="fa-solid fa-triangle-exclamation text-red-600 dark:text-red-400 text-xl"></i>
-                <div>
-                    <h3 class="text-gray-900 dark:text-white font-medium mb-1">Error Loading IR Codesets</h3>
-                    <p class="text-sm text-gray-700 dark:text-gray-300">{e}</p>
-                </div>
-            </div>
-        </div>
-        """
+        return _api_error("orphaned_codesets_unavailable", str(e), 502)
 
 
-@app.route("/api/ir/codesets/<device_id>/delete-confirm")
-async def ir_codeset_delete_confirm(device_id: str):
-    """Render delete confirmation modal for IR codeset."""
-    # Get codeset info from query params or find it
-    device_name = request.args.get("device_name", device_id)
-
-    return await render_template(
-        "partials/modal_delete_ir_codeset.html",
-        device_id=device_id,
-        device_name=device_name,
-    )
-
-
-@app.route("/api/ir/codesets/<device_id>", methods=["DELETE"])
+@app.route("/api/v1/diagnostics/ir-codesets/<device_id>", methods=["DELETE"])
 async def delete_ir_codeset(device_id: str):
     """Delete a custom IR codeset."""
     if not _get_active_remote_client():
-        return jsonify({"error": "Not connected to remote"}), 500
+        return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
         await _get_active_remote_client().delete_custom_ir_codeset(device_id)  # ty:ignore[unresolved-attribute]
         _LOG.info("Deleted IR codeset: %s", device_id)
-        # Return empty response to remove the element from DOM
-        return "", 200
+        return jsonify({"data": {"deleted": True, "deviceId": device_id}})
     except SyncAPIError as e:
         _LOG.error("Failed to delete IR codeset %s: %s", device_id, e)
-        return jsonify({"error": str(e)}), 500
+        return _api_error("codeset_delete_failed", str(e), 502)
 
 
-@app.route("/api/ir/codesets/reassociate", methods=["POST"])
+@app.route("/api/v1/diagnostics/ir-codesets/reassociate", methods=["POST"])
 async def reassociate_ir_codeset():
     """Create a new remote associated with a custom IR codeset."""
     if not _get_active_remote_client():
-        return jsonify({"error": "Not connected to remote"}), 500
+        return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
         # Handle both JSON and form data
@@ -6362,45 +5633,44 @@ async def reassociate_ir_codeset():
         remote_name = data.get("remote_name")
 
         if not device_id or not remote_name:
-            return jsonify({"error": "Missing device_id or remote_name"}), 400
+            return _api_error("invalid_request", "Missing device_id or remote_name", 400)
 
         # Create remote with custom codeset ID
         await _get_active_remote_client().create_remote(remote_name, device_id)  # ty:ignore[unresolved-attribute]
 
         _LOG.info("Created remote '%s' for codeset %s", remote_name, device_id)
-        # Return empty response to remove the element from DOM
-        return "", 200
+        return jsonify({"data": {"created": True, "deviceId": device_id, "remoteName": remote_name}})
     except SyncAPIError as e:
         _LOG.error("Failed to reassociate IR codeset: %s", e)
-        return jsonify({"error": str(e)}), 500
+        return _api_error("codeset_reassociation_failed", str(e), 502)
 
 
-@app.route("/api/system/reboot", methods=["POST"])
+@app.route("/api/v1/diagnostics/reboot", methods=["POST"])
 async def system_reboot():
     """Reboot the remote."""
     if not _get_active_remote_client():
-        return jsonify({"error": "Not connected to remote"}), 500
+        return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
         await _get_active_remote_client().reboot_remote()  # ty:ignore[unresolved-attribute]
-        return jsonify({"success": True, "message": "Reboot command sent"}), 200
+        return jsonify({"data": {"sent": True, "message": "Reboot command sent"}})
     except SyncAPIError as e:
         _LOG.error("Failed to reboot remote: %s", e)
-        return jsonify({"error": str(e)}), 500
+        return _api_error("reboot_failed", str(e), 502)
 
 
-@app.route("/api/system/power-off", methods=["POST"])
+@app.route("/api/v1/diagnostics/power-off", methods=["POST"])
 async def system_power_off():
     """Power off the remote."""
     if not _get_active_remote_client():
-        return jsonify({"error": "Not connected to remote"}), 500
+        return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
         await _get_active_remote_client().power_off_remote()  # ty:ignore[unresolved-attribute]
-        return jsonify({"success": True, "message": "Power off command sent"}), 200
+        return jsonify({"data": {"sent": True, "message": "Power off command sent"}})
     except SyncAPIError as e:
         _LOG.error("Failed to power off remote: %s", e)
-        return jsonify({"error": str(e)}), 500
+        return _api_error("power_off_failed", str(e), 502)
 
 
 @app.route("/api/backups/create", methods=["POST"])
@@ -6411,7 +5681,7 @@ async def create_backup_now():
         client = _get_active_remote_client()
 
         if not client:
-            return """<div class="text-red-600 dark:text-red-400">Not connected to remote</div>"""
+            return _api_error("service_unavailable", "Not connected to remote", 503)
 
         # Load registry to check which integrations support backup
         registry = load_registry()
@@ -6462,164 +5732,41 @@ async def create_backup_now():
             else:
                 failed.append(name)
 
-        # Build result message
-        result_parts = []
-        if backed_up:
-            result_parts.append(
-                f"<span class='text-green-600 dark:text-green-400'>✓ Backed up: {', '.join(backed_up)}</span>"
-            )
-        if skipped:
-            result_parts.append(
-                f"<span class='text-gray-600 dark:text-gray-400'>Skipped (integration does not support backup): {len(skipped)}</span>"
-            )
-        if failed:
-            result_parts.append(
-                f"<span class='text-red-600 dark:text-red-400'>✗ Failed: {', '.join(failed)}</span>"
-            )
-
-        if not result_parts:
-            return """<div class="text-gray-600 dark:text-gray-400">No integrations to backup</div>"""
-
-        return f"""<div class="space-y-1">{"<br>".join(result_parts)}</div>"""
+        return jsonify({"data": {"backedUp": backed_up, "skipped": skipped, "failed": failed}})
 
     except Exception as e:
         _LOG.error("Failed to create backup: %s", e)
-        return f"""<div class="text-red-600 dark:text-red-400">Error creating backup: {e}</div>"""
+        return _api_error("backup_failed", str(e), 500)
 
 
-@app.route("/api/backups/list")
-async def list_backups():
-    """List available integration backups."""
+@app.route("/api/v1/backups")
+async def api_v1_backups():
+    """List active-remote backups as data rather than a rendered list."""
+    remote_id = get_active_remote_id()
+    backups = get_all_backups().get("remotes", {}).get(remote_id, {}).get("integrations", {})
+    return jsonify({"data": [{"driverId": driver_id, "timestamp": info.get("timestamp"), "hasData": bool(info.get("data"))} for driver_id, info in backups.items()]})
+
+
+@app.route("/api/v1/backups/<driver_id>")
+async def api_v1_backup(driver_id: str):
+    """Return raw stored configuration as JSON data."""
+    data = get_backup(driver_id, remote_id=get_active_remote_id())
+    if data is None:
+        return _api_error("backup_not_found", "No backup data found", 404)
     try:
-        remote_id = get_active_remote_id()
-        backups_data = get_all_backups()
-        # Get backups for the active remote
-        backups = (
-            backups_data.get("remotes", {}).get(remote_id, {}).get("integrations", {})
-        )
-
-        if not backups:
-            return (
-                "<div class='text-gray-600 dark:text-gray-400'>No backups found</div>"
-            )
-
-        html = "<div class='space-y-2'>"
-        for driver_id, backup_info in backups.items():
-            timestamp = backup_info.get("timestamp", "Unknown")
-            # Format the timestamp nicely
-            try:
-                dt = datetime.fromisoformat(timestamp)
-                formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-            except (ValueError, TypeError):
-                formatted_time = timestamp
-
-            html += f"""
-            <div class="flex items-center justify-between p-3 bg-uc-light-card dark:bg-gray-700/50 rounded-lg border border-uc-light-border dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700">
-                <button class="flex-1 text-left"
-                        hx-get="/api/backups/{driver_id}/view"
-                        hx-target="#backup-content"
-                        hx-swap="innerHTML"
-                        title="View backup data">
-                    <div class="text-gray-900 dark:text-white font-mono text-sm">{driver_id}</div>
-                    <div class="text-xs text-gray-600 dark:text-gray-400">{formatted_time}</div>
-                </button>
-                <button class="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 text-sm ml-3"
-                        hx-get="/api/backups/{driver_id}/delete-confirm"
-                        hx-target="#modal-content"
-                        hx-swap="innerHTML"
-                        hx-on::before-request="openModal('Delete Backup')">
-                    Delete
-                </button>
-            </div>
-            """
-        html += "</div>"
-        return html
-
-    except Exception as e:
-        _LOG.error("Failed to list backups: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>"
+        value = json.loads(data)
+    except (TypeError, json.JSONDecodeError):
+        value = data
+    return jsonify({"data": {"driverId": driver_id, "content": value}})
 
 
-@app.route("/api/backups/<driver_id>/delete-confirm")
-async def get_delete_backup_confirm(driver_id: str):
-    """Get confirmation modal for deleting a backup."""
-    try:
-        remote_id = get_active_remote_id()
-        backups_data = get_all_backups()
-        backup_info = (
-            backups_data.get("remotes", {})
-            .get(remote_id, {})
-            .get("integrations", {})
-            .get(driver_id, {})
-        )
-        timestamp = backup_info.get("timestamp", "Unknown")
-
-        # Format the timestamp nicely
-        try:
-            dt = datetime.fromisoformat(timestamp)
-            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-        except (ValueError, TypeError):
-            formatted_time = timestamp
-
-        return await render_template(
-            "partials/modal_delete_backup.html",
-            driver_id=driver_id,
-            timestamp=formatted_time,
-        )
-    except Exception as e:
-        _LOG.error("Failed to get backup info: %s", e)
-        return await render_template(
-            "partials/modal_delete_backup.html",
-            driver_id=driver_id,
-            timestamp="Unknown",
-        )
+@app.route("/api/v1/backups/<driver_id>", methods=["DELETE"])
+async def api_v1_delete_backup(driver_id: str):
+    delete_backup(driver_id, remote_id=get_active_remote_id())
+    return jsonify({"data": {"driverId": driver_id, "deleted": True}})
 
 
-@app.route("/api/backups/<driver_id>/view")
-async def view_backup(driver_id: str):
-    """View backup data for a specific driver."""
-    try:
-        backup_data = get_backup(driver_id, remote_id=get_active_remote_id())
-
-        if not backup_data:
-            return "<div class='text-gray-600 dark:text-gray-400'>No backup data found</div>"
-
-        # Pretty-print JSON data
-        try:
-            parsed_data = json.loads(backup_data)
-            formatted_data = json.dumps(parsed_data, indent=2)
-        except json.JSONDecodeError:
-            formatted_data = backup_data
-
-        return f"""
-        <div class="mt-4 p-4 bg-uc-light-card dark:bg-gray-900 rounded-lg border border-uc-light-border dark:border-gray-700">
-            <div class="flex items-center justify-between mb-3">
-                <h4 class="text-sm font-medium text-gray-900 dark:text-white">Backup Data for {driver_id}</h4>
-                <button class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-sm"
-                        onclick="this.parentElement.parentElement.style.display='none'">
-                    ✕ Close
-                </button>
-            </div>
-            <pre class="text-xs text-gray-900 dark:text-gray-300 overflow-auto max-h-96 whitespace-pre-wrap"><code>{formatted_data}</code></pre>
-        </div>
-        """
-    except Exception as e:
-        _LOG.error("Failed to view backup: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>"
-
-
-@app.route("/api/backups/<driver_id>", methods=["DELETE"])
-async def delete_backup_entry(driver_id: str):
-    """Delete a backup for a specific driver."""
-    try:
-        delete_backup(driver_id, remote_id=get_active_remote_id())
-        return list_backups()  # Return updated list
-    except Exception as e:
-        _LOG.error("Failed to delete backup: %s", e)
-        return f"<div class='text-red-600 dark:text-red-400'>Error: {e}</div>"
-
-
-@app.route("/api/backups/download")
+@app.route("/api/v1/backups/export")
 async def download_complete_backup():
     """Download complete backup file (all integrations + settings)."""
 
@@ -6654,7 +5801,7 @@ async def download_complete_backup():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/api/backups/upload", methods=["POST"])
+@app.route("/api/v1/backups/import", methods=["POST"])
 async def upload_complete_backup():
     """Upload and restore complete backup file (all integrations + settings)."""
     try:
@@ -6872,14 +6019,12 @@ class WebServer:
         _github_client = GitHubClient()
         _sync_github_client = _SyncGitHubClient()
 
-        # Ensure template and static directories exist
+        # Ensure the static bundle directory exists.
         self._setup_directories()
 
     def _setup_directories(self) -> None:
         """Create required directories if they don't exist."""
-        os.makedirs(TEMPLATE_DIR, exist_ok=True)
         os.makedirs(STATIC_DIR, exist_ok=True)
-        os.makedirs(os.path.join(TEMPLATE_DIR, "partials"), exist_ok=True)
 
     def start(self) -> None:
         """Start the web server in a background thread."""
