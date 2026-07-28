@@ -47,7 +47,7 @@ export function AppShell({ children }: PropsWithChildren) {
   return <div className="app-shell">
     <header className="topbar">
       <Link to="/" className="brand" aria-label="Integration Manager home">
-        <img src="/static/img/logo.svg" alt="" />
+        <img src="/static/img/intg-manager.png" alt="" />
         <span>Integration <em>Manager</em></span>
       </Link>
       <div className="topbar-actions">

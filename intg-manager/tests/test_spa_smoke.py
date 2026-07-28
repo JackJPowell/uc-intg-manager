@@ -1,7 +1,9 @@
 """Dependency-free smoke checks for the React SPA and JSON API boundary."""
 
+import ast
 import os
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,3 +33,57 @@ def test_v1_routes_are_json_only_and_template_free():
     assert "render_template" not in source
     assert "TEMPLATE_DIR" not in source
     assert "htmx" not in source.lower()
+
+
+def test_automatic_updates_are_scheduled_and_do_not_require_backup_support():
+    source = SERVER.read_text(encoding="utf-8")
+    assert "await _run_automatic_updates(remote_id)" in source
+    assert "Processing %d automatic integration update(s) sequentially" in source
+    assert "can_auto_update" not in source
+    auto_update_runner = source[
+        source.index("async def _run_automatic_updates") : source.index(
+            "async def _get_installed_integrations"
+        )
+    ]
+    assert "integration.supports_backup" not in auto_update_runner
+
+
+def test_automatic_updates_require_charging_and_no_running_activities():
+    source = SERVER.read_text(encoding="utf-8")
+    client_source = (ROOT / "intg-manager" / "sync_api.py").read_text(encoding="utf-8")
+    assert '"GET", "/activities?limit=100"' in client_source
+    safety_check = source[
+        source.index("async def _automatic_update_is_safe") : source.index(
+            "async def _run_automatic_updates"
+        )
+    ]
+    assert "await client.is_docked()" in safety_check
+    assert "await client.get_activities()" in safety_check
+    assert 'attributes.get("state", "")).upper() == "ON"' in safety_check
+
+
+def test_remote_log_regex_compiles():
+    tree = ast.parse(SERVER.read_text(encoding="utf-8"))
+    assignment = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_REMOTE_LOG_LINE"
+            for target in node.targets
+        )
+    )
+    pattern = ast.literal_eval(assignment.value.args[0])
+    assert re.compile(pattern).match("[2026-07-27T21:27:49Z DEBUG service: ready")
+
+
+def test_integration_log_normalization_supports_remote_compact_keys():
+    source = SERVER.read_text(encoding="utf-8")
+    normalizer = source[
+        source.index("def _normalize_integration_log_entry") : source.index(
+            '@app.route("/api/v1/integration-logs/services")'
+        )
+    ]
+    assert 'normalized.get("ts")' in normalizer
+    assert 'normalized.get("m")' in normalizer
+    assert 'normalized.get("prio")' in normalizer

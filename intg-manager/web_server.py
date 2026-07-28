@@ -22,7 +22,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from html import unescape
-from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any
 
@@ -48,15 +47,6 @@ from const import (
     UIPreferences,
 )
 from data_migration import migrate as migrate_v1_to_v2
-from quart import (
-    Quart,
-    Response,
-    jsonify,
-    redirect,
-    request,
-    send_file,
-    session,
-)
 from log_handler import get_log_entries, get_log_handler
 from migration_service import extract_migration_mappings
 from notification_manager import (
@@ -73,6 +63,15 @@ from notification_settings import (
     WebhookNotificationConfig,
 )
 from packaging.version import InvalidVersion, Version
+from quart import (
+    Quart,
+    Response,
+    jsonify,
+    redirect,
+    request,
+    send_file,
+    session,
+)
 from sync_api import (
     GitHubClient,
     RemoteClient,
@@ -417,7 +416,7 @@ class IntegrationInfo:
     configured_entities: int = 0
     supports_backup: bool = False  # Uses ucapi-framework with backup support
     can_update: bool = False  # Show update button (always true if update available for custom integrations)
-    can_auto_update: bool = False  # Can do automated backup/restore (requires supports_backup and min version)
+    supports_automated_backup_restore: bool = False
 
 
 @dataclass
@@ -445,7 +444,7 @@ class AvailableIntegration:
     latest_version: str = ""
     instance_id: str = ""  # Instance ID if configured
     can_update: bool = False  # Show update button (always true if update available for custom integrations)
-    can_auto_update: bool = False  # Can do automated backup/restore (requires supports_backup and min version)
+    supports_automated_backup_restore: bool = False
     supports_backup: bool = False  # Uses ucapi-framework with backup support
     # Repository stats (from GitHub API)
     stars: int = 0
@@ -485,7 +484,11 @@ def _developer_api_model(developer: str) -> dict[str, Any] | None:
         return None
     try:
         registry_data = load_registry_data()
-        developers = registry_data.get("developers", []) if isinstance(registry_data, dict) else []
+        developers = (
+            registry_data.get("developers", [])
+            if isinstance(registry_data, dict)
+            else []
+        )
         for entry in developers:
             if isinstance(entry, dict) and entry.get("name") == developer:
                 templates = {
@@ -498,17 +501,27 @@ def _developer_api_model(developer: str) -> dict[str, Any] | None:
                     "cashapp": "https://cash.app/${}",
                 }
                 raw_links = entry.get("sponsorship_links", entry.get("links", {}))
-                links = {
-                    platform: value if value.startswith("http") else templates[platform].format(value)
-                    for platform, value in raw_links.items()
-                    if isinstance(value, str) and value and (value.startswith("http") or platform in templates)
-                } if isinstance(raw_links, dict) else {}
+                links = (
+                    {
+                        platform: value
+                        if value.startswith("http")
+                        else templates[platform].format(value)
+                        for platform, value in raw_links.items()
+                        if isinstance(value, str)
+                        and value
+                        and (value.startswith("http") or platform in templates)
+                    }
+                    if isinstance(raw_links, dict)
+                    else {}
+                )
                 return {
                     "homepage": entry.get("homepage") or None,
                     "supportLinks": [
                         {"platform": platform, "url": url}
                         for platform, url in links.items()
-                    ] if isinstance(links, dict) else [],
+                    ]
+                    if isinstance(links, dict)
+                    else [],
                 }
     except Exception as e:
         _LOG.debug("Unable to load developer links for %s: %s", developer, e)
@@ -576,7 +589,7 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
             "install": is_available and can_mutate and not driver_installed,
             "update": can_mutate and integration.can_update,
             "backup": can_mutate and integration.supports_backup,
-            "automatedBackupRestore": can_mutate and integration.can_auto_update,
+            "automatedBackupRestore": can_mutate and integration.supports_automated_backup_restore,
             "deleteConfiguration": can_mutate and installed,
             "deleteDriver": can_mutate and driver_installed,
             "selectVersion": can_mutate and bool(integration.home_page),
@@ -734,6 +747,177 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
         )
     except Exception as e:
         _LOG.error("Failed to refresh version cache: %s", e)
+
+
+async def _apply_automatic_inplace_update(
+    integration: IntegrationInfo, remote_id: str
+) -> None:
+    """Download and apply the current release through the firmware update API."""
+    client = _remote_clients.get(remote_id)
+    if not client or not _github_client:
+        raise RuntimeError("Remote or GitHub service is unavailable")
+
+    parsed = GitHubClient.parse_github_url(integration.home_page)
+    if not parsed:
+        raise ValueError("No GitHub repository found")
+    owner, repo = parsed
+
+    registry = load_registry()
+    asset_pattern = next(
+        (
+            item.get("asset_pattern")
+            for item in registry
+            if item.get("driver_id") == integration.driver_id
+            or item.get("id") == integration.driver_id
+        ),
+        None,
+    )
+    download_result = await _github_client.download_release_asset(
+        owner, repo, asset_pattern=asset_pattern
+    )
+    if not download_result:
+        raise RuntimeError(f"No release found for {owner}/{repo}")
+
+    archive_data, filename = download_result
+    _LOG.info(
+        "[%s] Automatically updating %s with %s",
+        remote_id,
+        integration.driver_id,
+        filename,
+    )
+    await client.install_integration_inplace(archive_data, filename)
+
+
+async def _automatic_update_is_safe(remote_id: str) -> bool:
+    """Require charging power and no running activities before an update."""
+    client = _remote_clients.get(remote_id)
+    if not client:
+        return False
+    if not await client.is_docked():
+        _LOG.info("[%s] Skipping automatic updates; Remote is not charging", remote_id)
+        return False
+    try:
+        activities = await client.get_activities()
+    except SyncAPIError as error:
+        _LOG.warning(
+            "[%s] Skipping automatic updates; activity state is unavailable: %s",
+            remote_id,
+            error,
+        )
+        return False
+
+    if not isinstance(activities, list):
+        _LOG.warning(
+            "[%s] Skipping automatic updates; activity response was not a list",
+            remote_id,
+        )
+        return False
+    running = []
+    for activity in activities:
+        if not isinstance(activity, dict):
+            continue
+        attributes = activity.get("attributes")
+        if isinstance(attributes, dict) and str(attributes.get("state", "")).upper() == "ON":
+            running.append(activity)
+    if running:
+        names = [
+            _get_localized_name(activity.get("name"), activity.get("entity_id", "activity"))
+            for activity in running
+        ]
+        _LOG.info(
+            "[%s] Skipping automatic updates; active activities: %s",
+            remote_id,
+            ", ".join(names),
+        )
+        return False
+    return True
+
+
+async def _run_automatic_updates(remote_id: str) -> None:
+    """Update eligible integrations sequentially after a version refresh.
+
+    Firmware in-place updates preserve configuration and entity registrations,
+    so backup capability is deliberately not part of eligibility.  The shared
+    operation lock protects the Remote from concurrent install/update requests;
+    this runner holds it for one batch and processes each integration in order.
+    A failure is logged and does not prevent the remaining integrations from
+    being attempted on the same scheduled pass.
+    """
+    global _operation_in_progress, _operation_lock_acquired_at
+
+    settings = Settings.load(remote_id=remote_id)
+    if not settings.auto_update or not is_remote_online(remote_id):
+        return
+
+    async with _operation_lock:
+        if _operation_in_progress:
+            elapsed = (
+                time.monotonic() - _operation_lock_acquired_at
+                if _operation_lock_acquired_at is not None
+                else 0
+            )
+            if elapsed <= _OPERATION_LOCK_TIMEOUT:
+                _LOG.info(
+                    "[%s] Skipping automatic updates; another operation is in progress",
+                    remote_id,
+                )
+                return
+            _LOG.warning(
+                "[%s] Releasing stale operation lock before automatic updates",
+                remote_id,
+            )
+        _operation_in_progress = True
+        _operation_lock_acquired_at = time.monotonic()
+
+    candidates: list[IntegrationInfo] = []
+    try:
+        integrations = await _get_installed_integrations(remote_id)
+        candidates = [
+            integration
+            for integration in integrations
+            if integration.update_available
+            and integration.can_update
+            and not integration.official
+            and not integration.external
+            and not integration.self_managed
+        ]
+        if not candidates:
+            _LOG.debug("[%s] No eligible automatic updates", remote_id)
+            return
+        if not await _automatic_update_is_safe(remote_id):
+            return
+
+        _LOG.info(
+            "[%s] Processing %d automatic integration update(s) sequentially",
+            remote_id,
+            len(candidates),
+        )
+        for integration in candidates:
+            # A queued update can take long enough for an activity to start or
+            # the Remote to be removed from its charger. Re-check each item.
+            if not await _automatic_update_is_safe(remote_id):
+                return
+            try:
+                await _apply_automatic_inplace_update(integration, remote_id)
+                _LOG.info(
+                    "[%s] Automatically updated %s",
+                    remote_id,
+                    integration.driver_id,
+                )
+            except Exception as error:
+                _LOG.error(
+                    "[%s] Automatic update failed for %s: %s",
+                    remote_id,
+                    integration.driver_id,
+                    error,
+                )
+    finally:
+        async with _operation_lock:
+            _operation_in_progress = False
+            _operation_lock_acquired_at = None
+        # Refresh once after the whole batch so the cache reflects every result.
+        if candidates:
+            await _refresh_version_cache(remote_id)
 
 
 async def _get_installed_integrations(
@@ -900,19 +1084,19 @@ async def _get_installed_integrations(
                 # Show update button for custom integrations (but not self_managed ones)
                 info.can_update = not self_managed
                 # _LOG.debug(
-                #     "Update button enabled for %s (can_update=True, can_auto_update will be determined)",
+                #     "Update button enabled for %s (can_update=True)",
                 #     driver_id,
                 # )
 
                 # Check if automated backup/restore is possible
                 # Requires: supports_backup AND version >= backup_min_version (if specified)
                 min_version = registry_item.get("backup_min_version")
-                info.can_auto_update = supports_backup
+                info.supports_automated_backup_restore = supports_backup
 
                 if min_version and supports_backup:
                     try:
                         if Version(info.version) < Version(min_version):
-                            info.can_auto_update = False
+                            info.supports_automated_backup_restore = False
                             # _LOG.debug(
                             #     "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
                             #     driver_id,
@@ -1034,12 +1218,12 @@ async def _get_installed_integrations(
                 # Check if automated backup/restore is possible
                 # Requires: supports_backup AND not self_managed AND version >= backup_min_version (if specified)
                 min_version = registry_item.get("backup_min_version")
-                info.can_auto_update = supports_backup and not self_managed
+                info.supports_automated_backup_restore = supports_backup and not self_managed
 
                 if min_version and supports_backup and not self_managed:
                     try:
                         if Version(info.version) < Version(min_version):
-                            info.can_auto_update = False
+                            info.supports_automated_backup_restore = False
                             # _LOG.debug(
                             #     "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
                             #     driver_id,
@@ -1168,7 +1352,7 @@ async def _get_available_integrations(
         update_available = False
         latest_version = ""
         can_update = False
-        can_auto_update = False
+        supports_automated_backup_restore = False
         supports_backup = item.get("supports_backup", False)
         self_managed = item.get("self_managed", False)
 
@@ -1187,12 +1371,12 @@ async def _get_available_integrations(
                     # Check if automated backup/restore is possible
                     # Requires: supports_backup AND version >= backup_min_version (if specified)
                     min_version = item.get("backup_min_version")
-                    can_auto_update = supports_backup
+                    supports_automated_backup_restore = supports_backup
 
                     if min_version and supports_backup and version:
                         try:
                             if Version(version) < Version(min_version):
-                                can_auto_update = False
+                                supports_automated_backup_restore = False
                                 # _LOG.debug(
                                 #     "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
                                 #     actual_driver_id,
@@ -1250,7 +1434,7 @@ async def _get_available_integrations(
             latest_version=latest_version,
             instance_id=instance_id,
             can_update=can_update,
-            can_auto_update=can_auto_update,
+            supports_automated_backup_restore=supports_automated_backup_restore,
             supports_backup=supports_backup,
             stars=stars,
             created_at=created_at,
@@ -1445,12 +1629,16 @@ async def api_v1_integrations():
     """Return installed integration card data for the SPA."""
     remote_id = get_active_remote_id()
     if not _get_active_remote_client():
-        return _api_error("service_unavailable", "Integration service is not initialized", 503)
+        return _api_error(
+            "service_unavailable", "Integration service is not initialized", 503
+        )
     if not is_remote_online(remote_id):
         return _api_error("remote_offline", "The active remote is offline", 503)
     try:
         integrations = await _get_installed_integrations(remote_id)
-        return jsonify({"data": [_integration_api_model(item) for item in integrations]})
+        return jsonify(
+            {"data": [_integration_api_model(item) for item in integrations]}
+        )
     except Exception as e:
         _LOG.exception("Failed to load installed integrations")
         return _api_error("integrations_unavailable", str(e), 502)
@@ -1464,7 +1652,9 @@ async def api_v1_catalog_integrations():
         return _api_error("remote_offline", "The active remote is offline", 503)
     try:
         integrations = await _get_available_integrations(remote_id)
-        return jsonify({"data": [_integration_api_model(item) for item in integrations]})
+        return jsonify(
+            {"data": [_integration_api_model(item) for item in integrations]}
+        )
     except Exception as e:
         _LOG.exception("Failed to load available integrations")
         return _api_error("catalog_unavailable", str(e), 502)
@@ -1474,7 +1664,9 @@ async def api_v1_catalog_integrations():
 async def api_v1_refresh_integrations():
     """Refresh the version cache used by installed and catalog lists."""
     if not _get_active_remote_client() or not _github_client:
-        return _api_error("service_unavailable", "Integration service is not initialized", 503)
+        return _api_error(
+            "service_unavailable", "Integration service is not initialized", 503
+        )
     try:
         await _refresh_version_cache(get_active_remote_id())
         return jsonify({"data": {"refreshed": True}})
@@ -1558,7 +1750,9 @@ async def get_updates_count():
 async def get_integration_detail(instance_id: str):
     """Get one installed integration by instance ID as JSON."""
     if not _get_active_remote_client():
-        return _api_error("service_unavailable", "Integration service is not initialized", 503)
+        return _api_error(
+            "service_unavailable", "Integration service is not initialized", 503
+        )
 
     try:
         # Find the integration in the list
@@ -1577,41 +1771,25 @@ async def get_integration_detail(instance_id: str):
 @app.route("/api/integration/<instance_id>/update", methods=["POST"])
 async def update_integration(instance_id: str):
     """
-    Update an existing integration to the latest or specified version using default settings.
+    Compatibility route for an integration update.
 
-    Accepts optional 'version' query parameter to update to a specific version.
-
-    The register_entities behavior is determined by the user's auto_register_entities setting.
+    The in-place firmware update path always preserves configured entities.
     """
-    settings = Settings.load(remote_id=get_active_remote_id())
-    form = await request.form
-    version = request.args.get("version") or form.get("version")
-    return await _perform_update_integration(
-        instance_id, settings.auto_register_entities, version
-    )
+    return await update_integration_inplace(instance_id)
 
 
 @app.route("/api/integration/<instance_id>/update-alt", methods=["POST"])
 async def update_integration_alt(instance_id: str):
     """
-    Update an existing integration with the opposite entity registration behavior.
+    Retained compatibility route for clients using the former alternate update.
 
-    Accepts optional 'version' query parameter to update to a specific version.
-
-    If auto_register_entities is enabled, this will NOT register entities.
-    If auto_register_entities is disabled, this WILL register entities.
+    Entity registrations are preserved for every update; there is no alternate
+    registration behavior.
     """
-    settings = Settings.load(remote_id=get_active_remote_id())
-    form = await request.form
-    version = request.args.get("version") or form.get("version")
-    return await _perform_update_integration(
-        instance_id, not settings.auto_register_entities, version
-    )
+    return await update_integration_inplace(instance_id)
 
 
-async def _perform_update_integration(
-    instance_id: str, register_entities: bool, version: str | None = None
-):
+async def _perform_update_integration(instance_id: str, version: str | None = None):
     """
     Update an existing integration to the latest or specified version.
 
@@ -1626,10 +1804,9 @@ async def _perform_update_integration(
     8. Check if migration is required
     9. Restore configuration (with updated entity IDs if migration needed)
     10. Execute migration if required
-    11. Optionally register entities if register_entities=True
+    11. Restore configured entity registrations
 
     :param instance_id: The integration instance ID to update
-    :param register_entities: Whether to register entities after update
     :param version: Optional specific version to update to (e.g., 'v1.2.3')
     """
     global _operation_in_progress, _operation_lock_acquired_at
@@ -1754,9 +1931,9 @@ async def _perform_update_integration(
                 "Current version of %s: %s", integration.driver_id, previous_version
             )
 
-        # Capture list of configured entities before update (if user wants to re-register)
+        # Capture configured entities before update so registration is preserved.
         configured_entity_ids = []
-        if register_entities and is_configured:
+        if is_configured:
             try:
                 _LOG.info(
                     "Capturing configured entities before update: %s", instance_id
@@ -2543,7 +2720,7 @@ async def _perform_update_integration(
                         )
 
                 # Step 6: Register configured entities
-                if restored_instance_id and register_entities and configured_entity_ids:
+                if restored_instance_id and configured_entity_ids:
                     # Wait for instance to be CONNECTED before registering
                     device_state_step6 = "UNKNOWN"
                     for attempt in range(12):  # up to ~18 seconds
@@ -2749,7 +2926,12 @@ async def _perform_update_integration(
         )
 
         if updated_integration:
-            return jsonify({"data": _integration_api_model(updated_integration), "meta": {"updated": True}})
+            return jsonify(
+                {
+                    "data": _integration_api_model(updated_integration),
+                    "meta": {"updated": True},
+                }
+            )
         else:
             # Fallback: use original integration data with updated flag
             # This shouldn't normally happen, but ensures we return a card
@@ -2757,7 +2939,12 @@ async def _perform_update_integration(
                 "Could not find updated integration %s, using original data",
                 integration.driver_id,
             )
-            return jsonify({"data": _integration_api_model(integration), "meta": {"updated": True, "stale": True}})
+            return jsonify(
+                {
+                    "data": _integration_api_model(integration),
+                    "meta": {"updated": True, "stale": True},
+                }
+            )
 
     except SyncAPIError as e:
         _LOG.error("Update failed: %s", e)
@@ -3036,7 +3223,12 @@ async def update_driver(driver_id: str):
         )
 
         if updated_integration:
-            return jsonify({"data": _integration_api_model(updated_integration), "meta": {"updated": True}})
+            return jsonify(
+                {
+                    "data": _integration_api_model(updated_integration),
+                    "meta": {"updated": True},
+                }
+            )
         else:
             # Fallback: Try to find it in installed integrations list
             # This shouldn't normally happen, but ensures we return a card
@@ -3050,7 +3242,12 @@ async def update_driver(driver_id: str):
             )
 
             if integration:
-                return jsonify({"data": _integration_api_model(integration), "meta": {"updated": True}})
+                return jsonify(
+                    {
+                        "data": _integration_api_model(integration),
+                        "meta": {"updated": True},
+                    }
+                )
             else:
                 # Last resort: Create a minimal AvailableIntegration from registry
                 _LOG.error("Could not find driver %s anywhere after update", driver_id)
@@ -3082,7 +3279,12 @@ async def update_driver(driver_id: str):
                     instance_id="",
                     can_update=False,
                 )
-                return jsonify({"data": _integration_api_model(fallback_integration), "meta": {"updated": True, "stale": True}})
+                return jsonify(
+                    {
+                        "data": _integration_api_model(fallback_integration),
+                        "meta": {"updated": True, "stale": True},
+                    }
+                )
 
     except SyncAPIError as e:
         _LOG.error("Update failed: %s", e)
@@ -3262,7 +3464,14 @@ async def update_integration_inplace(driver_id: str):
             lambda: asyncio.ensure_future(_refresh_version_cache(remote_id))
         )
 
-        return jsonify({"data": {"integration": _integration_api_model(integration), "reconnecting": True}})
+        return jsonify(
+            {
+                "data": {
+                    "integration": _integration_api_model(integration),
+                    "reconnecting": True,
+                }
+            }
+        )
 
     except SyncAPIError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
@@ -3357,7 +3566,14 @@ async def delete_integration(driver_id: str):
             )
 
             if integration:
-                return jsonify({"data": {"integration": _integration_api_model(integration), "removed": False}})
+                return jsonify(
+                    {
+                        "data": {
+                            "integration": _integration_api_model(integration),
+                            "removed": False,
+                        }
+                    }
+                )
             else:
                 # Driver might have been removed, return empty
                 return jsonify({"data": {"driverId": driver_id, "removed": True}})
@@ -3545,7 +3761,14 @@ async def install_integration(driver_id: str):
             can_update=False,
         )
 
-        return jsonify({"data": {"integration": _integration_api_model(integration_obj), "message": f"Installed {integration_obj.name}"}})
+        return jsonify(
+            {
+                "data": {
+                    "integration": _integration_api_model(integration_obj),
+                    "message": f"Installed {integration_obj.name}",
+                }
+            }
+        )
 
     except SyncAPIError as e:
         _LOG.error("Install failed: %s", e)
@@ -3584,7 +3807,9 @@ async def get_operation_lock_status():
     elapsed: float | None = None
     if _operation_in_progress and _operation_lock_acquired_at is not None:
         elapsed = round(time.monotonic() - _operation_lock_acquired_at)
-    return jsonify({"data": {"locked": _operation_in_progress, "elapsedSeconds": elapsed}})
+    return jsonify(
+        {"data": {"locked": _operation_in_progress, "elapsedSeconds": elapsed}}
+    )
 
 
 @app.route("/api/v1/operations/lock/release", methods=["POST"])
@@ -3628,7 +3853,15 @@ async def backup_all():
         failed = sum(1 for v in results.values() if not v)
 
         if request.path.startswith("/api/v1/"):
-            return jsonify({"data": {"successful": successful, "failed": failed, "results": results}})
+            return jsonify(
+                {
+                    "data": {
+                        "successful": successful,
+                        "failed": failed,
+                        "results": results,
+                    }
+                }
+            )
         return jsonify(
             {
                 "status": "ok",
@@ -3728,7 +3961,11 @@ async def get_release_notes_unavailable(version: str):
 
     Used when GitHub URL cannot be parsed or release info is unavailable.
     """
-    return _api_error("release_notes_unavailable", f"Release notes are not available for {version}", 404)
+    return _api_error(
+        "release_notes_unavailable",
+        f"Release notes are not available for {version}",
+        404,
+    )
 
 
 @app.route("/api/v1/release-notes/<owner>/<repo>/<version>")
@@ -3744,7 +3981,9 @@ async def get_release_notes(owner: str, repo: str, version: str):
         release = await _github_client.get_release_by_tag(owner, repo, version)
 
         if not release:
-            return _api_error("release_notes_not_found", f"Release notes not found for {version}", 404)
+            return _api_error(
+                "release_notes_not_found", f"Release notes not found for {version}", 404
+            )
 
         # Get release body (markdown)
         release_body = release.get("body", "")
@@ -3763,7 +4002,19 @@ async def get_release_notes(owner: str, repo: str, version: str):
         # Check if this is a pre-release (beta)
         is_beta = release.get("prerelease", False)
 
-        return jsonify({"data": {"version": version, "publishedAt": release_date, "notes": release_body, "name": release.get("name", ""), "url": f"https://github.com/{owner}/{repo}/releases/tag/{version}", "author": release.get("author", {}).get("login", ""), "isPrerelease": is_beta}})
+        return jsonify(
+            {
+                "data": {
+                    "version": version,
+                    "publishedAt": release_date,
+                    "notes": release_body,
+                    "name": release.get("name", ""),
+                    "url": f"https://github.com/{owner}/{repo}/releases/tag/{version}",
+                    "author": release.get("author", {}).get("login", ""),
+                    "isPrerelease": is_beta,
+                }
+            }
+        )
     except Exception as e:
         _LOG.error(
             "Error loading release notes for %s/%s %s: %s", owner, repo, version, e
@@ -3797,7 +4048,7 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
         # Load registry to get version floor values:
         #   migration_required_at   – normal updates: versions <= this are excluded
         #   min_compatible_version  – self-update picker: versions < this are excluded
-        #                             (separate from backup_min_version which gates can_auto_update)
+        #                             (separate from backup_min_version which gates backup/restore support)
         migration_required_at = None
         min_compatible_version = None
         is_update = False
@@ -3830,10 +4081,14 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
         # The compact card picker needs a few releases; the full selector can
         # explicitly request the complete compatible list.
         show_all = request.args.get("all", "").lower() in ("true", "1", "yes")
-        releases_data = await _github_client.get_releases(owner, repo, limit=100 if show_all else 20)
+        releases_data = await _github_client.get_releases(
+            owner, repo, limit=100 if show_all else 20
+        )
 
         if not releases_data:
-            return _api_error("versions_not_found", "No releases found for this integration", 404)
+            return _api_error(
+                "versions_not_found", "No releases found for this integration", 404
+            )
 
         # Filter and organize releases
         beta_releases = []
@@ -3915,7 +4170,17 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
         if not show_all:
             filtered_releases = filtered_releases[:4]
 
-        return jsonify({"data": {"driverId": driver_id, "releases": filtered_releases, "versionFloor": version_floor, "isUpdate": is_update, "isSelfUpdate": is_self_update}})
+        return jsonify(
+            {
+                "data": {
+                    "driverId": driver_id,
+                    "releases": filtered_releases,
+                    "versionFloor": version_floor,
+                    "isUpdate": is_update,
+                    "isSelfUpdate": is_self_update,
+                }
+            }
+        )
 
     except Exception as e:
         _LOG.error("Error loading version selector for %s/%s: %s", owner, repo, e)
@@ -4672,7 +4937,16 @@ async def check_versions():
         else:
             ts = datetime.now().isoformat()
 
-        return jsonify({"data": {"checked": checked, "updatesAvailable": updates_available, "timestamp": ts, "versions": version_updates}})
+        return jsonify(
+            {
+                "data": {
+                    "checked": checked,
+                    "updatesAvailable": updates_available,
+                    "timestamp": ts,
+                    "versions": version_updates,
+                }
+            }
+        )
 
     except Exception as e:
         _LOG.error("Version check failed: %s", e)
@@ -4683,7 +4957,16 @@ async def check_versions():
 async def get_versions():
     """Get cached version data for all integrations on the active remote."""
     remote_id = get_active_remote_id()
-    return jsonify({"data": {"timestamp": _version_check_timestamp.get(remote_id) if remote_id else None, "versions": _get_version_cache(remote_id)}})
+    return jsonify(
+        {
+            "data": {
+                "timestamp": _version_check_timestamp.get(remote_id)
+                if remote_id
+                else None,
+                "versions": _get_version_cache(remote_id),
+            }
+        }
+    )
 
 
 @app.route("/api/status")
@@ -4736,7 +5019,9 @@ async def api_v1_get_settings():
                 "settings": Settings.load(remote_id=get_active_remote_id()).to_dict(),
                 "preferences": UIPreferences.load().to_dict(),
                 "runtime": {
-                    "remoteAddress": getattr(_get_active_remote_client(), "_address", None),
+                    "remoteAddress": getattr(
+                        _get_active_remote_client(), "_address", None
+                    ),
                     "webServerPort": WEB_SERVER_PORT,
                     "external": _is_external_runtime(),
                 },
@@ -4752,14 +5037,15 @@ async def api_v1_save_settings():
     values = payload.get("settings", {})
     preferences = payload.get("preferences", {})
     if not isinstance(values, dict) or not isinstance(preferences, dict):
-        return _api_error("invalid_settings", "settings and preferences must be objects")
+        return _api_error(
+            "invalid_settings", "settings and preferences must be objects"
+        )
 
     settings = Settings.load(remote_id=get_active_remote_id())
     for field in (
         "shutdown_on_battery",
         "auto_update",
         "backup_configs",
-        "auto_register_entities",
         "show_beta_releases",
         "backup_time",
     ):
@@ -4775,7 +5061,21 @@ async def api_v1_save_settings():
     if "sort_reverse" in preferences:
         ui_prefs.sort_reverse = bool(preferences["sort_reverse"])
     ui_prefs.save()
-    return jsonify({"data": {"settings": settings.to_dict(), "preferences": ui_prefs.to_dict(), "runtime": {"remoteAddress": getattr(_get_active_remote_client(), "_address", None), "webServerPort": WEB_SERVER_PORT, "external": _is_external_runtime()}}})
+    return jsonify(
+        {
+            "data": {
+                "settings": settings.to_dict(),
+                "preferences": ui_prefs.to_dict(),
+                "runtime": {
+                    "remoteAddress": getattr(
+                        _get_active_remote_client(), "_address", None
+                    ),
+                    "webServerPort": WEB_SERVER_PORT,
+                    "external": _is_external_runtime(),
+                },
+            }
+        }
+    )
 
 
 # ============================================================================
@@ -4849,7 +5149,9 @@ async def notifications_page():
 @app.route("/api/v1/notifications", methods=["GET"])
 async def api_v1_get_notifications():
     """Expose all notification configuration through one JSON resource."""
-    return jsonify({"data": NotificationSettings.load(remote_id=get_active_remote_id()).to_dict()})
+    return jsonify(
+        {"data": NotificationSettings.load(remote_id=get_active_remote_id()).to_dict()}
+    )
 
 
 @app.route("/api/v1/notifications", methods=["PUT"])
@@ -4857,7 +5159,9 @@ async def api_v1_save_notifications():
     """Save notification providers and triggers from the SPA."""
     payload = await request.get_json(silent=True)
     if not isinstance(payload, dict):
-        return _api_error("invalid_notifications", "Notification settings must be an object")
+        return _api_error(
+            "invalid_notifications", "Notification settings must be an object"
+        )
     try:
         settings = NotificationSettings._parse_settings_data(payload)
         settings.save(remote_id=get_active_remote_id())
@@ -5276,6 +5580,48 @@ async def api_v1_clear_logs():
 # ============================================================================
 
 
+_REMOTE_LOG_LINE = re.compile(
+    r"^\[(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s+(?P<level>[A-Z]+)\s+(?P<message>.*)$"
+)
+
+
+def _normalize_integration_log_entry(entry: Any) -> dict[str, Any]:
+    """Give Remote log lines a stable JSON shape for the SPA.
+
+    Some Remote services return structured log records while others return the
+    timestamp and severity as a prefix inside ``message``.  Preserve both forms
+    but promote those prefix values so the client can consistently render and
+    sort the timestamp column.
+    """
+    normalized = dict(entry) if isinstance(entry, dict) else {"message": str(entry)}
+    message = str(
+        normalized.get("message")
+        or normalized.get("msg")
+        or normalized.get("m")
+        or normalized.get("text")
+        or ""
+    )
+    match = _REMOTE_LOG_LINE.match(message)
+    if match:
+        if not normalized.get("timestamp"):
+            normalized["timestamp"] = match.group("timestamp")
+        normalized.setdefault("level", match.group("level").lower())
+        normalized["message"] = match.group("message")
+    else:
+        if not normalized.get("timestamp"):
+            normalized["timestamp"] = (
+                normalized.get("ts")
+                or normalized.get("time")
+                or normalized.get("datetime")
+                or ""
+            )
+        if not normalized.get("message"):
+            normalized["message"] = message
+    if not normalized.get("priority") and normalized.get("prio") is not None:
+        normalized["priority"] = normalized["prio"]
+    return normalized
+
+
 @app.route("/api/v1/integration-logs/services")
 async def api_v1_integration_log_services():
     """List active Remote log services as JSON."""
@@ -5284,7 +5630,18 @@ async def api_v1_integration_log_services():
         return jsonify({"data": []})
     try:
         services = await client.get_log_services()
-        return jsonify({"data": [{"id": item.get("service"), "name": item.get("name") or item.get("service")} for item in services if item.get("service") and item.get("active")]})
+        return jsonify(
+            {
+                "data": [
+                    {
+                        "id": item.get("service"),
+                        "name": item.get("name") or item.get("service"),
+                    }
+                    for item in services
+                    if item.get("service") and item.get("active")
+                ]
+            }
+        )
     except SyncAPIError as e:
         return _api_error("log_services_unavailable", str(e), 502)
 
@@ -5305,8 +5662,16 @@ async def api_v1_integration_logs():
     try:
         entries = []
         for service in services:
-            logs = await client.get_logs(priority=priority, service=service, limit=max(200, 1000 // len(services)), as_text=False)
-            if isinstance(logs, list): entries.extend(logs)
+            logs = await client.get_logs(
+                priority=priority,
+                service=service,
+                limit=max(200, 1000 // len(services)),
+                as_text=False,
+            )
+            if isinstance(logs, list):
+                entries.extend(
+                    _normalize_integration_log_entry(entry) for entry in logs
+                )
         entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         return jsonify({"data": entries[:1000]})
     except SyncAPIError as e:
@@ -5418,9 +5783,24 @@ async def api_v1_system_messages():
         read = service.get_read_messages()
         if unread:
             service.mark_messages_as_read([message.id for message in unread])
+
         def serialize(message):
-            return {"id": message.id, "date": message.date, "title": message.title, "content": _plain_text(message.content), "priority": message.priority}
-        return jsonify({"data": {"unread": [serialize(item) for item in unread], "read": [serialize(item) for item in read]}})
+            return {
+                "id": message.id,
+                "date": message.date,
+                "title": message.title,
+                "content": _plain_text(message.content),
+                "priority": message.priority,
+            }
+
+        return jsonify(
+            {
+                "data": {
+                    "unread": [serialize(item) for item in unread],
+                    "read": [serialize(item) for item in read],
+                }
+            }
+        )
     except Exception as e:
         _LOG.error("Failed to load system messages: %s", e)
         return _api_error("messages_unavailable", str(e), 500)
@@ -5431,7 +5811,9 @@ async def api_v1_refresh_system_messages():
     """Refresh message data without instructing the browser to reload."""
     try:
         if not get_system_messages_service().fetch_from_github():
-            return _api_error("message_refresh_failed", "Failed to fetch system messages", 502)
+            return _api_error(
+                "message_refresh_failed", "Failed to fetch system messages", 502
+            )
         return jsonify({"data": {"refreshed": True}})
     except Exception as e:
         return _api_error("message_refresh_failed", str(e), 500)
@@ -5489,7 +5871,17 @@ async def api_v1_system_update_check():
         update_info = await client.check_system_update()
         available = update_info.get("available", [])
         latest = available[0] if available else {}
-        return jsonify({"data": {"installedVersion": update_info.get("installed_version", "Unknown"), "updateAvailable": bool(available), "availableVersion": latest.get("version"), "title": latest.get("title"), "releaseNotesUrl": latest.get("release_notes_url")}})
+        return jsonify(
+            {
+                "data": {
+                    "installedVersion": update_info.get("installed_version", "Unknown"),
+                    "updateAvailable": bool(available),
+                    "availableVersion": latest.get("version"),
+                    "title": latest.get("title"),
+                    "releaseNotesUrl": latest.get("release_notes_url"),
+                }
+            }
+        )
     except SyncAPIError as e:
         return _api_error("firmware_check_failed", str(e), 502)
 
@@ -5633,13 +6025,23 @@ async def reassociate_ir_codeset():
         remote_name = data.get("remote_name")
 
         if not device_id or not remote_name:
-            return _api_error("invalid_request", "Missing device_id or remote_name", 400)
+            return _api_error(
+                "invalid_request", "Missing device_id or remote_name", 400
+            )
 
         # Create remote with custom codeset ID
         await _get_active_remote_client().create_remote(remote_name, device_id)  # ty:ignore[unresolved-attribute]
 
         _LOG.info("Created remote '%s' for codeset %s", remote_name, device_id)
-        return jsonify({"data": {"created": True, "deviceId": device_id, "remoteName": remote_name}})
+        return jsonify(
+            {
+                "data": {
+                    "created": True,
+                    "deviceId": device_id,
+                    "remoteName": remote_name,
+                }
+            }
+        )
     except SyncAPIError as e:
         _LOG.error("Failed to reassociate IR codeset: %s", e)
         return _api_error("codeset_reassociation_failed", str(e), 502)
@@ -5732,7 +6134,9 @@ async def create_backup_now():
             else:
                 failed.append(name)
 
-        return jsonify({"data": {"backedUp": backed_up, "skipped": skipped, "failed": failed}})
+        return jsonify(
+            {"data": {"backedUp": backed_up, "skipped": skipped, "failed": failed}}
+        )
 
     except Exception as e:
         _LOG.error("Failed to create backup: %s", e)
@@ -5743,8 +6147,21 @@ async def create_backup_now():
 async def api_v1_backups():
     """List active-remote backups as data rather than a rendered list."""
     remote_id = get_active_remote_id()
-    backups = get_all_backups().get("remotes", {}).get(remote_id, {}).get("integrations", {})
-    return jsonify({"data": [{"driverId": driver_id, "timestamp": info.get("timestamp"), "hasData": bool(info.get("data"))} for driver_id, info in backups.items()]})
+    backups = (
+        get_all_backups().get("remotes", {}).get(remote_id, {}).get("integrations", {})
+    )
+    return jsonify(
+        {
+            "data": [
+                {
+                    "driverId": driver_id,
+                    "timestamp": info.get("timestamp"),
+                    "hasData": bool(info.get("data")),
+                }
+                for driver_id, info in backups.items()
+            ]
+        }
+    )
 
 
 @app.route("/api/v1/backups/<driver_id>")
@@ -6165,6 +6582,7 @@ class WebServer:
         :param remote_id: Remote identifier to refresh versions for
         """
         await _refresh_version_cache(remote_id)
+        await _run_automatic_updates(remote_id)
 
     async def check_connectivity(self, remote_id: str) -> None:
         """

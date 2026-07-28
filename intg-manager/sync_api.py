@@ -137,6 +137,10 @@ class RemoteClient:
         """Get list of installed integration instances."""
         return await self._request("GET", "/intg/instances?limit=100") or []
 
+    async def get_activities(self) -> list[dict[str, Any]]:
+        """Get Remote activities and their current ON/OFF state."""
+        return await self._request("GET", "/activities?limit=100") or []
+
     async def get_driver(self, driver_id: str) -> dict[str, Any] | None:
         """Get driver metadata by ID."""
         try:
