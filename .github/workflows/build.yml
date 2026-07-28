@@ -20,7 +20,7 @@ env:
 jobs:
   build:
     name: Build Release
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     #Save version to env output variable to be able to use it in the following release job as a tag
     outputs:
       version: ${{ steps.get-version-and-id.outputs.VERSION }}
@@ -50,8 +50,6 @@ jobs:
 
       - name: Build
         run: |
-          sudo apt-get update && sudo apt-get install -y qemu-system-arm binfmt-support qemu-user-static
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
           echo "Starting pyinstaller build"
           docker run --rm --name builder \
             --platform=aarch64 \
