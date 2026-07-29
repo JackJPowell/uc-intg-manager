@@ -51,15 +51,57 @@ def test_automatic_updates_are_scheduled_and_do_not_require_backup_support():
 def test_automatic_updates_require_charging_and_no_running_activities():
     source = SERVER.read_text(encoding="utf-8")
     client_source = (ROOT / "intg-manager" / "sync_api.py").read_text(encoding="utf-8")
-    assert '"GET", "/activities?limit=100"' in client_source
+    assert "from unfurled import Remote" in source
+    assert "class RemoteClient" not in client_source
+    assert "SyncRemoteClient" not in client_source
     safety_check = source[
         source.index("async def _automatic_update_is_safe") : source.index(
             "async def _run_automatic_updates"
         )
     ]
-    assert "await client.is_docked()" in safety_check
-    assert "await client.get_activities()" in safety_check
+    assert "await client.api.get_charger()" in safety_check
+    assert "await client.api.get_activities()" in safety_check
     assert 'attributes.get("state", "")).upper() == "ON"' in safety_check
+
+
+def test_integration_lifecycle_uses_coreapi_operations():
+    """Installation and configuration routes must not rely on legacy HTTP helpers."""
+    source = SERVER.read_text(encoding="utf-8")
+    lifecycle = source[source.index("async def update_integration_inplace") : source.index("async def check_versions")]
+    for operation in (
+        "post_integration_install",
+        "delete_integration",
+        "delete_driver",
+    ):
+        assert operation in lifecycle
+
+
+def test_bootstrapper_and_legacy_reinstall_paths_are_removed():
+    source = SERVER.read_text(encoding="utf-8")
+    assert "async def _perform_update_integration" not in source
+    assert '"/api/driver/<driver_id>/update"' not in source
+    assert '"/api/v1/self-update/restore"' not in source
+    assert '"/api/dev/test-bootstrapper-setup"' not in source
+    assert not (ROOT / "intg-bootstrapper").exists()
+    assert not (ROOT / "dev" / "build-install-bootstrapper.sh").exists()
+
+
+def test_release_workflow_builds_only_the_manager_and_packages_its_icon():
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "intg-bootstrapper" not in workflow
+    assert "intg-manager/static/img/intg-manager.png artifacts/" in workflow
+    assert "intg-${INTG_NAME}/templates:templates" not in workflow
+
+
+def test_diagnostics_uses_unfurled_helpers():
+    source = SERVER.read_text(encoding="utf-8")
+    assert "from unfurled import Remote" in source
+    assert "helpers.find_orphaned_entities()" in source
+    assert "helpers.find_unused_activity_entities()" in source
+    assert "helpers.find_orphaned_ir_codesets()" in source
+    assert "diagnostics_service" not in source
 
 
 def test_remote_log_regex_compiles():

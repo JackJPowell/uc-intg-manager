@@ -817,7 +817,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.5" },
     { name = "ucapi", specifier = "==0.7.0" },
     { name = "ucapi-framework", specifier = "==1.9.5" },
-    { name = "unfurled", specifier = ">=0.2.1" },
+    { name = "unfurled", specifier = ">=0.2.2" },
     { name = "werkzeug", specifier = ">=3.0.0" },
 ]
 
@@ -852,7 +852,7 @@ wheels = [
 
 [[package]]
 name = "unfurled"
-version = "0.2.1"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -861,9 +861,9 @@ dependencies = [
     { name = "websockets" },
     { name = "zeroconf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8a/94/3943cf003a3a5549a51158f81f28597b72b5ecfd58edefe5e54607487149/unfurled-0.2.1.tar.gz", hash = "sha256:12a0db8c6e311fc150291e6ec10156836fc33e40b47e8ac0eb39cac393111fec", size = 157379, upload-time = "2026-07-28T22:03:53.512Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/70/8a876a01a7818c11487cdf88786aae0d0de0eb17420d111a9080d641ad9f/unfurled-0.2.2.tar.gz", hash = "sha256:47ec6299711126adbd17ee538236fa48554bb5228525b989da070da5ef78f57e", size = 158226, upload-time = "2026-07-29T15:38:52.892Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/29/e483d8e53497682a397608927a7aa64fc0049a96adf37837555cf9231e22/unfurled-0.2.1-py3-none-any.whl", hash = "sha256:c2a4aa4ff98d55cc8cde096f9e4457f57ab806cbe7e3c001b3568357b2960dc8", size = 52338, upload-time = "2026-07-28T22:03:52.101Z" },
+    { url = "https://files.pythonhosted.org/packages/62/16/4e50676d0a9ec77f822153c2daa650c8aa1bcae78bb64d67e9a343609c06/unfurled-0.2.2-py3-none-any.whl", hash = "sha256:d181cfb8e3ecfded223695a73fa12d4cc48fec04644d501adb0d0bb71f86c450", size = 52841, upload-time = "2026-07-29T15:38:51.674Z" },
 ]
 
 [[package]]

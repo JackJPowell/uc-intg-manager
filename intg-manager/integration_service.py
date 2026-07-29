@@ -20,7 +20,8 @@ import certifi
 
 from const import KNOWN_INTEGRATIONS_URL
 from github_api import GitHubClient
-from remote_api import RemoteAPIClient, RemoteAPIError
+from unfurled.api import CoreAPI
+from unfurled.helpers.exceptions import UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class IntegrationService:
     comprehensive integration information with update status.
     """
 
-    def __init__(self, remote_client: RemoteAPIClient) -> None:
+    def __init__(self, remote_client: CoreAPI) -> None:
         """
         Initialize the integration service.
 
@@ -157,8 +158,8 @@ class IntegrationService:
         integrations: list[IntegrationInfo] = []
 
         try:
-            instances = await self._remote.get_integration_instances()
-        except RemoteAPIError as e:
+            instances = await self._remote.get_integrations()
+        except UnfurledError as e:
             _LOG.error("Failed to fetch integration instances: %s", e)
             return integrations
 
@@ -194,7 +195,7 @@ class IntegrationService:
         # Get driver metadata
         try:
             driver = await self._remote.get_driver(driver_id)
-        except RemoteAPIError:
+        except UnfurledError:
             driver = {}
 
         # Extract name (handle multi-language)
@@ -252,9 +253,9 @@ class IntegrationService:
         # Get currently installed driver IDs
         installed_ids: set[str] = set()
         try:
-            drivers = await self._remote.get_all_drivers()
+            drivers = await self._remote.get_drivers()
             installed_ids = {d.get("driver_id", "") for d in drivers}
-        except RemoteAPIError as e:
+        except UnfurledError as e:
             _LOG.warning("Failed to fetch installed drivers: %s", e)
 
         available: list[AvailableIntegration] = []
@@ -312,6 +313,6 @@ class IntegrationService:
                     return await self._get_integration_info(
                         instance, check_updates=True
                     )
-        except RemoteAPIError as e:
+        except UnfurledError as e:
             _LOG.error("Failed to refresh integration: %s", e)
         return None

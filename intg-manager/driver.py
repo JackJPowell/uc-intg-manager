@@ -85,7 +85,7 @@ async def main():
     logging.getLogger("device").setLevel(level)
     logging.getLogger("setup").setLevel(level)
     logging.getLogger("web_server").setLevel(level)
-    logging.getLogger("remote_api").setLevel(level)
+    logging.getLogger("unfurled").setLevel(level)
     logging.getLogger("github_api").setLevel(level)
     logging.getLogger("integration_service").setLevel(level)
     logging.getLogger("data_migration").setLevel(level)

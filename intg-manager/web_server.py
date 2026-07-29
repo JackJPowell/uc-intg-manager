@@ -74,10 +74,7 @@ from quart import (
 )
 from sync_api import (
     GitHubClient,
-    RemoteClient,
-    SyncAPIError,
     _SyncGitHubClient,
-    find_orphaned_ir_codesets,
     get_cached_repo_info,
     load_registry,
     load_registry_data,
@@ -85,6 +82,8 @@ from sync_api import (
     save_repo_cache,
 )
 from system_messages import get_system_messages_service
+from unfurled import Remote
+from unfurled.helpers.exceptions import UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -116,8 +115,8 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["PERMANENT_SESSION_LIFETIME"] = 7776000  # 90 days
 
-# Multi-remote support: dict of remote_id -> RemoteClient
-_remote_clients: dict[str, RemoteClient] = {}
+# Multi-remote support: unfurled owns each Remote and its CoreAPI session.
+_remote_clients: dict[str, Remote] = {}
 _remote_configs: dict[str, RemoteConfig] = {}
 
 # GitHub client (shared across all remotes)
@@ -136,7 +135,7 @@ async def _startup_fetch_localization() -> None:
     if _remote_clients:
         first_client = next(iter(_remote_clients.values()))
         try:
-            localization = await first_client.get_localization()
+            localization = await first_client.api.get_localization_settings()
             if localization and localization.get("language_code"):
                 _user_language_code = localization["language_code"]
                 _LOG.info("User language set to: %s", _user_language_code)
@@ -173,8 +172,8 @@ def get_active_remote_id() -> str | None:
     return None
 
 
-def _get_active_remote_client() -> RemoteClient | None:
-    """Get the RemoteClient for the currently active remote."""
+def _get_active_remote_client() -> Remote | None:
+    """Get the unfurled Remote for the currently active remote."""
     remote_id = get_active_remote_id()
     if remote_id:
         return _remote_clients.get(remote_id)
@@ -785,7 +784,7 @@ async def _apply_automatic_inplace_update(
         integration.driver_id,
         filename,
     )
-    await client.install_integration_inplace(archive_data, filename)
+    await client.api.post_integration_install(archive_data, filename, update=True)
 
 
 async def _automatic_update_is_safe(remote_id: str) -> bool:
@@ -793,12 +792,23 @@ async def _automatic_update_is_safe(remote_id: str) -> bool:
     client = _remote_clients.get(remote_id)
     if not client:
         return False
-    if not await client.is_docked():
+    try:
+        charger = await client.api.get_charger()
+    except UnfurledError as error:
+        _LOG.warning(
+            "[%s] Skipping automatic updates; charger state is unavailable: %s",
+            remote_id,
+            error,
+        )
+        return False
+    if not charger.get("power_supply", False) and not charger.get(
+        "wireless_charging", False
+    ):
         _LOG.info("[%s] Skipping automatic updates; Remote is not charging", remote_id)
         return False
     try:
-        activities = await client.get_activities()
-    except SyncAPIError as error:
+        activities = await client.api.get_activities()
+    except UnfurledError as error:
         _LOG.warning(
             "[%s] Skipping automatic updates; activity state is unavailable: %s",
             remote_id,
@@ -982,8 +992,8 @@ async def _get_installed_integrations(
 
     # First, get all configured instances
     try:
-        instances = await client.get_integrations()
-    except SyncAPIError as e:
+        instances = await client.api.get_integrations()
+    except UnfurledError as e:
         _LOG.error("Failed to get integrations: %s", e)
         instances = []
 
@@ -993,8 +1003,8 @@ async def _get_installed_integrations(
 
     # Get all drivers
     try:
-        drivers = await client.get_drivers()
-    except SyncAPIError as e:
+        drivers = await client.api.get_drivers()
+    except UnfurledError as e:
         _LOG.error("Failed to get drivers: %s", e)
         drivers = []
 
@@ -1269,7 +1279,7 @@ async def _get_available_integrations(
     if client:
         try:
             # Get all drivers (installed)
-            drivers = await client.get_drivers()
+            drivers = await client.api.get_drivers()
             for driver in drivers:
                 driver_id = driver.get("driver_id", "")
                 driver_type = driver.get("driver_type", "CUSTOM")
@@ -1279,16 +1289,16 @@ async def _get_available_integrations(
                 name = driver.get("name", {}).get("en", "").lower()
                 if name:
                     driver_names[name] = (driver_id, driver_type, version)
-        except SyncAPIError:
+        except UnfurledError:
             pass
 
         try:
             # Get all instances (configured) with their instance IDs
-            for instance in await client.get_integrations():
+            for instance in await client.api.get_integrations():
                 driver_id = instance.get("driver_id", "")
                 instance_id = instance.get("integration_id", "")
                 configured_driver_ids[driver_id] = instance_id
-        except SyncAPIError:
+        except UnfurledError:
             pass
 
     def is_match(
@@ -1583,7 +1593,10 @@ async def api_v1_bootstrap():
         for remote_id, config in _remote_configs.items()
     ]
     client = _get_active_remote_client()
-    remote_configurator_url = f"http://{client._address}" if client else None  # ty:ignore[unresolved-attribute]
+    active_config = _remote_configs.get(active_id) if active_id else None
+    remote_configurator_url = (
+        f"http://{active_config.address}" if active_config else None
+    )
     return jsonify(
         {
             "data": {
@@ -1603,7 +1616,11 @@ async def api_v1_status():
     if not client or not is_remote_online(remote_id):
         return jsonify({"data": {"online": False, "docked": None}})
     try:
-        docked = await client.is_docked()
+        charger = await client.api.get_charger()
+        docked = bool(
+            charger.get("power_supply", False)
+            or charger.get("wireless_charging", False)
+        )
         return jsonify({"data": {"online": True, "docked": docked}})
     except Exception as e:
         _LOG.warning("Failed to get remote status: %s", e)
@@ -1717,7 +1734,7 @@ async def get_installed_count():
         count = len(integrations)
 
         return jsonify({"data": {"count": count}})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to get integrations count: %s", e)
         return jsonify({"data": {"count": 0}})
 
@@ -1787,1532 +1804,6 @@ async def update_integration_alt(instance_id: str):
     registration behavior.
     """
     return await update_integration_inplace(instance_id)
-
-
-async def _perform_update_integration(instance_id: str, version: str | None = None):
-    """
-    Update an existing integration to the latest or specified version.
-
-    Process:
-    1. Fetch current version (for migration check)
-    2. Validate version against migration boundary if specified
-    3. Backup the current configuration
-    4. Find the integration's GitHub repo URL
-    5. Download the specified or latest release tar.gz
-    6. Delete the existing driver (which cascades to delete instance)
-    7. Install the new version
-    8. Check if migration is required
-    9. Restore configuration (with updated entity IDs if migration needed)
-    10. Execute migration if required
-    11. Restore configured entity registrations
-
-    :param instance_id: The integration instance ID to update
-    :param version: Optional specific version to update to (e.g., 'v1.2.3')
-    """
-    global _operation_in_progress, _operation_lock_acquired_at
-
-    if not _get_active_remote_client() or not _github_client:
-        return jsonify({"status": "error", "message": "Service not initialized"}), 500
-
-    if conflict := await _try_acquire_operation_lock(f"update instance {instance_id}"):
-        return conflict
-
-    backup_data = None
-    previous_version = None
-
-    try:
-        # Find the integration to get its GitHub URL
-        remote_id = get_active_remote_id()
-        integrations = await _get_installed_integrations(remote_id)
-        integration = next(
-            (i for i in integrations if i.instance_id == instance_id), None
-        )
-
-        if not integration:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - integration %s not found", instance_id)
-            return jsonify({"status": "error", "message": "Integration not found"}), 404
-
-        if integration.official:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - integration %s is official", instance_id)
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Official integrations are managed by firmware updates",
-                }
-            ), 400
-
-        if not integration.home_page or "github.com" not in integration.home_page:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - integration %s has no GitHub URL", instance_id
-                )
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "No GitHub repository found for this integration",
-                }
-            ), 400
-
-        # Determine if this is a configured instance (has backup/restore capability)
-        is_configured = bool(instance_id and integration.instance_id)
-        _LOG.info(
-            "Updating %s: configured=%s, supports_backup=%s",
-            integration.driver_id,
-            is_configured,
-            integration.supports_backup,
-        )
-
-        # Load registry to check for migration_required_at
-        migration_required_at = None
-        try:
-            registry = load_registry()
-            for entry in registry:
-                if entry.get("driver_id") == integration.driver_id:
-                    migration_required_at = entry.get("migration_required_at")
-                    if migration_required_at:
-                        _LOG.info(
-                            "Registry indicates migration may be required at version: %s",
-                            migration_required_at,
-                        )
-                    break
-        except Exception as e:
-            _LOG.warning("Failed to load registry for migration check: %s", e)
-
-        # Validate version against migration boundary if specified
-        # Only block downgrade if current version > migration_required_at and target version < migration_required_at
-        if version and migration_required_at and integration.version:
-            clean_version = version.lstrip("v")
-            clean_current_version = integration.version.lstrip("v")
-            try:
-                current_ver = Version(clean_current_version)
-                target_ver = Version(clean_version)
-                migration_ver = Version(migration_required_at)
-
-                # Block only if: current > migration_required_at AND target < migration_required_at
-                # Version at migration_required_at and above are safe (they have the new entity format)
-                if current_ver >= migration_ver and target_ver < migration_ver:
-                    async with _operation_lock:
-                        _operation_in_progress = False
-                    _LOG.warning(
-                        "Downgrade blocked for %s - current version %s > migration boundary %s, cannot downgrade to %s",
-                        integration.driver_id,
-                        integration.version,
-                        migration_required_at,
-                        version,
-                    )
-                    return jsonify(
-                        {
-                            "status": "error",
-                            "message": f"Cannot downgrade from {integration.version} to {version} - migration boundary at {migration_required_at} prevents this downgrade",
-                        }
-                    ), 400
-            except InvalidVersion as e:
-                async with _operation_lock:
-                    _operation_in_progress = False
-                _LOG.warning(
-                    "Invalid version format %s or %s: %s",
-                    version,
-                    integration.version,
-                    e,
-                )
-                return jsonify(
-                    {"status": "error", "message": f"Invalid version format: {version}"}
-                ), 400
-
-        # Step 1: Store current version for migration check
-        previous_version = integration.version
-        if previous_version:
-            _LOG.info(
-                "Current version of %s: %s", integration.driver_id, previous_version
-            )
-
-        # Capture configured entities before update so registration is preserved.
-        configured_entity_ids = []
-        if is_configured:
-            try:
-                _LOG.info(
-                    "Capturing configured entities before update: %s", instance_id
-                )
-                configured_entities = (
-                    await _get_active_remote_client().get_configured_entities(  # ty:ignore[unresolved-attribute]
-                        instance_id
-                    )
-                )
-                configured_entity_ids = [
-                    str(entity.get("entity_id"))
-                    for entity in configured_entities
-                    if entity.get("entity_id")
-                ]
-                _LOG.info(
-                    "Found %d configured entities for %s: %s",
-                    len(configured_entity_ids),
-                    integration.driver_id,
-                    configured_entity_ids,
-                )
-            except Exception as e:
-                _LOG.warning(
-                    "Failed to capture configured entities for %s: %s",
-                    integration.driver_id,
-                    e,
-                )
-
-        # Step 1: Backup current configuration before updating (only for configured instances)
-        # For integrations that support backup AND meet minimum version, we REQUIRE a successful backup
-        # For integrations without backup support or below minimum version, we proceed without backup
-        if is_configured:
-            # Check if this integration can actually do automated backup/restore
-            # It requires supports_backup AND version >= backup_min_version
-            can_backup = integration.supports_backup
-            if can_backup:
-                # Check if current version meets minimum version requirement
-                min_version = None
-                try:
-                    registry = load_registry()
-                    for entry in registry:
-                        if entry.get("driver_id") == integration.driver_id:
-                            min_version = entry.get("backup_min_version")
-                            break
-                except Exception:
-                    pass
-
-                if min_version and integration.version:
-                    try:
-                        if Version(integration.version) < Version(min_version):
-                            can_backup = False
-                            _LOG.info(
-                                "Backup not available for %s: current version %s is below minimum %s",
-                                integration.driver_id,
-                                integration.version,
-                                min_version,
-                            )
-                    except (InvalidVersion, TypeError):
-                        pass
-
-            if can_backup:
-                # This integration SHOULD support backup - require it
-                _LOG.info(
-                    "Backing up configuration before update: %s", integration.driver_id
-                )
-                try:
-                    client = _get_active_remote_client()
-                    if not client:
-                        async with _operation_lock:
-                            _operation_in_progress = False
-                        return jsonify(
-                            {"status": "error", "message": "Service not initialized"}
-                        ), 500
-
-                    backup_data = await backup_integration(
-                        client,
-                        integration.driver_id,
-                        save_to_file=True,
-                        remote_id=get_active_remote_id(),
-                    )
-                    if backup_data:
-                        _LOG.info(
-                            "Successfully backed up configuration for %s",
-                            integration.driver_id,
-                        )
-                    else:
-                        # Integration should support backup but backup failed - don't proceed
-                        _LOG.error(
-                            "Backup required for %s but no data was retrieved",
-                            integration.driver_id,
-                        )
-                        async with _operation_lock:
-                            _operation_in_progress = False
-                            _LOG.info(
-                                "Lock released - backup failed for integration %s",
-                                instance_id,
-                            )
-                        return jsonify(
-                            {
-                                "status": "error",
-                                "message": "Backup failed - cannot update without successful backup for this integration",
-                            }
-                        ), 400
-                except Exception as e:
-                    # Integration should support backup but backup failed - don't proceed
-                    _LOG.error(
-                        "Backup required for %s but failed: %s",
-                        integration.driver_id,
-                        e,
-                    )
-                    async with _operation_lock:
-                        _operation_in_progress = False
-                        _LOG.info(
-                            "Lock released - backup exception for integration %s",
-                            instance_id,
-                        )
-                    return jsonify(
-                        {
-                            "status": "error",
-                            "message": f"Backup failed - cannot update: {e}",
-                        }
-                    ), 400
-            else:
-                # Integration doesn't support backup or version too old - proceed without backup
-                _LOG.info(
-                    "Skipping backup for %s: supports_backup=%s, can_backup=%s",
-                    integration.driver_id,
-                    integration.supports_backup,
-                    can_backup,
-                )
-                _LOG.info(
-                    "Configuration will NOT be preserved - user will need to reconfigure"
-                )
-        else:
-            _LOG.info(
-                "Skipping backup for unconfigured driver: %s", integration.driver_id
-            )
-
-        # Parse GitHub URL
-        parsed = GitHubClient.parse_github_url(integration.home_page)
-        if not parsed:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - could not parse GitHub URL for integration %s",
-                    instance_id,
-                )
-            return jsonify(
-                {"status": "error", "message": "Could not parse GitHub URL"}
-            ), 400
-
-        owner, repo = parsed
-
-        # Check if registry has an asset_pattern for this integration
-        registry = load_registry()
-        asset_pattern = next(
-            (
-                item.get("asset_pattern")
-                for item in registry
-                if item.get("driver_id") == integration.driver_id
-                or item.get("id") == integration.driver_id
-            ),
-            None,
-        )
-
-        # Download the specified or latest release
-        if version:
-            _LOG.info(
-                "Updating integration %s to version %s", integration.driver_id, version
-            )
-            download_result = await _github_client.download_release_asset(
-                owner, repo, asset_pattern=asset_pattern, version=version
-            )
-        else:
-            _LOG.info(
-                "Updating integration %s to latest version", integration.driver_id
-            )
-            download_result = await _github_client.download_release_asset(
-                owner, repo, asset_pattern=asset_pattern
-            )
-        if not download_result:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - no release found for integration %s", instance_id
-                )
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": f"No tar.gz release found for {owner}/{repo}"
-                    + (f" version {version}" if version else ""),
-                }
-            ), 404
-
-        archive_data, filename = download_result
-        _LOG.info("Downloaded %s (%d bytes) for update", filename, len(archive_data))
-
-        # Delete the existing driver (cascades to delete instances)
-        try:
-            await _get_active_remote_client().delete_driver(integration.driver_id)  # ty:ignore[unresolved-attribute]
-        except SyncAPIError as e:
-            error_str = str(e).lower()
-            # Check if this is a connection/network error
-            if any(
-                x in error_str
-                for x in ["connection", "disconnect", "timeout", "network"]
-            ):
-                _LOG.error(
-                    "Connection error while deleting driver %s: %s",
-                    integration.driver_id,
-                    e,
-                )
-                async with _operation_lock:
-                    _operation_in_progress = False
-                    _LOG.info(
-                        "Lock released due to connection error for instance %s",
-                        instance_id,
-                    )
-                return _api_error("connection_failed", str(e), 502)
-            # For other errors, log warning and continue
-            _LOG.warning("Failed to delete driver, continuing anyway: %s", e)
-
-        # Install the new version
-        await _get_active_remote_client().install_integration(archive_data, filename)  # ty:ignore[unresolved-attribute]
-
-        # Brief pause to let installation settle
-        await asyncio.sleep(API_DELAY * 2)
-
-        # Post-installation verification - give the remote time to process the driver
-        _LOG.debug("Waiting for driver to be ready: %s", integration.driver_id)
-        await (
-            _get_active_remote_client().get_drivers()  # ty:ignore[unresolved-attribute]
-        )  # Verify driver is available
-
-        # Additional pause to ensure driver is fully initialized
-        await asyncio.sleep(API_DELAY * 3)
-
-        # Get current version once after installation for migration use
-        current_version = ""
-        should_check_migration = False
-
-        if previous_version:
-            # Get current version for migration checks
-            driver_info = await _get_active_remote_client().get_driver(  # ty:ignore[unresolved-attribute]
-                integration.driver_id
-            )
-            if driver_info:
-                current_version = driver_info.get("version", "")
-                _LOG.info(
-                    "Installed version: %s (upgrading from %s)",
-                    current_version,
-                    previous_version,
-                )
-
-            # Check if migration is needed based on registry's migration_required_at
-            if migration_required_at:
-                # Compare versions to see if migration is still needed
-                try:
-                    if Version(previous_version) < Version(migration_required_at):
-                        should_check_migration = True
-                        _LOG.info(
-                            "Previous version %s is less than %s - will check for migration",
-                            previous_version,
-                            migration_required_at,
-                        )
-                    else:
-                        _LOG.info(
-                            "Previous version %s is greater than or equal to %s - migration already completed, skipping",
-                            previous_version,
-                            migration_required_at,
-                        )
-                except Exception as e:
-                    _LOG.warning(
-                        "Failed to compare versions, will check for migration anyway: %s",
-                        e,
-                    )
-                    should_check_migration = True
-            else:
-                _LOG.info(
-                    "No migration_required_at in registry for %s - no migration needed",
-                    integration.driver_id,
-                )
-
-        # Restore configuration if backup data exists (only for configured instances)
-        if backup_data and is_configured:
-            # Check if the new version supports backup/restore before attempting restore
-            can_restore = True
-
-            # Reuse registry loaded earlier to get backup_min_version
-            min_backup_version = next(
-                (
-                    entry.get("backup_min_version")
-                    for entry in registry
-                    if entry.get("driver_id") == integration.driver_id
-                ),
-                None,
-            )
-
-            if min_backup_version and current_version:
-                try:
-                    if Version(current_version) < Version(min_backup_version):
-                        can_restore = False
-                        _LOG.warning(
-                            "Cannot restore configuration for %s: installed version %s is below minimum backup version %s",
-                            integration.driver_id,
-                            current_version,
-                            min_backup_version,
-                        )
-                        _LOG.info(
-                            "User will need to manually reconfigure %s",
-                            integration.driver_id,
-                        )
-                except (InvalidVersion, TypeError) as e:
-                    _LOG.warning("Failed to compare versions for restore check: %s", e)
-
-            if not can_restore:
-                _LOG.info(
-                    "Skipping restore for %s - version too old to support backup/restore",
-                    integration.driver_id,
-                )
-                # Don't attempt restore, user will need to reconfigure
-                backup_data = None
-
-        if backup_data and is_configured:
-            try:
-                _LOG.info(
-                    "Starting configuration restore for %s", integration.driver_id
-                )
-
-                # Step 1: Start setup for restore
-                await _get_active_remote_client().start_setup(  # ty:ignore[unresolved-attribute]
-                    integration.driver_id, reconfigure=False
-                )
-                _LOG.info("Started setup for restore (reconfigure=false)")
-
-                await asyncio.sleep(
-                    API_DELAY * 4
-                )  # Give more time for setup to initialize
-
-                # Step 1a: Check for migration metadata in the setup response
-                setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                    integration.driver_id
-                )
-                _LOG.debug("Initial setup response: %s", setup_response)
-
-                # Check if setup is in the right state
-                setup_state = setup_response.get("state", "")
-                if setup_state != "WAIT_USER_ACTION":
-                    _LOG.warning(
-                        "Setup not ready yet (state: %s), waiting longer...",
-                        setup_state,
-                    )
-                    await asyncio.sleep(API_DELAY * 2)
-                    setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                        integration.driver_id
-                    )
-                    setup_state = setup_response.get("state", "")
-                    _LOG.debug("Setup response after wait: %s", setup_response)
-
-                migration_required = (
-                    None  # None = unknown, True = required, False = not required
-                )
-                migration_possible = False
-                migration_mappings = []
-
-                # Only check for migration if registry indicates it might be needed
-                if previous_version and should_check_migration:
-                    _LOG.info(
-                        "Checking for migration metadata (previous_version: %s Migration Required: %s)",
-                        previous_version,
-                        should_check_migration,
-                    )
-
-                    # Look for migration_required and migration_possible in settings
-                    settings = (
-                        setup_response.get("require_user_action", {})
-                        .get("input", {})
-                        .get("settings", [])
-                    )
-
-                    _LOG.debug("Found %d settings in setup response", len(settings))
-
-                    # Log all setting IDs to help debug
-                    setting_ids = [s.get("id") for s in settings]
-                    _LOG.debug("Setting IDs in response: %s", setting_ids)
-
-                    for setting in settings:
-                        setting_id = setting.get("id")
-
-                        if setting_id == "migration_possible":
-                            # This indicates the integration supports migration (has get_migration_data override)
-                            migration_possible = True
-                            _LOG.info(
-                                "Migration is possible for %s - integration supports migration",
-                                integration.driver_id,
-                            )
-                        elif setting_id == "migration_required":
-                            # Get the previous_version value from the label
-                            label_value = (
-                                setting.get("field", {})
-                                .get("label", {})
-                                .get("value", "")
-                            )
-                            # If there's a value, migration is required
-                            migration_required = bool(label_value)
-                            _LOG.info(
-                                "Migration metadata found: migration_required=%s (previous_version from field: %s)",
-                                migration_required,
-                                label_value,
-                            )
-
-                    if not migration_possible:
-                        _LOG.info(
-                            "Integration %s does not support migration (no migration_possible field)",
-                            integration.driver_id,
-                        )
-                    elif migration_required is False:
-                        _LOG.info(
-                            "Migration explicitly not required for %s",
-                            integration.driver_id,
-                        )
-                    elif migration_required is None:
-                        _LOG.debug(
-                            "Migration requirement unknown for %s (will attempt if possible)",
-                            integration.driver_id,
-                        )
-                    else:
-                        _LOG.info(
-                            "Migration IS required for %s - will execute after restore",
-                            integration.driver_id,
-                        )
-                elif previous_version and not should_check_migration:
-                    _LOG.info(
-                        "Skipping migration check - registry indicates migration not needed or already completed"
-                    )
-                else:
-                    _LOG.info("No previous_version provided - skipping migration check")
-
-                # Step 2: PUT /intg/setup/{driver_id} with restore_from_backup="true"
-                await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-                    integration.driver_id, {"restore_from_backup": "true"}
-                )
-                _LOG.info("Initiated restore mode")
-
-                # Brief pause between API calls
-                await asyncio.sleep(API_DELAY * 2)
-
-                # Step 3: PUT /intg/setup/{driver_id} with restore data
-                # The backup_data is a JSON string that needs to be properly escaped
-                try:
-                    # Parse the backup data to ensure it's valid JSON, then re-serialize for proper escaping
-                    parsed_backup = json.loads(backup_data)
-                    escaped_backup_data = json.dumps(parsed_backup)
-                except json.JSONDecodeError as e:
-                    _LOG.warning("Backup data is not valid JSON, using as-is: %s", e)
-                    escaped_backup_data = backup_data
-
-                await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-                    integration.driver_id,
-                    {
-                        "restore_from_backup": "true",
-                        "restore_data": escaped_backup_data,
-                    },
-                )
-
-                await asyncio.sleep(API_DELAY * 6)
-
-                # Post-restore verification calls (like official tool)
-                _LOG.info(
-                    "Performing post-restore verification for %s", integration.driver_id
-                )
-                await _get_active_remote_client().get_enabled_integrations()  # ty:ignore[unresolved-attribute]
-
-                # Get enabled instances and find our restored instance
-                enabled_instances = (
-                    await _get_active_remote_client().get_enabled_instances()  # ty:ignore[unresolved-attribute]
-                )
-                restored_instance_id = None
-                for instance in enabled_instances:
-                    if instance.get("driver_id") == integration.driver_id:
-                        restored_instance_id = instance.get("integration_id")
-                        _LOG.info(
-                            "Found restored instance: %s for driver %s",
-                            restored_instance_id,
-                            integration.driver_id,
-                        )
-                        break
-
-                await _get_active_remote_client().get_instantiable_drivers()  # ty:ignore[unresolved-attribute]
-                await _get_active_remote_client().get_driver(integration.driver_id)  # ty:ignore[unresolved-attribute]
-
-                # Complete the setup flow (like official tool)
-                await _get_active_remote_client().complete_setup(integration.driver_id)  # ty:ignore[unresolved-attribute]
-
-                # Final verification call after DELETE (like official tool)
-                await _get_active_remote_client().get_enabled_instances()  # ty:ignore[unresolved-attribute]
-
-                _LOG.info(
-                    "Configuration restored successfully for %s", integration.driver_id
-                )
-
-                # Step 4: Register ALL entities before migration (only if migration is possible)
-                # Migration needs entities to exist on Remote to update activities
-                all_entities = []
-                if migration_possible and restored_instance_id:
-                    await _get_active_remote_client().get_enabled_instances()  # ty:ignore[unresolved-attribute]
-
-                    all_entities = (
-                        await _get_active_remote_client().get_instance_entities(  # ty:ignore[unresolved-attribute]
-                            restored_instance_id
-                        )
-                    )
-                    _LOG.info(
-                        "Retrieved %d total entities for instance %s",
-                        len(all_entities),
-                        restored_instance_id,
-                    )
-
-                    # Register ALL entities (not just configured ones)
-                    # This ensures entities exist when migration runs
-                    if all_entities:
-                        all_entity_ids: list[str] = [
-                            str(e.get("entity_id"))
-                            for e in all_entities
-                            if e.get("entity_id")
-                        ]
-                        await asyncio.sleep(API_DELAY * 5)
-                        _LOG.info(
-                            "Registering ALL %d entities before migration for instance %s",
-                            len(all_entity_ids),
-                            restored_instance_id,
-                        )
-                        _LOG.debug("All entity IDs: %s", all_entity_ids)
-
-                        try:
-                            await _get_active_remote_client().register_entities(  # ty:ignore[unresolved-attribute]
-                                restored_instance_id, all_entity_ids
-                            )
-                            _LOG.info(
-                                "Successfully registered all %d entities",
-                                len(all_entity_ids),
-                            )
-                        except SyncAPIError as e:
-                            _LOG.warning(
-                                "Failed to register all entities for instance %s: %s",
-                                restored_instance_id,
-                                e,
-                            )
-
-                # Step 5: Execute migration if possible and not explicitly not required
-                # migration_required: None (unknown) or True = proceed, False = skip
-                if (
-                    migration_possible
-                    and migration_required is not False
-                    and previous_version
-                    and restored_instance_id
-                ):
-                    try:
-                        _LOG.info(
-                            "Migration flow starting for %s (previous_version: %s, migration_required: %s)",
-                            integration.driver_id,
-                            previous_version,
-                            migration_required
-                            if migration_required is not None
-                            else "to be determined",
-                        )
-
-                        # POST with reconfigure=true to get to the configuration mode screen
-                        await _get_active_remote_client().start_setup(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id, reconfigure=True
-                        )
-                        _LOG.info("Started setup mode for migration")
-
-                        await asyncio.sleep(API_DELAY)
-
-                        # GET to read the configuration mode screen
-                        setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id
-                        )
-                        _LOG.debug("Setup response for migration: %s", setup_response)
-
-                        # Extract the choice ID (current device)
-                        settings = (
-                            setup_response.get("require_user_action", {})
-                            .get("input", {})
-                            .get("settings", [])
-                        )
-                        choice_id = None
-                        for setting in settings:
-                            if setting.get("id") == "choice":
-                                dropdown = setting.get("field", {}).get("dropdown", {})
-                                choice_id = dropdown.get("value")
-                                break
-
-                        if not choice_id:
-                            _LOG.warning("No choice ID found for migration")
-                            raise ValueError("No device choice found")
-
-                        # Step 4a: Select "migrate" action with the choice
-                        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id,
-                            {"choice": choice_id, "action": "migrate"},
-                        )
-                        _LOG.debug(
-                            "Selected 'migrate' action for device: %s", choice_id
-                        )
-
-                        await asyncio.sleep(API_DELAY * 2)
-
-                        # Step 4b: GET the next setup page after selecting migrate
-                        setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id
-                        )
-                        _LOG.debug(
-                            "Setup response after selecting migrate: %s", setup_response
-                        )
-
-                        # Check if setup is in the right state
-                        setup_state = setup_response.get("state", "")
-                        if setup_state != "WAIT_USER_ACTION":
-                            _LOG.warning(
-                                "Setup not in WAIT_USER_ACTION after selecting migrate (state: %s)",
-                                setup_state,
-                            )
-                            raise ValueError(
-                                f"Unexpected setup state after migrate: {setup_state}"
-                            )
-
-                        # Step 4c: Send previous_version
-                        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id,
-                            {"previous_version": previous_version},
-                        )
-                        _LOG.debug("Sent previous_version: %s", previous_version)
-
-                        await asyncio.sleep(API_DELAY * 2)
-
-                        # GET the migration execution screen (asks for remote_url, pin, etc.)
-                        setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id
-                        )
-                        _LOG.debug("Migration execution screen: %s", setup_response)
-
-                        # Prepare migration data
-                        remote_url = (
-                            _get_active_remote_client()._address or "http://localhost"  # ty:ignore[unresolved-attribute]
-                        )
-                        remote_api_key = _get_active_remote_client()._api_key or ""  # ty:ignore[unresolved-attribute]
-
-                        _LOG.info(
-                            "Executing migration for %s (from %s to %s)",
-                            integration.driver_id,
-                            previous_version,
-                            current_version,
-                        )
-
-                        # Build migration input - only include fields that have values
-                        # The integration will try to fetch current_version from Remote API,
-                        # but if that fails, having it provided prevents errors
-                        migration_input = {
-                            "previous_version": previous_version,
-                            "current_version": current_version,
-                            "remote_url": remote_url,
-                            "pin": "",
-                            "automated": "true",
-                        }
-
-                        # Only include api_key if it's not empty (avoid sending empty form fields)
-                        if remote_api_key:
-                            migration_input["api_key"] = remote_api_key
-
-                        _LOG.info(
-                            "Sending migration data: remote_url=%s, api_key=%s, previous_version=%s, current_version=%s",
-                            remote_url,
-                            "****" if remote_api_key else "(not provided)",
-                            previous_version,
-                            current_version,
-                        )
-
-                        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id, migration_input
-                        )
-                        _LOG.debug("Migration execution data sent successfully")
-
-                        await asyncio.sleep(
-                            API_DELAY * 4
-                        )  # Give more time for migration to process
-
-                        # GET to read the migration mappings response
-                        setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id
-                        )
-                        _LOG.debug("Migration mappings response: %s", setup_response)
-
-                        # Check the state of the response
-                        setup_state = setup_response.get("state", "")
-                        _LOG.debug("Migration response state: %s", setup_state)
-
-                        if setup_state == "ERROR":
-                            error_type = setup_response.get("error", "UNKNOWN")
-                            _LOG.error(
-                                "Migration failed with error state: %s. This could mean:\n"
-                                "  - Integration couldn't connect to Remote at %s\n"
-                                "  - Invalid PIN provided\n"
-                                "  - Integration encountered an error during migration\n"
-                                "  - Check integration logs for more details",
-                                error_type,
-                                remote_url,
-                            )
-                            # Don't raise - try to extract any mappings that might be present
-
-                        # Extract migration mappings from the response
-                        migration_mappings = extract_migration_mappings(setup_response)
-
-                        _LOG.debug(
-                            "Found %d entity mappings: %s",
-                            len(migration_mappings),
-                            migration_mappings,
-                        )
-
-                        if migration_mappings:
-                            # Update configured_entity_ids list with migrated IDs
-                            # DON'T modify backup_data - keep it original for potential rollback
-                            _LOG.debug(
-                                "Updating configured_entity_ids with migration mappings. Original: %s",
-                                configured_entity_ids,
-                            )
-                            mapping_dict = {
-                                m["previous_entity_id"]: m["new_entity_id"]
-                                for m in migration_mappings
-                            }
-                            updated_entity_ids = []
-                            for entity_id in configured_entity_ids:
-                                if entity_id in mapping_dict:
-                                    updated_entity_ids.append(mapping_dict[entity_id])
-                                    _LOG.info(
-                                        "Mapped entity: %s -> %s",
-                                        entity_id,
-                                        mapping_dict[entity_id],
-                                    )
-                                else:
-                                    updated_entity_ids.append(entity_id)
-                            configured_entity_ids = updated_entity_ids
-                            _LOG.info(
-                                "Updated configured_entity_ids: %s",
-                                configured_entity_ids,
-                            )
-
-                            # Check final result - should be SETUP_COMPLETE or show mappings
-                            migration_state = setup_response.get("state", "")
-
-                            if migration_state == "SETUP_COMPLETE":
-                                _LOG.info(
-                                    "Migration completed successfully for %s",
-                                    integration.driver_id,
-                                )
-                            elif migration_state == "SETUP_ERROR":
-                                error_msg = setup_response.get("error", "Unknown error")
-                                _LOG.error(
-                                    "Migration failed for %s: %s",
-                                    integration.driver_id,
-                                    error_msg,
-                                )
-                            else:
-                                _LOG.info(
-                                    "Migration processing complete for %s",
-                                    integration.driver_id,
-                                )
-                        else:
-                            _LOG.warning(
-                                "No migration mappings found for %s",
-                                integration.driver_id,
-                            )
-
-                        # Complete migration setup flow
-                        await _get_active_remote_client().complete_setup(  # ty:ignore[unresolved-attribute]
-                            integration.driver_id
-                        )
-
-                    except Exception as e:
-                        _LOG.warning(
-                            "Failed to execute migration for %s: %s",
-                            integration.driver_id,
-                            e,
-                        )
-
-                # Step 6: Register configured entities
-                if restored_instance_id and configured_entity_ids:
-                    # Wait for instance to be CONNECTED before registering
-                    device_state_step6 = "UNKNOWN"
-                    for attempt in range(12):  # up to ~18 seconds
-                        instance_detail_step6 = (
-                            await _get_active_remote_client().get_instance(  # ty:ignore[unresolved-attribute]
-                                restored_instance_id
-                            )
-                        )
-                        device_state_step6 = instance_detail_step6.get(
-                            "device_state", "UNKNOWN"
-                        )
-                        _LOG.info(
-                            "Step 6 pre-register: instance %s state=%s (attempt %d/12)",
-                            restored_instance_id,
-                            device_state_step6,
-                            attempt + 1,
-                        )
-                        if device_state_step6 == "CONNECTED":
-                            break
-                        await asyncio.sleep(API_DELAY * 2)
-                    if device_state_step6 != "CONNECTED":
-                        _LOG.warning(
-                            "Instance %s not CONNECTED before entity registration (state: %s)",
-                            restored_instance_id,
-                            device_state_step6,
-                        )
-                    else:
-                        # Brief settle time after connection before registering entities
-                        await asyncio.sleep(2)
-
-                    # If migration was possible, we registered ALL entities earlier
-                    # Now we need to clean up by deleting all and re-registering only configured ones
-                    if migration_possible:
-                        _LOG.info(
-                            "Cleaning up entities for %s - will keep only configured entities",
-                            restored_instance_id,
-                        )
-
-                        try:
-                            # Delete ALL entities for this integration
-                            _LOG.info(
-                                "Deleting all entities for instance %s",
-                                restored_instance_id,
-                            )
-                            await _get_active_remote_client().delete_all_entities(  # ty:ignore[unresolved-attribute]
-                                restored_instance_id
-                            )
-                            _LOG.info("All entities deleted")
-
-                            await asyncio.sleep(API_DELAY * 2)
-
-                            # Re-register only the configured entities (now with updated IDs from migration)
-                            _LOG.info(
-                                "Re-registering %d configured entities for instance %s",
-                                len(configured_entity_ids),
-                                restored_instance_id,
-                            )
-                            _LOG.info(
-                                "Configured entity IDs: %s", configured_entity_ids
-                            )
-
-                            await _get_active_remote_client().register_entities(  # ty:ignore[unresolved-attribute]
-                                restored_instance_id, configured_entity_ids
-                            )
-                            _LOG.info(
-                                "Successfully registered %d configured entities",
-                                len(configured_entity_ids),
-                            )
-                        except SyncAPIError as e:
-                            _LOG.warning(
-                                "Failed to clean up entities for instance %s: %s",
-                                restored_instance_id,
-                                e,
-                            )
-                    else:
-                        # No migration possible - just register configured entities directly
-                        _LOG.info(
-                            "Registering %d configured entities for instance %s",
-                            len(configured_entity_ids),
-                            restored_instance_id,
-                        )
-                        _LOG.info("Configured entity IDs: %s", configured_entity_ids)
-
-                        for reg_attempt in range(4):
-                            try:
-                                await _get_active_remote_client().register_entities(  # ty:ignore[unresolved-attribute]
-                                    restored_instance_id, configured_entity_ids
-                                )
-                                _LOG.info(
-                                    "Registered %d configured entities (attempt %d)",
-                                    len(configured_entity_ids),
-                                    reg_attempt + 1,
-                                )
-                            except SyncAPIError as e:
-                                _LOG.warning(
-                                    "Failed to register entities for instance %s (attempt %d): %s",
-                                    restored_instance_id,
-                                    reg_attempt + 1,
-                                    e,
-                                )
-                                break
-
-                            # Verify registration stuck
-                            await asyncio.sleep(3)
-                            verified = await _get_active_remote_client().get_configured_entities(  # ty:ignore[unresolved-attribute]
-                                restored_instance_id
-                            )
-                            verified_ids = [
-                                str(e.get("entity_id", "")) for e in verified
-                            ]
-                            _LOG.info(
-                                "Post-register verification (attempt %d): configured=%s",
-                                reg_attempt + 1,
-                                verified_ids,
-                            )
-                            if verified_ids:
-                                _LOG.info("Entity registration confirmed")
-                                break
-                            _LOG.warning(
-                                "Entities not confirmed after registration (attempt %d/4) - retrying",
-                                reg_attempt + 1,
-                            )
-                            await asyncio.sleep(API_DELAY * 4)
-
-                _LOG.info("Update completed successfully for %s", integration.driver_id)
-
-            except SyncAPIError as e:
-                _LOG.error(
-                    "Failed to restore configuration for %s: %s",
-                    integration.driver_id,
-                    e,
-                )
-                # Try to clean up setup flow even on failure (twice like official tool)
-                try:
-                    await _get_active_remote_client().complete_setup(  # ty:ignore[unresolved-attribute]
-                        integration.driver_id
-                    )
-                    # Final verification call after double DELETE
-                    await _get_active_remote_client().get_enabled_instances()  # ty:ignore[unresolved-attribute]
-                    await asyncio.sleep(API_DELAY)  # Brief pause after cleanup
-                except SyncAPIError:
-                    pass
-            except Exception as e:
-                _LOG.error(
-                    "Unexpected error during restore for %s: %s",
-                    integration.driver_id,
-                    e,
-                )
-                # Try to clean up setup flow even on failure (twice like official tool)
-                try:
-                    await _get_active_remote_client().complete_setup(  # ty:ignore[unresolved-attribute]
-                        integration.driver_id
-                    )
-                    await _get_active_remote_client().complete_setup(  # ty:ignore[unresolved-attribute]
-                        integration.driver_id
-                    )
-                    # Final verification call after double DELETE
-                    await _get_active_remote_client().get_enabled_instances()  # ty:ignore[unresolved-attribute]
-                    await asyncio.sleep(API_DELAY)  # Brief pause after cleanup
-                except SyncAPIError:
-                    pass
-
-        # Update the cache entry for this driver instead of full refresh
-        # This avoids GitHub rate limiting issues
-        _remote_cache = _get_version_cache(remote_id)
-        if integration.driver_id in _remote_cache:
-            _remote_cache[integration.driver_id]["has_update"] = False
-            _remote_cache[integration.driver_id]["current"] = _remote_cache[
-                integration.driver_id
-            ]["latest"]
-            _LOG.debug(
-                "[%s] Updated cache for %s: marked as current version",
-                remote_id,
-                integration.driver_id,
-            )
-
-            # Clear the notified update state since user has updated
-            try:
-                nm = get_notification_manager(remote_id)
-                nm.clear_update_notification(
-                    integration.driver_id,
-                    _remote_cache[integration.driver_id]["latest"],
-                )
-            except Exception as notify_error:
-                _LOG.debug(
-                    "Failed to clear update notification state: %s", notify_error
-                )
-
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info(
-                "Lock released after successful update of instance %s", instance_id
-            )
-
-        # Brief delay to ensure remote has processed the update
-        await asyncio.sleep(API_DELAY)
-
-        # Re-fetch the integration info with updated version
-        integrations = await _get_installed_integrations(remote_id)
-        updated_integration = next(
-            (i for i in integrations if i.driver_id == integration.driver_id), None
-        )
-
-        if updated_integration:
-            return jsonify(
-                {
-                    "data": _integration_api_model(updated_integration),
-                    "meta": {"updated": True},
-                }
-            )
-        else:
-            # Fallback: use original integration data with updated flag
-            # This shouldn't normally happen, but ensures we return a card
-            _LOG.warning(
-                "Could not find updated integration %s, using original data",
-                integration.driver_id,
-            )
-            return jsonify(
-                {
-                    "data": _integration_api_model(integration),
-                    "meta": {"updated": True, "stale": True},
-                }
-            )
-
-    except SyncAPIError as e:
-        _LOG.error("Update failed: %s", e)
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info(
-                "Lock released after SyncAPIError in update_integration for instance %s",
-                instance_id,
-            )
-
-        return _api_error("update_failed", str(e), 502)
-    except Exception as e:
-        _LOG.error("Unexpected error during update: %s", e)
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info(
-                "Lock released after generic exception in update_integration for instance %s",
-                instance_id,
-            )
-
-        return _api_error("update_failed", str(e), 500)
-    finally:
-        # Safety net: ensure lock is released even on asyncio.CancelledError
-        # (CancelledError is BaseException, not Exception, so won't be caught above)
-        _operation_in_progress = False
-        _operation_lock_acquired_at = None
-
-
-@app.route("/api/driver/<driver_id>/update", methods=["POST"])
-async def update_driver(driver_id: str):
-    """
-    Update an unconfigured driver to the latest or specified version.
-
-    Accepts optional 'version' query parameter to update to a specific version.
-
-    This is used when a driver is installed but not configured (no instance exists).
-    Since there's no instance, there's nothing to backup or restore - just download
-    and install the new version.
-    """
-    global _operation_in_progress, _operation_lock_acquired_at
-
-    if not _get_active_remote_client() or not _github_client:
-        return jsonify({"status": "error", "message": "Service not initialized"}), 500
-
-    # Get optional version parameter from query string or form data
-    _form = await request.form
-    version = request.args.get("version") or _form.get("version")
-
-    if conflict := await _try_acquire_operation_lock(f"update driver {driver_id}"):
-        return conflict
-
-    try:
-        # Find the driver to get its GitHub URL
-        remote_id = get_active_remote_id()
-        integrations = await _get_installed_integrations(remote_id)
-        integration = next((i for i in integrations if i.driver_id == driver_id), None)
-
-        if not integration:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - driver %s not found", driver_id)
-            return jsonify({"status": "error", "message": "Driver not found"}), 404
-
-        if integration.official:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - driver %s is official", driver_id)
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Official integrations are managed by firmware updates",
-                }
-            ), 400
-
-        if not integration.home_page or "github.com" not in integration.home_page:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - driver %s has no GitHub URL", driver_id)
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "No GitHub repository found for this driver",
-                }
-            ), 400
-
-        # Check migration boundary if version specified and integration already installed
-        # Only block downgrade if current version > migration_required_at and target version < migration_required_at
-        if version and integration.version:
-            try:
-                registry = load_registry()
-                for entry in registry:
-                    if (
-                        entry.get("id") == driver_id
-                        or entry.get("driver_id") == driver_id
-                    ):
-                        migration_required_at = entry.get("migration_required_at")
-                        if migration_required_at:
-                            clean_version = version.lstrip("v")
-                            clean_current_version = integration.version.lstrip("v")
-                            current_ver = Version(clean_current_version)
-                            target_ver = Version(clean_version)
-                            migration_ver = Version(migration_required_at)
-
-                            # Block only if: current > migration_required_at AND target < migration_required_at
-                            # Version at migration_required_at and above are safe (they have the new entity format)
-                            if (
-                                current_ver >= migration_ver
-                                and target_ver < migration_ver
-                            ):
-                                async with _operation_lock:
-                                    _operation_in_progress = False
-                                _LOG.warning(
-                                    "Downgrade blocked for %s - current version %s > migration boundary %s, cannot downgrade to %s",
-                                    driver_id,
-                                    integration.version,
-                                    migration_required_at,
-                                    version,
-                                )
-                                return jsonify(
-                                    {
-                                        "status": "error",
-                                        "message": f"Cannot downgrade from {integration.version} to {version} - migration boundary at {migration_required_at} prevents this downgrade",
-                                    }
-                                ), 400
-                        break
-            except (InvalidVersion, Exception) as e:
-                async with _operation_lock:
-                    _operation_in_progress = False
-                _LOG.warning("Version validation failed for %s: %s", version, e)
-                return jsonify(
-                    {"status": "error", "message": f"Invalid version: {version}"}
-                ), 400
-
-        # Parse GitHub URL
-        parsed = GitHubClient.parse_github_url(integration.home_page)
-        if not parsed:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - could not parse GitHub URL for driver %s",
-                    driver_id,
-                )
-            return jsonify(
-                {"status": "error", "message": "Could not parse GitHub URL"}
-            ), 400
-
-        owner, repo = parsed
-
-        # Check if registry has an asset_pattern for this integration
-        registry = load_registry()
-        asset_pattern = next(
-            (
-                item.get("asset_pattern")
-                for item in registry
-                if item.get("driver_id") == driver_id or item.get("id") == driver_id
-            ),
-            None,
-        )
-
-        # Download the specified or latest release
-        if version:
-            _LOG.info("Updating driver %s to version %s", driver_id, version)
-            download_result = await _github_client.download_release_asset(
-                owner, repo, asset_pattern=asset_pattern, version=version
-            )
-        else:
-            _LOG.info("Updating driver %s to latest version", driver_id)
-            download_result = await _github_client.download_release_asset(
-                owner, repo, asset_pattern=asset_pattern
-            )
-        if not download_result:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - no release found for driver %s", driver_id)
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": f"No tar.gz release found for {owner}/{repo}",
-                }
-            ), 404
-
-        archive_data, filename = download_result
-        _LOG.info("Downloaded %s (%d bytes) for update", filename, len(archive_data))
-
-        # Delete the existing driver
-        try:
-            await _get_active_remote_client().delete_driver(driver_id)  # ty:ignore[unresolved-attribute]
-            _LOG.info("Deleted existing driver: %s", driver_id)
-        except SyncAPIError as e:
-            error_str = str(e).lower()
-            # Check if this is a connection/network error
-            if any(
-                x in error_str
-                for x in ["connection", "disconnect", "timeout", "network"]
-            ):
-                _LOG.error(
-                    "Connection error while deleting driver %s: %s", driver_id, e
-                )
-                async with _operation_lock:
-                    _operation_in_progress = False
-                    _LOG.info(
-                        "Lock released due to connection error for driver %s", driver_id
-                    )
-                return _api_error("connection_failed", str(e), 502)
-            # For other errors, log warning and continue
-            _LOG.warning("Failed to delete driver, continuing anyway: %s", e)
-
-        # Install the new version
-        await _get_active_remote_client().install_integration(archive_data, filename)  # ty:ignore[unresolved-attribute]
-        _LOG.info("Updated driver %s successfully", integration.name)
-
-        # Wait for the specific driver to appear in the driver list
-        # Poll up to 10 times (5 seconds total) to ensure new driver is registered
-        driver_found = False
-        for attempt in range(10):
-            await asyncio.sleep(0.5)
-            try:
-                drivers = await _get_active_remote_client().get_drivers()  # ty:ignore[unresolved-attribute]
-                if any(d.get("driver_id") == driver_id for d in drivers):
-                    driver_found = True
-                    _LOG.debug(
-                        "Driver %s found after %d attempts", driver_id, attempt + 1
-                    )
-                    break
-            except Exception as e:
-                _LOG.debug("Attempt %d to verify driver failed: %s", attempt + 1, e)
-
-        if not driver_found:
-            _LOG.warning(
-                "Driver %s not found in driver list after update, cache may be stale",
-                driver_id,
-            )
-
-        # Additional delay to ensure driver info has fully propagated
-        await asyncio.sleep(1.0)
-
-        # Update just this driver's cache entry instead of refreshing everything
-        # This avoids GitHub rate limiting issues from rapid consecutive API calls
-        _remote_cache = _get_version_cache(remote_id)
-        if driver_id in _remote_cache:
-            # Driver was updated to latest version, so no update is available anymore
-            _remote_cache[driver_id]["has_update"] = False
-            _remote_cache[driver_id]["current"] = _remote_cache[driver_id]["latest"]
-            _LOG.debug(
-                "[%s] Updated cache for %s: marked as current version",
-                remote_id,
-                driver_id,
-            )
-
-            # Clear the notified update state since user has updated
-            try:
-                nm = get_notification_manager(remote_id)
-                nm.clear_update_notification(
-                    driver_id, _remote_cache[driver_id]["latest"]
-                )
-            except Exception as notify_error:
-                _LOG.debug(
-                    "Failed to clear update notification state: %s", notify_error
-                )
-
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info("Lock released after successful update of driver %s", driver_id)
-
-        # Brief delay to ensure remote has processed the update
-        await asyncio.sleep(API_DELAY)
-
-        # Re-fetch the integration info with updated version from available list
-        # Since this is for unconfigured drivers, we use _get_available_integrations
-        available = await _get_available_integrations(remote_id)
-        updated_integration = next(
-            (i for i in available if i.driver_id == driver_id), None
-        )
-
-        if updated_integration:
-            return jsonify(
-                {
-                    "data": _integration_api_model(updated_integration),
-                    "meta": {"updated": True},
-                }
-            )
-        else:
-            # Fallback: Try to find it in installed integrations list
-            # This shouldn't normally happen, but ensures we return a card
-            _LOG.warning(
-                "Could not find updated driver %s in available list, checking installed",
-                driver_id,
-            )
-            integrations = await _get_installed_integrations(remote_id)
-            integration = next(
-                (i for i in integrations if i.driver_id == driver_id), None
-            )
-
-            if integration:
-                return jsonify(
-                    {
-                        "data": _integration_api_model(integration),
-                        "meta": {"updated": True},
-                    }
-                )
-            else:
-                # Last resort: Create a minimal AvailableIntegration from registry
-                _LOG.error("Could not find driver %s anywhere after update", driver_id)
-                registry = load_registry()
-                registry_item = next(
-                    (item for item in registry if item.get("id") == driver_id), {}
-                )
-                _cat_map = _get_category_name_map()
-                categories_list = [
-                    _cat_map.get(c, c) for c in registry_item.get("categories", [])
-                ]
-                fallback_integration = AvailableIntegration(
-                    driver_id=driver_id,
-                    name=registry_item.get("name", driver_id),
-                    description=registry_item.get("description", ""),
-                    icon=registry_item.get("icon", "puzzle-piece"),
-                    home_page=registry_item.get("repository", ""),
-                    developer=registry_item.get("author", ""),
-                    version="",
-                    category=categories_list[0] if categories_list else "",
-                    categories=categories_list,
-                    installed=False,
-                    driver_installed=True,
-                    external=False,
-                    custom=True,
-                    official=False,
-                    update_available=False,
-                    latest_version="",
-                    instance_id="",
-                    can_update=False,
-                )
-                return jsonify(
-                    {
-                        "data": _integration_api_model(fallback_integration),
-                        "meta": {"updated": True, "stale": True},
-                    }
-                )
-
-    except SyncAPIError as e:
-        _LOG.error("Update failed: %s", e)
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info(
-                "Lock released after SyncAPIError in update_driver for driver %s",
-                driver_id,
-            )
-
-        return _api_error("update_failed", str(e), 502)
-    except Exception as e:
-        _LOG.error("Unexpected error during update: %s", e)
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _operation_lock_acquired_at = None
-            _LOG.info(
-                "Lock released after generic exception in update_driver for driver %s",
-                driver_id,
-            )
-
-        return _api_error("update_failed", str(e), 500)
-    finally:
-        # Safety net: ensure lock is released even on asyncio.CancelledError
-        _operation_in_progress = False
-        _operation_lock_acquired_at = None
 
 
 @app.route("/api/v1/integrations/<driver_id>")
@@ -3448,8 +1939,8 @@ async def update_integration_inplace(driver_id: str):
             "Downloaded %s (%d bytes) for in-place update", filename, len(archive_data)
         )
 
-        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
-            archive_data, filename
+        await _get_active_remote_client().api.post_integration_install(
+            archive_data, filename, update=True
         )  # ty:ignore[unresolved-attribute]
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
 
@@ -3473,7 +1964,7 @@ async def update_integration_inplace(driver_id: str):
             }
         )
 
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
         async with _operation_lock:
             _operation_in_progress = False
@@ -3532,9 +2023,9 @@ async def delete_integration(driver_id: str):
         # Only delete instance if it's actually configured
         if is_configured:
             try:
-                await _get_active_remote_client().delete_instance(instance_id)  # ty:ignore[unresolved-attribute]
+                await _get_active_remote_client().api.delete_integration(instance_id)  # ty:ignore[unresolved-attribute]
                 _LOG.info("Deleted instance: %s", instance_id)
-            except SyncAPIError as e:
+            except UnfurledError as e:
                 _LOG.warning("Failed to delete instance %s: %s", instance_id, e)
 
         # If full delete, also delete the driver
@@ -3543,9 +2034,9 @@ async def delete_integration(driver_id: str):
             await asyncio.sleep(API_DELAY * 2)
 
             try:
-                await _get_active_remote_client().delete_driver(driver_id)  # ty:ignore[unresolved-attribute]
+                await _get_active_remote_client().api.delete_driver(driver_id)  # ty:ignore[unresolved-attribute]
                 _LOG.info("Deleted driver: %s", driver_id)
-            except SyncAPIError as e:
+            except UnfurledError as e:
                 _LOG.error("Failed to delete driver %s: %s", driver_id, e)
                 return jsonify(
                     {"status": "error", "message": f"Failed to delete driver: {e}"}
@@ -3727,7 +2218,9 @@ async def install_integration(driver_id: str):
         _LOG.info("Downloaded %s (%d bytes) for install", filename, len(archive_data))
 
         # Install the integration
-        await _get_active_remote_client().install_integration(archive_data, filename)  # ty:ignore[unresolved-attribute]
+        await _get_active_remote_client().api.post_integration_install(
+            archive_data, filename
+        )  # ty:ignore[unresolved-attribute]
         _LOG.info("Installed integration %s successfully", integration.get("name"))
 
         # Release operation lock
@@ -3770,14 +2263,14 @@ async def install_integration(driver_id: str):
             }
         )
 
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Install failed: %s", e)
 
         # Release operation lock
         async with _operation_lock:
             _operation_in_progress = False
             _LOG.info(
-                "Lock released after SyncAPIError in install_integration for %s",
+                "Lock released after UnfurledError in install_integration for %s",
                 driver_id,
             )
 
@@ -4030,9 +2523,8 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
     Fetches recent releases and filters by migration boundary from registry.
     Shows beta releases if enabled in settings.
 
-    Pass ?self_update=true to use the self-update flow (Integration Manager
-    updating itself via the bootstrapper). In that mode the install URL is
-    /api/self-update and the version filter uses min_compatible_version instead
+    Pass ?self_update=true to use the Integration Manager in-place update
+    flow. In that mode the version filter uses min_compatible_version instead
     of migration_required_at.
     """
     if not _github_client:
@@ -4225,9 +2717,9 @@ async def _do_self_update_inplace(
             len(archive_data),
         )
 
-        await _get_active_remote_client().install_integration_inplace(  # ty:ignore[unresolved-attribute]
-            archive_data, filename
-        )
+        await _get_active_remote_client().api.post_integration_install(
+            archive_data, filename, update=True
+        )  # ty:ignore[unresolved-attribute]
         # Install accepted — remote will restart IM.  Keep _self_update_pending
         # True so /health returns "UPDATING" until the new IM process takes over.
         _LOG.info(
@@ -4247,10 +2739,9 @@ async def self_update_inplace():
     """
     Update Integration Manager in-place using the firmware 2.9.3+ update flag.
 
-    Replaces the complex bootstrapper flow for firmware >= 2.9.3.  The remote's
-    POST /intg/install?update=true preserves the integration's UC_CONFIG_HOME
-    directory, so manager.json and config.json are kept automatically — no
-    serialisation/handoff/restore dance needed.
+    The Remote's POST /intg/install?update=true preserves the integration's
+    UC_CONFIG_HOME directory, so manager.json and config.json are kept
+    automatically.
 
     Queues the background install and returns JSON immediately. The SPA owns
     its pending-state presentation while the Remote restarts the manager.
@@ -4307,10 +2798,8 @@ async def self_update_inplace():
     im_owner, im_repo = parsed
     asset_pattern = manager_entry.get("asset_pattern")
 
-    # Derive pattern from repo name when not set explicitly in the registry.
-    # The release contains both the IM driver and bootstrapper tar.gz; the
-    # bootstrapper sorts first alphabetically so without a pattern we'd pick
-    # the wrong asset.
+    # Derive the manager release asset pattern when the registry does not
+    # provide one explicitly.
     if not asset_pattern:
         asset_pattern = f"{im_repo}.*\\.tar\\.gz"
 
@@ -4323,518 +2812,6 @@ async def self_update_inplace():
     )
 
     return jsonify({"data": {"started": True, "targetVersion": version}})
-
-
-@app.route("/api/v1/self-update/restore", methods=["POST"])
-async def self_update():
-    """
-    Trigger a self-update of Integration Manager via the bootstrapper integration.
-
-    When the remote deletes the IM driver it also wipes the entire UC_CONFIG_HOME
-    directory for that integration — taking manager.json (integration backups,
-    notification settings, UI preferences) and config.json (remote connection
-    credentials) with it.  Both files must therefore be serialised and handed to
-    the bootstrapper *before* deletion so it can restore them after the new
-    version is installed.
-
-    Process:
-    1. Validate and normalise the target version tag
-    2. Locate the bootstrapper entry in the registry (type: "bootstrapper")
-    3. Read manager.json → manager_data  (integration configs, settings)
-       Read config.json  → config_data   (remote connection credentials)
-    4. Download the latest bootstrapper tar.gz from its GitHub release
-    5. Remove any stale bootstrapper installation, then install the fresh copy
-    6. Run the bootstrapper setup flow:
-       a. start_setup()          - initiates setup on the remote
-       b. poll get_setup()       - wait for WAIT_USER_ACTION state
-       c. send_setup_input() with:
-            target_version    - the IM release tag to install (e.g. "v2.1.0")
-            manager_driver_id - our driver_id so bootstrapper knows what to replace
-            manager_data      - serialised manager.json (restored after reinstall)
-            config_data       - serialised config.json  (restored after reinstall)
-          The framework returns SetupComplete after query_device validates the input,
-          saves the config, and schedules the upgrade via verify_connection().
-          No explicit complete_setup() call is needed — the setup state machine
-          is already done by the time send_setup_input returns.
-    7. Release the operation lock (IM is about to be replaced)
-    8. Return a JSON acknowledgement so the SPA can show the pending state while
-       the new IM instance comes back up.
-    """
-    if not _get_active_remote_client() or not _github_client:
-        return jsonify({"status": "error", "message": "Service not initialized"}), 500
-
-    payload = await request.get_json(silent=True) or {}
-    version = payload.get("version") or request.args.get("version")
-    if not version:
-        return jsonify(
-            {"status": "error", "message": "version parameter is required"}
-        ), 400
-
-    # Normalise to tag format (bootstrapper will strip the v itself if needed)
-    if not version.startswith("v"):
-        version = f"v{version}"
-
-    # Check that there is a free integration slot for the bootstrapper.
-    # The Remote enforces a limit of 10 active custom integrations; the upgrade
-    # temporarily installs the bootstrapper as an extra custom driver, so we
-    # need at least one open slot (current count must be < 10).
-    _INTEGRATION_SLOT_LIMIT = 10
-    active_count = await _get_active_remote_client().get_custom_active_drivers_count()  # ty:ignore[unresolved-attribute]
-    if active_count >= _INTEGRATION_SLOT_LIMIT:
-        _LOG.warning(
-            "Self-update aborted: %d/%d integration slots in use — no room for bootstrapper",
-            active_count,
-            _INTEGRATION_SLOT_LIMIT,
-        )
-        return jsonify(
-            {
-                "status": "error",
-                "message": (
-                    f"Cannot upgrade: all {_INTEGRATION_SLOT_LIMIT} integration slots are in use. "
-                    "Please remove a custom integration before updating Integration Manager."
-                ),
-            }
-        ), 409
-
-    # Check operation lock
-    global _operation_in_progress
-    async with _operation_lock:
-        if _operation_in_progress:
-            return jsonify(
-                {"status": "error", "message": "Another install/upgrade is in progress"}
-            ), 409
-        _operation_in_progress = True
-        _LOG.info("Lock acquired for self-update to %s", version)
-
-    try:
-        # --- Step 1: Find the self_managed (IM) registry entry ---
-        # The bootstrapper is now bundled as a release asset in the same repo as IM.
-        registry = load_registry()
-        manager_entry = next(
-            (item for item in registry if item.get("self_managed", False)),
-            None,
-        )
-        if not manager_entry:
-            async with _operation_lock:
-                _operation_in_progress = False
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Self-managed IM entry not found in registry",
-                }
-            ), 404
-
-        manager_repo_url = manager_entry.get("repository", "")
-        if not manager_repo_url or "github.com" not in manager_repo_url:
-            async with _operation_lock:
-                _operation_in_progress = False
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "No GitHub repository found for Integration Manager",
-                }
-            ), 400
-
-        parsed = GitHubClient.parse_github_url(manager_repo_url)
-        if not parsed:
-            async with _operation_lock:
-                _operation_in_progress = False
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Could not parse Integration Manager GitHub URL",
-                }
-            ), 400
-
-        im_owner, im_repo = parsed
-        # Read our own driver_id from driver.json (the live value, not the registry)
-        # so it works correctly with dev IDs like intg_manager_driver_dev.
-        try:
-            _driver_json_path = os.path.join(
-                os.path.dirname(__file__), "..", "driver.json"
-            )
-            with open(_driver_json_path, "r", encoding="utf-8") as _f:
-                manager_driver_id = json.load(_f).get(
-                    "driver_id", "intg_manager_driver"
-                )
-        except Exception:
-            manager_driver_id = manager_entry.get("driver_id", "intg_manager_driver")
-        _LOG.info("Self-update: using manager_driver_id=%s", manager_driver_id)
-        bootstrapper_driver_id = manager_entry.get(
-            "bootstrapper_driver_id", "intg_bootstrapper_driver"
-        )
-        asset_pattern = manager_entry.get(
-            "bootstrapper_asset_pattern", r"uc-intg-bootstrapper.*\.tar\.gz"
-        )
-
-        # --- Step 2: Serialise data files for bootstrapper handoff ---
-        # Deleting the IM driver on the remote wipes its entire UC_CONFIG_HOME, so
-        # both files must be captured now and passed to the bootstrapper which will
-        # write them back after the new version is installed.
-
-        # manager.json – integration backups, notification settings, UI preferences
-        manager_data_str = "{}"
-        try:
-            if os.path.exists(MANAGER_DATA_FILE):
-                with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
-                    manager_data_str = f.read()
-                _LOG.info(
-                    "Read manager.json (%d bytes) for bootstrapper handoff",
-                    len(manager_data_str),
-                )
-        except OSError as e:
-            _LOG.warning("Could not read manager.json for bootstrapper: %s", e)
-
-        # config.json – remote connection credentials (IP, auth tokens, etc.)
-        config_file = os.path.join(DATA_DIR, "config.json")
-        config_data_str = "[]"
-        try:
-            if os.path.exists(config_file):
-                with open(config_file, "r", encoding="utf-8") as f:
-                    config_data_str = f.read()
-                _LOG.info(
-                    "Read config.json (%d bytes) for bootstrapper handoff",
-                    len(config_data_str),
-                )
-        except OSError as e:
-            _LOG.warning("Could not read config.json for bootstrapper: %s", e)
-
-        # --- Step 3: Download bootstrapper ---
-        # Dev override: UC_DEV_BOOTSTRAPPER_URL skips GitHub and fetches from a local URL.
-        dev_bootstrapper_url = os.getenv("UC_DEV_BOOTSTRAPPER_URL", "")
-        if dev_bootstrapper_url:
-            _LOG.warning(
-                "UC_DEV_BOOTSTRAPPER_URL set — downloading bootstrapper from %s",
-                dev_bootstrapper_url,
-            )
-            try:
-                async with aiohttp.ClientSession() as _dev_session:
-                    async with _dev_session.get(
-                        dev_bootstrapper_url,
-                        timeout=aiohttp.ClientTimeout(connect=10, total=120),
-                    ) as _dev_resp:
-                        if _dev_resp.status != 200:
-                            raise SyncAPIError(
-                                f"Dev bootstrapper download failed: HTTP {_dev_resp.status}"
-                            )
-                        archive_data = await _dev_resp.read()
-                filename = (
-                    dev_bootstrapper_url.rstrip("/").split("/")[-1]
-                    or "bootstrapper.tar.gz"
-                )
-                _LOG.info(
-                    "Dev-downloaded bootstrapper %s (%d bytes)",
-                    filename,
-                    len(archive_data),
-                )
-            except aiohttp.ClientError as exc:
-                async with _operation_lock:
-                    _operation_in_progress = False
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Dev bootstrapper download error: {exc}",
-                    }
-                ), 500
-        else:
-            # The bootstrapper is bundled as an asset in the same GitHub release as IM.
-            _LOG.info(
-                "Downloading bootstrapper from %s/%s @ %s", im_owner, im_repo, version
-            )
-            download_result = await _github_client.download_release_asset(
-                im_owner, im_repo, asset_pattern=asset_pattern, version=version
-            )
-            if not download_result:
-                async with _operation_lock:
-                    _operation_in_progress = False
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"No bootstrapper asset found in release {version} at {im_owner}/{im_repo}",
-                    }
-                ), 404
-            archive_data, filename = download_result
-
-        _LOG.info("Downloaded bootstrapper %s (%d bytes)", filename, len(archive_data))
-
-        # --- Step 4: Install bootstrapper ---
-        # Delete any stale bootstrapper first (ignore errors)
-        try:
-            await _get_active_remote_client().delete_driver(bootstrapper_driver_id)  # ty:ignore[unresolved-attribute]
-            await asyncio.sleep(API_DELAY)
-        except SyncAPIError:
-            pass  # Not installed yet — fine
-
-        await _get_active_remote_client().install_integration(archive_data, filename)  # ty:ignore[unresolved-attribute]
-        _LOG.info("Bootstrapper installed")
-        await asyncio.sleep(API_DELAY * 3)
-
-        # --- Step 5: Run bootstrapper setup flow ---
-        # Start setup (new install, reconfigure=False)
-        await _get_active_remote_client().start_setup(  # ty:ignore[unresolved-attribute]
-            bootstrapper_driver_id, reconfigure=False
-        )
-        _LOG.info("Bootstrapper setup started")
-        await asyncio.sleep(API_DELAY * 3)
-
-        # Step 5a: Wait for first WAIT_USER_ACTION (restore_from_backup screen)
-        # BaseSetupFlow always injects this screen first.
-        setup_state = ""
-        for _ in range(6):
-            setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                bootstrapper_driver_id
-            )
-            setup_state = setup_response.get("state", "")
-            if setup_state == "WAIT_USER_ACTION":
-                break
-            await asyncio.sleep(API_DELAY * 3)
-
-        if setup_state != "WAIT_USER_ACTION":
-            raise SyncAPIError(
-                f"Bootstrapper did not reach WAIT_USER_ACTION (state: {setup_state!r})"
-            )
-
-        # Step 5b: Answer restore_from_backup = true
-        _LOG.info("Bootstrapper setup: answering restore_from_backup=true")
-        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-            bootstrapper_driver_id, {"restore_from_backup": "true"}
-        )
-        await asyncio.sleep(API_DELAY * 3)
-
-        # Step 5c: Wait for second WAIT_USER_ACTION (manual entry form)
-        setup_state = ""
-        for _ in range(6):
-            setup_response = await _get_active_remote_client().get_setup(  # ty:ignore[unresolved-attribute]
-                bootstrapper_driver_id
-            )
-            setup_state = setup_response.get("state", "")
-            if setup_state == "WAIT_USER_ACTION":
-                break
-            await asyncio.sleep(API_DELAY * 3)
-
-        if setup_state != "WAIT_USER_ACTION":
-            raise SyncAPIError(
-                f"Bootstrapper did not reach second WAIT_USER_ACTION (state: {setup_state!r})"
-            )
-
-        # Step 5d: Send the actual payload packed into restore_data
-        # The framework's _handle_restore_response reads only restore_data;
-        # we pack all four fields as a JSON object inside it so the bootstrapper
-        # can unpack them in its _handle_restore_response override.
-        restore_payload = json.dumps(
-            {
-                "target_version": version,
-                "manager_driver_id": manager_driver_id,
-                "manager_data": manager_data_str,
-                "config_data": config_data_str,
-            }
-        )
-        _LOG.info(
-            "Sending bootstrapper setup payload: target_version=%s, manager_driver_id=%s",
-            version,
-            manager_driver_id,
-        )
-        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-            bootstrapper_driver_id, {"restore_data": restore_payload}
-        )
-        await asyncio.sleep(API_DELAY * 2)
-        _LOG.info(
-            "Bootstrapper setup input sent — self-update underway for %s", version
-        )
-
-        # Release lock — IM is about to be replaced, no point holding it
-        async with _operation_lock:
-            _operation_in_progress = False
-
-        return jsonify({"data": {"started": True, "targetVersion": version}})
-
-    except SyncAPIError as e:
-        _LOG.error("Self-update failed (SyncAPIError): %s", e)
-        async with _operation_lock:
-            _operation_in_progress = False
-        return jsonify({"status": "error", "message": str(e)}), 500
-    except Exception as e:
-        _LOG.error("Self-update failed: %s", e)
-        async with _operation_lock:
-            _operation_in_progress = False
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-@app.route("/api/dev/test-bootstrapper-setup", methods=["POST"])
-async def dev_test_bootstrapper_setup():
-    """
-    DEV-ONLY: Drive the bootstrapper setup flow without going through the full
-    self_update() path (no registry lookup, no GitHub download, no bootstrapper
-    reinstall).
-
-    Requires the env var ``UC_DEV_MODE=true`` — returns 404 otherwise so it
-    cannot be hit in production.
-
-    Assumptions:
-    - The bootstrapper is already installed on the remote and ready to receive
-      setup (start_setup has NOT been called yet, or the previous setup was
-      aborted).
-    - manager.json and config.json are present on disk at their normal paths.
-
-    Query / form parameters (all optional — sensible defaults are derived):
-        bootstrapper_driver_id  default: "intg_bootstrapper_driver"
-        manager_driver_id       default: read from MANAGER_DATA_FILE or falls
-                                         back to the first self_managed registry entry
-        target_version          default: "v0.0.0-dev" (bootstrapper ignores the
-                                         actual value during a restore-only test)
-        skip_upgrade            default: "true"  — when "true" the bootstrapper's
-                                         _run_upgrade is short-circuited by passing
-                                         a sentinel target_version so it exits after
-                                         the restore step (see device.py TODO below)
-
-    Returns JSON progress log so you can watch each step.
-    """
-    if os.getenv("UC_DEV_MODE", "").lower() not in ("true", "1", "yes"):
-        return jsonify({"status": "error", "message": "Not found"}), 404
-
-    if not _get_active_remote_client():
-        return jsonify({"status": "error", "message": "Service not initialized"}), 500
-
-    form = await request.form
-    args = request.args
-
-    def _param(name: str, default: str = "") -> str:
-        return (args.get(name) or form.get(name) or default).strip()
-
-    bootstrapper_driver_id = _param(
-        "bootstrapper_driver_id", "intg_bootstrapper_driver"
-    )
-    target_version = _param("target_version", "v0.0.0-dev")
-
-    # Derive manager_driver_id: prefer explicit param, then read from registry
-    manager_driver_id = _param("manager_driver_id")
-    if not manager_driver_id:
-        try:
-            registry = load_registry()
-            entry = next((r for r in registry if r.get("self_managed")), None)
-            if entry:
-                manager_driver_id = entry.get("actual_driver_id") or entry.get("id", "")
-        except Exception:  # pylint: disable=broad-except
-            pass
-    if not manager_driver_id:
-        return jsonify(
-            {
-                "status": "error",
-                "message": "Could not determine manager_driver_id — pass it explicitly",
-            }
-        ), 400
-
-    steps: list[str] = []
-
-    def log_step(msg: str) -> None:
-        _LOG.info("[DEV test-bootstrapper-setup] %s", msg)
-        steps.append(msg)
-
-    try:
-        log_step(
-            f"Parameters: bootstrapper={bootstrapper_driver_id!r}  manager={manager_driver_id!r}  version={target_version!r}"
-        )
-
-        # --- Read config files from disk (same as self_update does) ---
-        manager_data_str = "{}"
-        try:
-            if os.path.exists(MANAGER_DATA_FILE):
-                with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
-                    manager_data_str = f.read()
-            log_step(f"Read manager.json ({len(manager_data_str)} bytes)")
-        except OSError as e:
-            log_step(f"WARNING: could not read manager.json: {e}")
-
-        config_data_str = "[]"
-        config_json_path = os.path.join(DATA_DIR, "config.json")
-        try:
-            if os.path.exists(config_json_path):
-                with open(config_json_path, "r", encoding="utf-8") as f:
-                    config_data_str = f.read()
-            log_step(f"Read config.json ({len(config_data_str)} bytes)")
-        except OSError as e:
-            log_step(f"WARNING: could not read config.json: {e}")
-
-        # --- Step 1: start_setup ---
-        log_step(f"Calling start_setup({bootstrapper_driver_id!r}) …")
-        await _get_active_remote_client().start_setup(  # ty:ignore[unresolved-attribute]
-            bootstrapper_driver_id, reconfigure=False
-        )
-        await asyncio.sleep(API_DELAY * 3)
-
-        # --- Step 2: poll for first WAIT_USER_ACTION (restore_from_backup screen) ---
-        setup_state = ""
-        for attempt in range(5):
-            resp = await _get_active_remote_client().get_setup(bootstrapper_driver_id)  # ty:ignore[unresolved-attribute]
-            setup_state = resp.get("state", "")
-            log_step(f"  attempt {attempt + 1}: state={setup_state!r}")
-            if setup_state == "WAIT_USER_ACTION":
-                break
-            await asyncio.sleep(API_DELAY * 3)
-
-        if setup_state != "WAIT_USER_ACTION":
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": f"Bootstrapper did not reach WAIT_USER_ACTION (last state: {setup_state!r})",
-                    "steps": steps,
-                }
-            ), 500
-
-        # --- Step 3: answer restore_from_backup = true ---
-        log_step("Answering restore_from_backup=true …")
-        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-            bootstrapper_driver_id, {"restore_from_backup": "true"}
-        )
-        await asyncio.sleep(API_DELAY * 3)
-
-        # --- Step 4: poll for second WAIT_USER_ACTION (manual entry form) ---
-        setup_state = ""
-        for attempt in range(5):
-            resp = await _get_active_remote_client().get_setup(bootstrapper_driver_id)  # ty:ignore[unresolved-attribute]
-            setup_state = resp.get("state", "")
-            log_step(
-                f"  attempt {attempt + 1} (post-restore toggle): state={setup_state!r}"
-            )
-            if setup_state == "WAIT_USER_ACTION":
-                break
-            await asyncio.sleep(API_DELAY * 3)
-
-        if setup_state != "WAIT_USER_ACTION":
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": f"Bootstrapper did not reach second WAIT_USER_ACTION (last state: {setup_state!r})",
-                    "steps": steps,
-                }
-            ), 500
-
-        log_step("Bootstrapper ready — sending setup payload …")
-
-        # --- Step 5: send the actual data packed into restore_data ---
-        restore_payload = json.dumps(
-            {
-                "target_version": target_version,
-                "manager_driver_id": manager_driver_id,
-                "manager_data": manager_data_str,
-                "config_data": config_data_str,
-            }
-        )
-        await _get_active_remote_client().send_setup_input(  # ty:ignore[unresolved-attribute]
-            bootstrapper_driver_id, {"restore_data": restore_payload}
-        )
-        await asyncio.sleep(API_DELAY * 2)
-
-        log_step(
-            "setup_input sent — bootstrapper should now be running verify_connection / _run_upgrade"
-        )
-        log_step("Watch the bootstrapper logs on the remote for further progress.")
-
-        return jsonify({"status": "ok", "steps": steps})
-
-    except Exception as e:  # pylint: disable=broad-except
-        _LOG.error("[DEV test-bootstrapper-setup] failed: %s", e)
-        return jsonify({"status": "error", "message": str(e), "steps": steps}), 500
 
 
 @app.route("/api/v1/versions/check", methods=["POST"])
@@ -4985,7 +2962,11 @@ async def get_status():
         return jsonify({"online": False, "docked": None, "server": None})
 
     try:
-        is_docked = await _get_active_remote_client().is_docked()  # ty:ignore[unresolved-attribute]
+        charger = await _get_active_remote_client().api.get_charger()  # ty:ignore[unresolved-attribute]
+        is_docked = bool(
+            charger.get("power_supply", False)
+            or charger.get("wireless_charging", False)
+        )
         return jsonify({"online": True, "docked": is_docked, "server": "running"})
     except Exception as e:
         return jsonify(
@@ -5019,9 +3000,11 @@ async def api_v1_get_settings():
                 "settings": Settings.load(remote_id=get_active_remote_id()).to_dict(),
                 "preferences": UIPreferences.load().to_dict(),
                 "runtime": {
-                    "remoteAddress": getattr(
-                        _get_active_remote_client(), "_address", None
-                    ),
+                    "remoteAddress": _remote_configs.get(
+                        get_active_remote_id()
+                    ).address
+                    if get_active_remote_id() in _remote_configs
+                    else None,
                     "webServerPort": WEB_SERVER_PORT,
                     "external": _is_external_runtime(),
                 },
@@ -5067,9 +3050,11 @@ async def api_v1_save_settings():
                 "settings": settings.to_dict(),
                 "preferences": ui_prefs.to_dict(),
                 "runtime": {
-                    "remoteAddress": getattr(
-                        _get_active_remote_client(), "_address", None
-                    ),
+                    "remoteAddress": _remote_configs.get(
+                        get_active_remote_id()
+                    ).address
+                    if get_active_remote_id() in _remote_configs
+                    else None,
                     "webServerPort": WEB_SERVER_PORT,
                     "external": _is_external_runtime(),
                 },
@@ -5629,7 +3614,7 @@ async def api_v1_integration_log_services():
     if not client or not is_remote_online(get_active_remote_id()):
         return jsonify({"data": []})
     try:
-        services = await client.get_log_services()
+        services = await client.api.get_log_services()
         return jsonify(
             {
                 "data": [
@@ -5642,7 +3627,7 @@ async def api_v1_integration_log_services():
                 ]
             }
         )
-    except SyncAPIError as e:
+    except UnfurledError as e:
         return _api_error("log_services_unavailable", str(e), 502)
 
 
@@ -5662,7 +3647,7 @@ async def api_v1_integration_logs():
     try:
         entries = []
         for service in services:
-            logs = await client.get_logs(
+            logs = await client.api.get_logs(
                 priority=priority,
                 service=service,
                 limit=max(200, 1000 // len(services)),
@@ -5674,7 +3659,7 @@ async def api_v1_integration_logs():
                 )
         entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         return jsonify({"data": entries[:1000]})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         return _api_error("logs_unavailable", str(e), 502)
 
 
@@ -5713,7 +3698,7 @@ async def download_integration_logs():
 
     try:
         if len(services) == 1:
-            log_text = await _get_active_remote_client().get_logs(  # ty:ignore[unresolved-attribute]
+            log_text = await _get_active_remote_client().api.get_logs(  # ty:ignore[unresolved-attribute]
                 priority=priority,
                 service=services[0],
                 limit=10000,
@@ -5727,7 +3712,7 @@ async def download_integration_logs():
             # Fetch each service as text and concatenate
             parts = []
             for svc in services:
-                svc_text = await _get_active_remote_client().get_logs(  # ty:ignore[unresolved-attribute]
+                svc_text = await _get_active_remote_client().api.get_logs(  # ty:ignore[unresolved-attribute]
                     priority=priority,
                     service=svc,
                     limit=10000,
@@ -5743,7 +3728,7 @@ async def download_integration_logs():
             mimetype="text/plain",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to download integration logs: %s", e)
         return f"Failed to download logs: {e}", 500
 
@@ -5832,7 +3817,7 @@ async def system_update_check():
     if not client:
         return jsonify({"success": False, "message": "No remote connected"}), 503
     try:
-        update_info = await client.check_system_update()
+        update_info = await client.api.put_system_update()
         remote_id = get_active_remote_id()
         if remote_id:
             _system_update_cache[remote_id] = update_info
@@ -5857,7 +3842,7 @@ async def system_update_check():
                 "update_available": False,
             }
         )
-    except SyncAPIError as e:
+    except UnfurledError as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -5868,7 +3853,7 @@ async def api_v1_system_update_check():
     if not client:
         return _api_error("remote_unavailable", "No remote connected", 503)
     try:
-        update_info = await client.check_system_update()
+        update_info = await client.api.put_system_update()
         available = update_info.get("available", [])
         latest = available[0] if available else {}
         return jsonify(
@@ -5882,7 +3867,7 @@ async def api_v1_system_update_check():
                 }
             }
         )
-    except SyncAPIError as e:
+    except UnfurledError as e:
         return _api_error("firmware_check_failed", str(e), 502)
 
 
@@ -5895,7 +3880,7 @@ async def get_orphaned_entities():
         return _api_error("remote_offline", "The active remote is offline", 503)
 
     try:
-        orphaned_entities = await _get_active_remote_client().find_orphan_entities()  # ty:ignore[unresolved-attribute]
+        orphaned_entities = await _get_active_remote_client().helpers.find_orphaned_entities()  # ty:ignore[unresolved-attribute]
         _LOG.debug("Orphaned entities data: %s", orphaned_entities)
 
         # Group entities by activity for display
@@ -5928,7 +3913,7 @@ async def get_orphaned_entities():
             activities[activity_id]["entities"].append(entity_copy)
 
         return jsonify({"data": {"activities": activities}})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to fetch orphaned entities: %s", e)
         return _api_error("orphaned_entities_unavailable", str(e), 502)
 
@@ -5940,7 +3925,7 @@ async def get_unused_activity_entities():
         return jsonify({"data": {"activities": {}}})
 
     try:
-        unused = await _get_active_remote_client().find_unused_entities()  # ty:ignore[unresolved-attribute]
+        unused = await _get_active_remote_client().helpers.find_unused_activity_entities()  # ty:ignore[unresolved-attribute]
         _LOG.debug("Unused activity entities data: %s", unused)
 
         # Group by activity for display
@@ -5969,7 +3954,7 @@ async def get_unused_activity_entities():
             activities[activity_id]["entities"].append(entity_copy)
 
         return jsonify({"data": {"activities": activities}})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to fetch unused activity entities: %s", e)
         return _api_error("unused_entities_unavailable", str(e), 502)
 
@@ -5984,11 +3969,11 @@ async def get_orphaned_ir_codesets():
         return _api_error("remote_offline", "The active remote is offline", 503)
 
     try:
-        orphaned_codesets = await find_orphaned_ir_codesets(client)
+        orphaned_codesets = await client.helpers.find_orphaned_ir_codesets()
         _LOG.debug("Found %d orphaned IR codesets", len(orphaned_codesets))
 
         return jsonify({"data": orphaned_codesets})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to fetch orphaned IR codesets: %s", e)
         return _api_error("orphaned_codesets_unavailable", str(e), 502)
 
@@ -6000,10 +3985,10 @@ async def delete_ir_codeset(device_id: str):
         return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
-        await _get_active_remote_client().delete_custom_ir_codeset(device_id)  # ty:ignore[unresolved-attribute]
+        await _get_active_remote_client().api.delete_ir_custom_code(device_id)  # ty:ignore[unresolved-attribute]
         _LOG.info("Deleted IR codeset: %s", device_id)
         return jsonify({"data": {"deleted": True, "deviceId": device_id}})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to delete IR codeset %s: %s", device_id, e)
         return _api_error("codeset_delete_failed", str(e), 502)
 
@@ -6030,7 +4015,9 @@ async def reassociate_ir_codeset():
             )
 
         # Create remote with custom codeset ID
-        await _get_active_remote_client().create_remote(remote_name, device_id)  # ty:ignore[unresolved-attribute]
+        await _get_active_remote_client().api.post_remote(  # ty:ignore[unresolved-attribute]
+            {"name": {"en": remote_name}, "codeset_id": device_id}
+        )
 
         _LOG.info("Created remote '%s' for codeset %s", remote_name, device_id)
         return jsonify(
@@ -6042,7 +4029,7 @@ async def reassociate_ir_codeset():
                 }
             }
         )
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to reassociate IR codeset: %s", e)
         return _api_error("codeset_reassociation_failed", str(e), 502)
 
@@ -6054,9 +4041,9 @@ async def system_reboot():
         return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
-        await _get_active_remote_client().reboot_remote()  # ty:ignore[unresolved-attribute]
+        await _get_active_remote_client().api.post_system_command("REBOOT")  # ty:ignore[unresolved-attribute]
         return jsonify({"data": {"sent": True, "message": "Reboot command sent"}})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to reboot remote: %s", e)
         return _api_error("reboot_failed", str(e), 502)
 
@@ -6068,9 +4055,9 @@ async def system_power_off():
         return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
-        await _get_active_remote_client().power_off_remote()  # ty:ignore[unresolved-attribute]
+        await _get_active_remote_client().api.post_system_command("POWER_OFF")  # ty:ignore[unresolved-attribute]
         return jsonify({"data": {"sent": True, "message": "Power off command sent"}})
-    except SyncAPIError as e:
+    except UnfurledError as e:
         _LOG.error("Failed to power off remote: %s", e)
         return _api_error("power_off_failed", str(e), 502)
 
@@ -6422,8 +4409,8 @@ class WebServer:
         _remote_configs.clear()
         for config in remote_configs:
             _remote_configs[config.identifier] = config
-            _remote_clients[config.identifier] = RemoteClient(
-                address=config.address,
+            _remote_clients[config.identifier] = Remote(
+                f"http://{config.address}:80/api/",
                 pin=config.pin,
                 api_key=config.api_key,
             )
@@ -6547,8 +4534,8 @@ class WebServer:
 
         for config in remote_configs:
             _remote_configs[config.identifier] = config
-            _remote_clients[config.identifier] = RemoteClient(
-                address=config.address,
+            _remote_clients[config.identifier] = Remote(
+                f"http://{config.address}:80/api/",
                 pin=config.pin,
                 api_key=config.api_key,
             )
@@ -6604,8 +4591,8 @@ class WebServer:
             return
 
         try:
-            is_online = await client.test_connection()
-            set_remote_online(remote_id, is_online)
+            await client.api.get_version()
+            set_remote_online(remote_id, True)
         except Exception as e:
             _LOG.warning("[%s] Connectivity check failed: %s", remote_id, e)
             set_remote_online(remote_id, False)
@@ -6814,7 +4801,7 @@ class WebServer:
             return
 
         try:
-            orphaned_entities = await client.find_orphan_entities()
+            orphaned_entities = await client.helpers.find_orphaned_entities()
             _LOG.debug(
                 "[%s] Found %d orphaned entities",
                 remote_id,
@@ -6868,7 +4855,7 @@ class WebServer:
                         list(notification_manager._notified_orphaned_activities)
                     )
 
-        except SyncAPIError as e:
+        except UnfurledError as e:
             _LOG.warning("[%s] Failed to check for orphaned entities: %s", remote_id, e)
         except Exception as e:
             _LOG.error(
@@ -6893,7 +4880,7 @@ class WebServer:
 
         try:
             _LOG.debug("[%s] Checking for orphaned entities...", remote_id)
-            orphaned_entities = await client.find_orphan_entities()
+            orphaned_entities = await client.helpers.find_orphaned_entities()
             _LOG.debug(
                 "[%s] Found %d orphaned entities",
                 remote_id,
@@ -6948,7 +4935,7 @@ class WebServer:
                         list(notification_manager._notified_orphaned_activities)
                     )
 
-        except SyncAPIError as e:
+        except UnfurledError as e:
             _LOG.warning("Failed to check for orphaned entities: %s", e)
         except Exception as e:
             _LOG.warning("Error checking orphaned entities: %s", e)

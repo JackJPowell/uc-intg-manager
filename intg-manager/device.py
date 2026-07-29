@@ -24,7 +24,8 @@ from const import (
     WEB_SERVER_PORT,
     MANAGER_DATA_FILE,
 )
-from remote_api import RemoteAPIClient, RemoteAPIError
+from unfurled.api import CoreAPI
+from unfurled.helpers.exceptions import UnfurledError as RemoteAPIError
 from web_server import (
     WebServer,
     set_firmware_version,
@@ -84,9 +85,9 @@ class IntegrationManagerDevice(PollingDevice):
         # Load user settings for this remote
         self._settings = Settings.load(remote_id=device_config.identifier)
 
-        # Initialize the Remote API client
-        self._client = RemoteAPIClient(
-            address=device_config.address,
+        # Keep one unfurled client per configured Remote for polling.
+        self._client = CoreAPI(
+            f"http://{device_config.address}:80/api/",
             pin=device_config.pin if device_config.pin else None,
             api_key=device_config.api_key if device_config.api_key else None,
         )
@@ -243,20 +244,35 @@ class IntegrationManagerDevice(PollingDevice):
     # Connection Management
     # =========================================================================
 
+    async def _test_remote_connection(self) -> bool:
+        """Return whether the Remote responds to its public version endpoint."""
+        try:
+            await self._client.get_version()
+            return True
+        except RemoteAPIError:
+            return False
+
+    async def _get_dock_state(self) -> bool:
+        """Return whether the Remote is docked or wirelessly charging."""
+        charger = await self._client.get_charger()
+        return bool(
+            charger.get("power_supply", False) or charger.get("wireless_charging", False)
+        )
+
     async def establish_connection(self) -> None:
         """Establish connection to the remote (required by PollingDevice)."""
         _LOG.debug("[%s] Connecting to remote at %s", self.log_id, self.address)
 
         try:
             # Test connection
-            if await self._client.test_connection():
+            if await self._test_remote_connection():
                 self._connected = True
                 set_remote_online(self.identifier, True)
                 _LOG.info("[%s] Connected to remote", self.log_id)
 
                 # Fetch and cache firmware version for inplace-update capability checks
                 try:
-                    fw_version = await self._client.get_firmware_version()
+                    fw_version = str((await self._client.get_version()).get("os", "0.0.0"))
                     set_firmware_version(self.identifier, fw_version)
                     _LOG.info("[%s] Firmware version: %s", self.log_id, fw_version)
                 except Exception as e:
@@ -289,7 +305,7 @@ class IntegrationManagerDevice(PollingDevice):
                         config_home,
                     )
                     try:
-                        self._is_docked = await self._client.is_docked()
+                        self._is_docked = await self._get_dock_state()
                         if self._is_docked:
                             _LOG.info(
                                 "[%s] Remote is charging at startup (dock or wireless)",
@@ -376,7 +392,7 @@ class IntegrationManagerDevice(PollingDevice):
         _LOG.debug("[%s] Verifying connection to remote", self.log_id)
 
         try:
-            if await self._client.test_connection():
+            if await self._test_remote_connection():
                 self._connected = True
                 set_remote_online(self.identifier, True)
                 _LOG.debug("[%s] Connection verified", self.log_id)
@@ -450,7 +466,7 @@ class IntegrationManagerDevice(PollingDevice):
             # Skip dock polling in external/Docker mode - web server always runs
             if not self._is_external:
                 was_docked = self._is_docked
-                self._is_docked = await self._client.is_docked()
+                self._is_docked = await self._get_dock_state()
 
                 # Handle dock state changes
                 if self._is_docked and not was_docked:

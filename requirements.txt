@@ -12,7 +12,7 @@ hypercorn>=0.18.0
 # HTTP clients
 aiohttp>=3.9.0
 requests>=2.31.0
-unfurled>=0.2.1
+unfurled>=0.2.2
 
 #Other dependencies
 packaging>=25.0

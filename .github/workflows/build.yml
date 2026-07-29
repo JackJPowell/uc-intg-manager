@@ -60,7 +60,6 @@ jobs:
             "cd /workspace && \
               python -m pip install -r requirements.txt && \
               pyinstaller --clean --onedir --name intg-${DRIVER_ID} --collect-all zeroconf \
-                --add-data 'intg-${INTG_NAME}/templates:templates' \
                 --add-data 'intg-${INTG_NAME}/static:static' \
                 intg-${INTG_NAME}/driver.py"
 
@@ -71,6 +70,7 @@ jobs:
           mv dist/intg-${{ env.DRIVER_ID }}/* artifacts/bin
           mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
           cp driver.json artifacts/
+          cp intg-manager/static/img/intg-manager.png artifacts/
           echo "ARTIFACT_NAME=uc-intg-manager-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
 
       - name: Create upload artifact archive
@@ -87,38 +87,6 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Build Bootstrapper
-        run: |
-          BOOTSTRAPPER_DRIVER_ID=$(jq .driver_id -r intg-bootstrapper/driver.json)
-          docker run --rm --name builder-bootstrapper \
-            --platform=aarch64 \
-            --user=$(id -u):$(id -g) \
-            -v ${GITHUB_WORKSPACE}:/workspace \
-            docker.io/unfoldedcircle/r2-pyinstaller:${PYTHON_VER} \
-            bash -c \
-            "cd /workspace && \
-              python -m pip install -r requirements.txt && \
-              pyinstaller --clean -y --onedir --name ${BOOTSTRAPPER_DRIVER_ID} \
-                intg-bootstrapper/driver.py"
-          mkdir -p artifacts-bootstrapper/bin
-          mv dist/${BOOTSTRAPPER_DRIVER_ID}/* artifacts-bootstrapper/bin
-          mv artifacts-bootstrapper/bin/${BOOTSTRAPPER_DRIVER_ID} artifacts-bootstrapper/bin/driver
-          cp intg-bootstrapper/driver.json artifacts-bootstrapper/
-
-      - name: Create Bootstrapper upload artifact archive
-        shell: bash
-        run: |
-          tar czvf uc-intg-bootstrapper-${{ env.VERSION }}-aarch64.tar.gz -C ${GITHUB_WORKSPACE}/artifacts-bootstrapper .
-          ls -lah
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: uc-intg-bootstrapper-${{ env.VERSION }}-aarch64
-          path: uc-intg-bootstrapper-${{ env.VERSION }}-aarch64.tar.gz
-          if-no-files-found: error
-          retention-days: 3
-
-  docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-24.04
     needs: [build]
