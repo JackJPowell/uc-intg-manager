@@ -1,6 +1,13 @@
 # Triggered by version tag creation to build a distribution binary, Docker image, and create a release draft
 name: "Build & Draft Release"
 
+# Release jobs must never race to publish the same tag or manually requested
+# version.  Do not cancel an active release: a partially published artifact or
+# container image is harder to recover from than a queued release.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 "on":
   push:
     tags:
@@ -15,7 +22,10 @@ name: "Build & Draft Release"
 env:
   INTG_NAME: manager
   # Python version to use in the builder image. See https://hub.docker.com/r/unfoldedcircle/r2-pyinstaller for possible versions.
-  PYTHON_VER: 3.11.12-0.3.0
+  PYTHON_VER: 3.11.13-0.7.0
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -25,12 +35,14 @@ jobs:
     outputs:
       version: ${{ steps.get-version-and-id.outputs.VERSION }}
       driver_id: ${{ steps.get-version-and-id.outputs.DRIVER_ID }}
+      prerelease: ${{ steps.get-version-and-id.outputs.IS_PRERELEASE }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # History of 200 should be more than enough to calculate commit count since last release tag
           fetch-depth: 200
+          persist-credentials: false
 
       - name: Get version and id
         #Id needed for env output variable
@@ -44,17 +56,34 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_ENV
+          # SemVer prereleases have a hyphenated pre-release identifier, e.g.
+          # 2.1.0-beta.1 or 2.1.0-b1. Only stable releases may move :latest.
+          if [[ "$VERSION" == *-* ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
           # Save to Github output to later use it in Create Release job
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
+          echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+      - name: Verify driver.json version for tag release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          DRIVER_VERSION="$(jq -r .version driver.json)"
+          if [ "$VERSION" != "$DRIVER_VERSION" ]; then
+            echo "Version in driver.json ($DRIVER_VERSION) does not match release tag ($VERSION)."
+            exit 1
+          fi
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -67,7 +96,7 @@ jobs:
           npm --prefix ui run build
 
       - name: Test Python project
-        run: uv run --group dev pytest intg-manager/tests -q
+        run: uv run --frozen --group dev pytest intg-manager/tests -q
 
       - name: Export locked runtime dependencies
         run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements-build.txt
@@ -108,7 +137,7 @@ jobs:
           tar czvf ${{ env.ARTIFACT_NAME }}.tar.gz -C ${GITHUB_WORKSPACE}/artifacts .
           ls -lah
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         id: upload_artifact
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -125,7 +154,9 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -144,10 +175,10 @@ jobs:
           images: ghcr.io/${{ github.repository_owner }}/uc-intg-${{ env.INTG_NAME }}
           tags: |
             type=raw,value=v${{ needs.build.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -164,7 +195,9 @@ jobs:
 
     steps:
       - name: Checkout (for CHANGELOG)
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Extract release notes from CHANGELOG
         id: release_notes
@@ -181,7 +214,7 @@ jobs:
           cat /tmp/release/release_notes.md
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: uc-intg-manager-${{ needs.build.outputs.version }}-aarch64
           path: release-assets
@@ -191,22 +224,12 @@ jobs:
           filename="release-assets/uc-intg-manager-${{ needs.build.outputs.version }}-aarch64.tar.gz"
           sha256sum "$filename" > "${{ needs.build.outputs.driver_id }}.hash"
 
-      - name: Check if pre-release
-        id: prerelease_check
-        run: |
-          VERSION="${{needs.build.outputs.version}}"
-          if echo "$VERSION" | grep -qE '(b[0-9]|beta)'; then
-            echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
-          else
-            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Create release
         uses: ncipollo/release-action@v1
         with:
           artifacts: "release-assets/*.tar.gz,${{needs.build.outputs.driver_id}}.hash"
           draft: false
-          prerelease: ${{steps.prerelease_check.outputs.IS_PRERELEASE}}
+          prerelease: ${{ needs.build.outputs.prerelease }}
           bodyFile: /tmp/release/release_notes.md
           artifactErrorsFailBuild: true
           tag: v${{needs.build.outputs.version}}

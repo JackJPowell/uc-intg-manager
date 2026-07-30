@@ -173,7 +173,7 @@ def test_release_workflow_builds_only_the_manager_and_packages_its_icon():
     assert "intg-${INTG_NAME}/templates:templates" not in workflow
     assert "\n  docker:\n" in workflow
     assert "npm --prefix ui run build" in workflow
-    assert "uv run --group dev pytest intg-manager/tests -q" in workflow
+    assert "uv run --frozen --group dev pytest intg-manager/tests -q" in workflow
     assert "uv export --frozen --no-dev" in workflow
     assert "-resize 90x90" in workflow
 
@@ -268,6 +268,15 @@ def test_inplace_update_clears_stale_release_data_before_the_spa_refetches():
     ).read_text(encoding="utf-8")
     assert "_get_version_cache(remote_id).pop(integration.driver_id, None)" in server
     assert "queryClient.refetchQueries({ queryKey: [mode, 'integrations'], type: 'active' })" in collection
+
+
+def test_prerelease_images_do_not_move_the_latest_tag():
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'if [[ "$VERSION" == *-* ]]; then' in workflow
+    assert "prerelease: ${{ needs.build.outputs.prerelease }}" in workflow
+    assert "type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}" in workflow
 
 
 def test_manager_logs_are_part_of_the_mobile_navigation_list():
