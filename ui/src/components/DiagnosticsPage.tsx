@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, ChevronRight, CircleCheck, Cpu, Download, ExternalLink, Link2, Power, RefreshCw, ShieldAlert, Trash2, TriangleAlert, Wrench } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, type DiagnosticActivityResult, type DiagnosticEntity, type IrCodeset } from '../lib/api'
 import { Modal } from './Modal'
 
@@ -32,24 +32,32 @@ export function DiagnosticsPage() {
   const [remoteName, setRemoteName] = useState('')
   const [confirmPowerOff, setConfirmPowerOff] = useState(false)
   const [confirmFirmwareUpdate, setConfirmFirmwareUpdate] = useState(false)
+  const [firmwareUpdateActive, setFirmwareUpdateActive] = useState(false)
   const [codesetToDelete, setCodesetToDelete] = useState<IrCodeset | null>(null)
   const firmware = useQuery({ queryKey: ['diagnostics', 'firmware'], queryFn: api.checkFirmware })
-  const firmwareProgress = useQuery({ queryKey: ['diagnostics', 'firmware-progress'], queryFn: api.firmwareUpdateStatus, refetchInterval: 2_000 })
+  const firmwareProgress = useQuery({ queryKey: ['diagnostics', 'firmware-progress'], queryFn: api.firmwareUpdateStatus, enabled: firmwareUpdateActive, refetchInterval: firmwareUpdateActive ? 2_000 : false })
   const codesets = useQuery({ queryKey: ['diagnostics', 'ir-codesets'], queryFn: api.orphanedIrCodesets })
   const removeCodeset = useMutation({ mutationFn: api.deleteIrCodeset, onSuccess: () => { setCodesetToDelete(null); return client.invalidateQueries({ queryKey: ['diagnostics', 'ir-codesets'] }) } })
   const attachCodeset = useMutation({ mutationFn: ({ id, name }: { id: string; name: string }) => api.reassociateIrCodeset(id, name), onSuccess: () => { setReassociate(null); setRemoteName(''); client.invalidateQueries({ queryKey: ['diagnostics', 'ir-codesets'] }) } })
   const reboot = useMutation({ mutationFn: api.rebootRemote })
   const powerOff = useMutation({ mutationFn: api.powerOffRemote, onSuccess: () => setConfirmPowerOff(false) })
-  const installFirmware = useMutation({ mutationFn: api.installFirmware, onSuccess: () => { setConfirmFirmwareUpdate(false); firmware.refetch(); firmwareProgress.refetch() } })
+  const installFirmware = useMutation({ mutationFn: api.installFirmware, onSuccess: data => { setConfirmFirmwareUpdate(false); setFirmwareUpdateActive(Boolean(data.inProgress)); void firmware.refetch() } })
   const update = firmware.data
   const progress = firmwareProgress.data
-  const firmwareUpdateInProgress = Boolean(installFirmware.isPending || progress?.inProgress || installFirmware.data?.inProgress)
+  const firmwareUpdateInProgress = Boolean(installFirmware.isPending || firmwareUpdateActive || progress?.inProgress)
   const firmwareProgressPercent = Math.max(progress?.updatePercent ?? 0, progress?.downloadPercent ?? 0, installFirmware.data?.updatePercent ?? 0, installFirmware.data?.downloadPercent ?? 0)
   const firmwareProgressLabel = progress?.downloadPercent && !progress.updatePercent ? 'Downloading firmware' : 'Installing firmware'
 
+  useEffect(() => {
+    if (firmwareUpdateActive && progress && !progress.inProgress) {
+      setFirmwareUpdateActive(false)
+      void firmware.refetch()
+    }
+  }, [firmware, firmwareUpdateActive, progress])
+
   return <section className="page-section diagnostics-workspace"><header className="page-heading diagnostics-heading"><div><p className="eyebrow">Remote health</p><h1>Diagnostics</h1><p>Inspect the Remote, find stale configuration, and take care of maintenance without leaving the manager.</p></div><button className="primary-action" type="button" onClick={() => firmware.refetch()} disabled={firmware.isFetching}><RefreshCw className={firmware.isFetching ? 'spin' : ''} /> {firmware.isFetching ? 'Checking…' : 'Check firmware'}</button></header>
 
-    <section className={`firmware-status ${update?.updateAvailable ? 'update-ready' : ''} ${firmwareUpdateInProgress ? 'update-progress' : ''}`}><div className="firmware-icon"><Cpu /></div><div className="firmware-copy"><p className="eyebrow">System firmware</p><h2>{firmwareUpdateInProgress ? 'Firmware update in progress' : update ? update.updateAvailable ? 'An update is ready' : 'Your Remote is up to date' : 'Firmware status'}</h2><p>{firmwareUpdateInProgress ? `${firmwareProgressLabel}${firmwareProgressPercent ? ` · ${firmwareProgressPercent}%` : '…'}. The Remote may disconnect while installation completes.` : update ? update.updateAvailable ? `${update.availableVersion ?? 'A newer version'} · ${update.title ?? 'System update'}` : `Installed version ${update.installedVersion}` : 'Run a live check to see the currently installed version and any available update.'}</p>{firmwareUpdateInProgress && <div className="firmware-progress" aria-label={`${firmwareProgressLabel}: ${firmwareProgressPercent}%`}><span style={{ '--progress': `${firmwareProgressPercent}%` } as React.CSSProperties} /></div>}</div><div className="firmware-meta">{update && <><span>Installed</span><strong>{update.installedVersion}</strong></>}{update?.releaseNotesUrl && <a href={update.releaseNotesUrl} target="_blank" rel="noreferrer">Release notes <ExternalLink /></a>}{update?.updateAvailable && !firmwareUpdateInProgress && <button className="primary-action" type="button" onClick={() => setConfirmFirmwareUpdate(true)}><Download /> Update firmware</button>}</div>{(firmware.isError || firmwareProgress.isError || installFirmware.isError) && <div className="notice error"><TriangleAlert />{(firmware.error ?? firmwareProgress.error ?? installFirmware.error)?.message}</div>}</section>
+    <section className={`firmware-status ${update?.updateAvailable ? 'update-ready' : ''} ${firmwareUpdateInProgress ? 'update-progress' : ''}`}><div className="firmware-icon"><Cpu /></div><div className="firmware-copy"><p className="eyebrow">System firmware</p><h2>{firmwareUpdateInProgress ? 'Firmware update in progress' : update ? update.updateAvailable ? 'An update is ready' : 'Your Remote is up to date' : 'Firmware status'}</h2><p>{firmwareUpdateInProgress ? `${firmwareProgressLabel}${firmwareProgressPercent ? ` · ${firmwareProgressPercent}%` : '…'}. The Remote may disconnect while installation completes.` : update ? update.updateAvailable ? `${update.availableVersion ?? 'A newer version'} · ${update.title ?? 'System update'}` : `Installed version ${update.installedVersion}` : 'Run a live check to see the currently installed version and any available update.'}</p>{firmwareUpdateInProgress && <div className="firmware-progress" aria-label={`${firmwareProgressLabel}: ${firmwareProgressPercent}%`}><span style={{ '--progress': `${firmwareProgressPercent}%` } as React.CSSProperties} /></div>}</div><div className="firmware-meta">{update && <><span>Installed</span><strong>{update.installedVersion}</strong></>}{update?.releaseNotesUrl && <a href={update.releaseNotesUrl} target="_blank" rel="noreferrer">Release notes <ExternalLink /></a>}{update?.updateAvailable && !firmwareUpdateInProgress && <button className="primary-action" type="button" onClick={() => setConfirmFirmwareUpdate(true)}><Download /> Update firmware</button>}</div>{(firmware.isError || (firmwareUpdateActive && firmwareProgress.isError) || installFirmware.isError) && <div className="notice error"><TriangleAlert />{(firmware.error ?? firmwareProgress.error ?? installFirmware.error)?.message}</div>}</section>
 
     <div className="diagnostics-section-heading"><div><p className="eyebrow">Configuration hygiene</p><h2>Activity references</h2></div><p>These checks are read-only. Fix references in the Remote Configurator after reviewing the result.</p></div>
     <div className="diagnostics-scan-grid"><ScanPanel title="Orphaned entities" description="Entities referenced by an activity but no longer supplied by its integration." queryKey="orphaned" load={api.orphanedEntities} empty="No orphaned entity references found." warning="Missing references can prevent an activity from working correctly." tone="danger" /><ScanPanel title="Unused activity entities" description="Entities available to an activity that are not used by any step." queryKey="unused" load={api.unusedActivityEntities} empty="Every activity entity is currently in use." warning="Review these before removal; an unused entity may be intended for a future step." tone="warning" /></div>

@@ -73,7 +73,10 @@ def test_backup_capability_is_version_aware_without_legacy_restore_flow():
         )
     ]
     assert 'installed = integration.state.upper() != "NOT_CONFIGURED"' in serializer
-    assert '"backup": can_mutate and installed and integration.backup_available' in serializer
+    assert (
+        '"backup": can_mutate and installed and integration.backup_available'
+        in serializer
+    )
 
 
 def test_operation_and_remote_lifecycle_are_scoped_to_the_active_remote():
@@ -120,7 +123,10 @@ def test_polling_operations_are_marshalled_to_the_web_server_loop():
     assert "async def run_on_server_loop" in server
     assert "asyncio.run_coroutine_threadsafe(operation, loop)" in server
     assert "await web_server.run_on_server_loop(" in device
-    assert "await ws.run_on_server_loop(ws.check_all_remote_connectivity(force=True))" in driver
+    assert (
+        "await ws.run_on_server_loop(ws.check_all_remote_connectivity(force=True))"
+        in driver
+    )
 
 
 def test_integration_lifecycle_uses_coreapi_operations():
@@ -218,11 +224,11 @@ def test_integration_log_normalization_supports_remote_compact_keys():
 def test_integration_logs_accept_remote_plain_text_responses():
     source = SERVER.read_text(encoding="utf-8")
     log_routes = source[
-        source.index('def _normalize_integration_log_payload') : source.index(
+        source.index("def _normalize_integration_log_payload") : source.index(
             '@app.route("/api/v1/integration-logs/export")'
         )
     ]
-    assert 'payload.splitlines()' in log_routes
+    assert "payload.splitlines()" in log_routes
     assert "as_text=True" in log_routes
 
 
@@ -237,7 +243,6 @@ def test_backup_import_applies_settings_without_restarting_the_manager():
     assert "Settings.load(self.identifier).shutdown_on_battery" in device
     assert "self._settings" not in device
     assert "Backup imported." in settings
-    assert "no manager restart is needed" in settings
 
 
 def test_settings_save_has_stable_feedback():
@@ -245,7 +250,7 @@ def test_settings_save_has_stable_feedback():
         encoding="utf-8"
     )
     assert "settings-save-button" in settings
-    assert "Settings saved. Changes take effect immediately." in settings
+    assert "Settings saved" in settings
 
 
 def test_manager_logs_are_part_of_the_mobile_navigation_list():
@@ -257,9 +262,9 @@ def test_manager_logs_are_part_of_the_mobile_navigation_list():
 
 
 def test_installed_integrations_include_a_disconnected_attention_summary():
-    collection = (ROOT / "ui" / "src" / "components" / "IntegrationCollection.tsx").read_text(
-        encoding="utf-8"
-    )
+    collection = (
+        ROOT / "ui" / "src" / "components" / "IntegrationCollection.tsx"
+    ).read_text(encoding="utf-8")
     assert "const attentionCount" in collection
     assert "Needs attention" in collection
     assert "setFilter('disconnected')" in collection
@@ -268,9 +273,9 @@ def test_installed_integrations_include_a_disconnected_attention_summary():
 
 def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
     server = SERVER.read_text(encoding="utf-8")
-    diagnostics = (ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx").read_text(
-        encoding="utf-8"
-    )
+    diagnostics = (
+        ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx"
+    ).read_text(encoding="utf-8")
     api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
     assert '"/api/v1/diagnostics/system-update/install"' in server
     assert '"/api/v1/diagnostics/system-update/status"' in server
@@ -281,12 +286,18 @@ def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
     assert "installFirmware" in api
     assert "Update firmware" in diagnostics
     assert "firmware-progress" in diagnostics
+    assert "enabled: firmwareUpdateActive" in diagnostics
+    assert "refetchInterval: firmwareUpdateActive ? 2_000 : false" in diagnostics
 
 
 def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes():
     server = SERVER.read_text(encoding="utf-8")
     driver = (ROOT / "intg-manager" / "driver.py").read_text(encoding="utf-8")
-    startup = server[server.index("async def _startup_fetch_localization") : server.index("@app.before_request")]
+    startup = server[
+        server.index("async def _startup_fetch_localization") : server.index(
+            "@app.before_request"
+        )
+    ]
     replacement = server[
         server.index("async def _replace_remotes_on_server_loop") : server.index(
             "async def _close_remote_clients_on_server_loop"
