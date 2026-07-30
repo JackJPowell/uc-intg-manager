@@ -104,12 +104,12 @@ def migrate(target_remote_id: str | None = None) -> bool:
 
     # Determine remote_id
     if target_remote_id:
-        remote_id = target_remote_id
+        remote_id: str = target_remote_id
         _LOG.info("Using provided target_remote_id: %s", remote_id)
     else:
         # Determine remote_id from config.json
         # In v1.0, there should only be one remote configured
-        remote_id = _get_remote_id_from_config()
+        remote_id = _get_remote_id_from_config() or ""
 
         # Fall back to default if we can't read from config
         if not remote_id:

@@ -15,8 +15,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -103,6 +103,12 @@ ENV/
 .DS_Store
 
 env
+ui/node_modules/
+# Generated Vite bundle; rebuilt from ui/ before packaging the manager.
+intg-manager/static/app/
+# Local Vite proxy settings may point at a private development endpoint.
+ui/.env.local
+ui/.env.*.local
 licenses.json
 tools/licenses.md
 config/*

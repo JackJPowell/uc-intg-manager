@@ -7,21 +7,18 @@ It provides forms for entering the remote IP and PIN.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
-import json
 import logging
-import os
 from typing import Any
 
-from const import MANAGER_DATA_FILE, RemoteConfig
-from remote_api import RemoteAPIClient, RemoteAPIError
+from const import RemoteConfig
 from ucapi import (
     IntegrationSetupError,
     RequestUserInput,
-    SetupComplete,
     SetupError,
-    UserDataResponse,
 )
 from ucapi_framework import BaseSetupFlow
+from unfurled.api import CoreAPI
+from unfurled.helpers.exceptions import UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -121,17 +118,10 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
 
         try:
             # Test the connection with authentication
-            client = RemoteAPIClient(address, pin=pin)
-
-            # First, test if we can connect at all
-            if not await client.test_connection():
-                _LOG.error("Connection test failed for %s", address)
-                await client.close()
-                return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
+            client = CoreAPI(f"http://{address}:80/api/", pin=pin)
 
             try:
                 # Get version info to validate PIN - this requires authentication
-                # If the PIN is wrong, this will raise RemoteAPIError
                 version_info = await client.get_version()
 
                 # If we got here, PIN is valid
@@ -140,14 +130,19 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                     version_info.get("device_name", "Unknown"),
                     version_info.get("os", "Unknown"),
                 )
-                name: str | None = version_info.get("device_name", None)
-                if name is None:
-                    name: str = await client.get_device_name() or version_info.get(
-                        "model", "UCR Remote"
+                name = str(version_info.get("device_name") or "")
+                if not name:
+                    name = str(
+                        (await client.get_device_name())
+                        or version_info.get("model")
+                        or "UCR Remote"
                     )
 
                 # Try to create an API key for better authentication
-                api_key = await client.create_api_key("intg-manager")
+                api_key_response = await client.create_api_key(
+                    "intg-manager", ["admin"], replace_existing=True
+                )
+                api_key = api_key_response.get("api_key", "")
                 if api_key:
                     _LOG.info("Created API key for persistent authentication")
                 else:
@@ -171,12 +166,12 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                                     "Detected loopback address, using actual IP from WiFi: %s",
                                     actual_address,
                                 )
-                    except RemoteAPIError:
+                    except UnfurledError:
                         _LOG.debug(
                             "Could not retrieve WiFi info, keeping provided address"
                         )
 
-            except RemoteAPIError as e:
+            except UnfurledError as e:
                 _LOG.error("Failed to retrieve remote details (invalid PIN?): %s", e)
                 await client.close()
                 # If authentication failed, re-display form for user to correct PIN
@@ -217,62 +212,3 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
         except Exception as ex:
             _LOG.error("Failed to connect to %s: %s", address, ex)
             return SetupError(IntegrationSetupError.CONNECTION_REFUSED)
-
-    async def _handle_restore_response(
-        self, msg: UserDataResponse
-    ) -> SetupComplete | SetupError | RequestUserInput:
-        """
-        Extended restore handler that also accepts ``manager_data``.
-
-        When called by the bootstrapper during a self-update the
-        ``send_setup_input`` payload contains two fields:
-
-        - ``restore_data``  — serialised ``config.json`` (list of remote configs);
-          processed by the base implementation to reconnect IM to its remotes.
-        - ``manager_data``  — serialised ``manager.json`` (integration settings &
-          backups); written to ``MANAGER_DATA_FILE`` so that all previous
-          integration configurations survive the upgrade.
-
-        Both are optional from the bootstrapper's perspective, but
-        ``restore_data`` is required by the base ``_handle_restore_response``
-        to succeed.  If ``manager_data`` is absent or empty the method falls
-        back to the base behaviour (normal user-driven restore with no
-        manager-data handoff).
-        """
-        manager_data = msg.input_values.get("manager_data", "").strip()
-
-        if manager_data:
-            _LOG.info(
-                "Setup restore: received manager_data (%d bytes) — will write to %s",
-                len(manager_data),
-                MANAGER_DATA_FILE,
-            )
-            try:
-                # Validate it is parseable JSON before the base restore commits
-                json.loads(manager_data)
-            except json.JSONDecodeError as exc:
-                _LOG.error(
-                    "Setup restore: manager_data is not valid JSON (%s) — ignoring",
-                    exc,
-                )
-                manager_data = ""
-
-        # Delegate config.json restore to the base class
-        result = await super()._handle_restore_response(msg)
-
-        # Only persist manager.json if the base restore succeeded
-        if manager_data and isinstance(result, SetupComplete):
-            try:
-                os.makedirs(os.path.dirname(MANAGER_DATA_FILE), exist_ok=True)
-                with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as fh:
-                    fh.write(manager_data)
-                _LOG.info(
-                    "Setup restore: manager.json written (%d bytes)",
-                    len(manager_data),
-                )
-            except OSError as exc:
-                # Log but don't fail — the remote connection is restored; the user
-                # can re-import integration data from a backup if needed.
-                _LOG.error("Setup restore: could not write manager.json: %s", exc)
-
-        return result

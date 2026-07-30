@@ -1,5 +1,6 @@
 """Tests for const.py – Settings, UIPreferences, and RemoteConfig."""
 
+import json
 import os
 import sys
 from dataclasses import fields
@@ -7,6 +8,7 @@ from dataclasses import fields
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import const  # noqa: E402
 from const import RemoteConfig, Settings, UIPreferences  # noqa: E402
 
 
@@ -16,7 +18,7 @@ from const import RemoteConfig, Settings, UIPreferences  # noqa: E402
 
 
 def test_settings_default_version():
-    assert Settings().settings_version == 1
+    assert Settings().settings_version == 2
 
 
 def test_settings_default_booleans():
@@ -24,7 +26,6 @@ def test_settings_default_booleans():
     assert s.shutdown_on_battery is False
     assert s.auto_update is False
     assert s.backup_configs is False
-    assert s.auto_register_entities is True
     assert s.show_beta_releases is False
 
 
@@ -44,7 +45,36 @@ def test_settings_to_dict_values():
     s.auto_update = True
     d = s.to_dict()
     assert d["auto_update"] is True
-    assert d["settings_version"] == 1
+    assert d["settings_version"] == 2
+
+
+def test_settings_migration_removes_obsolete_entity_registration_preference(
+    tmp_path, monkeypatch
+):
+    manager_data = tmp_path / "manager.json"
+    manager_data.write_text(
+        json.dumps(
+            {
+                "version": "2.0",
+                "remotes": {
+                    "remote-1": {
+                        "settings": {
+                            "settings_version": 1,
+                            "auto_register_entities": False,
+                        }
+                    }
+                },
+                "shared": {},
+            }
+        )
+    )
+    monkeypatch.setattr(const, "MANAGER_DATA_FILE", str(manager_data))
+
+    settings = Settings.load(remote_id="remote-1")
+
+    assert settings.settings_version == 2
+    saved = json.loads(manager_data.read_text())
+    assert "auto_register_entities" not in saved["remotes"]["remote-1"]["settings"]
 
 
 def test_settings_custom_values():

@@ -17,10 +17,10 @@ from typing import Any
 
 import aiohttp
 import certifi
-
 from const import KNOWN_INTEGRATIONS_URL
 from github_api import GitHubClient
-from remote_api import RemoteAPIClient, RemoteAPIError
+from unfurled.api import CoreAPI
+from unfurled.helpers.exceptions import UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class IntegrationService:
     comprehensive integration information with update status.
     """
 
-    def __init__(self, remote_client: RemoteAPIClient) -> None:
+    def __init__(self, remote_client: CoreAPI) -> None:
         """
         Initialize the integration service.
 
@@ -111,15 +111,15 @@ class IntegrationService:
             timeout = aiohttp.ClientTimeout(total=30)
             ssl_context = ssl.create_default_context(cafile=certifi.where())
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            async with aiohttp.ClientSession(
-                timeout=timeout, connector=connector
-            ) as session:
-                async with session.get(KNOWN_INTEGRATIONS_URL) as response:
-                    if response.status == 200:
-                        self._known_integrations = await response.json()
-                        # Cache for offline use
-                        self._cache_known_integrations()
-                        return self._known_integrations
+            async with (
+                aiohttp.ClientSession(timeout=timeout, connector=connector) as session,
+                session.get(KNOWN_INTEGRATIONS_URL) as response,
+            ):
+                if response.status == 200:
+                    self._known_integrations = await response.json()
+                    # Cache for offline use
+                    self._cache_known_integrations()
+                    return self._known_integrations
         except Exception as e:
             _LOG.warning("Failed to fetch known integrations: %s", e)
 
@@ -157,8 +157,8 @@ class IntegrationService:
         integrations: list[IntegrationInfo] = []
 
         try:
-            instances = await self._remote.get_integration_instances()
-        except RemoteAPIError as e:
+            instances = await self._remote.get_integrations()
+        except UnfurledError as e:
             _LOG.error("Failed to fetch integration instances: %s", e)
             return integrations
 
@@ -194,19 +194,19 @@ class IntegrationService:
         # Get driver metadata
         try:
             driver = await self._remote.get_driver(driver_id)
-        except RemoteAPIError:
+        except UnfurledError:
             driver = {}
 
         # Extract name (handle multi-language)
         name = driver.get("name", {})
         if isinstance(name, dict):
-            name = name.get("en", name.get(list(name.keys())[0], driver_id))
+            name = name.get("en", name.get(next(iter(name.keys())), driver_id))
 
         # Extract description
         description = driver.get("description", {})
         if isinstance(description, dict):
             description = description.get(
-                "en", description.get(list(description.keys())[0], "")
+                "en", description.get(next(iter(description.keys())), "")
             )
 
         # Extract developer — API may return nested {"developer": {"name": ...}} or flat "developer_name"
@@ -252,9 +252,9 @@ class IntegrationService:
         # Get currently installed driver IDs
         installed_ids: set[str] = set()
         try:
-            drivers = await self._remote.get_all_drivers()
+            drivers = await self._remote.get_drivers()
             installed_ids = {d.get("driver_id", "") for d in drivers}
-        except RemoteAPIError as e:
+        except UnfurledError as e:
             _LOG.warning("Failed to fetch installed drivers: %s", e)
 
         available: list[AvailableIntegration] = []
@@ -306,12 +306,12 @@ class IntegrationService:
         :return: Updated IntegrationInfo or None
         """
         try:
-            instances = await self._remote.get_integration_instances()
+            instances = await self._remote.get_integrations()
             for instance in instances:
                 if instance.get("integration_id") == instance_id:
                     return await self._get_integration_info(
                         instance, check_updates=True
                     )
-        except RemoteAPIError as e:
+        except UnfurledError as e:
             _LOG.error("Failed to refresh integration: %s", e)
         return None

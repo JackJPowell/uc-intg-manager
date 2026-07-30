@@ -61,7 +61,7 @@ class IntegrationManagerDriver(BaseIntegrationDriver):
             _LOG.debug(
                 "Rechecking connectivity for all remotes after connect/exit-standby"
             )
-            await ws.check_all_remote_connectivity()
+            await ws.run_on_server_loop(ws.check_all_remote_connectivity(force=True))
 
     async def on_r2_disconnect_cmd(self) -> None:
         """Disconnect only the owner device, not all remotes."""
@@ -85,7 +85,7 @@ async def main():
     logging.getLogger("device").setLevel(level)
     logging.getLogger("setup").setLevel(level)
     logging.getLogger("web_server").setLevel(level)
-    logging.getLogger("remote_api").setLevel(level)
+    logging.getLogger("unfurled").setLevel(level)
     logging.getLogger("github_api").setLevel(level)
     logging.getLogger("integration_service").setLevel(level)
     logging.getLogger("data_migration").setLevel(level)

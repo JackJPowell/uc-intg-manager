@@ -9,7 +9,6 @@ from typing import Any
 
 import aiohttp
 import certifi
-
 from notification_settings import (
     DiscordNotificationConfig,
     HomeAssistantNotificationConfig,
@@ -19,6 +18,7 @@ from notification_settings import (
 )
 
 _LOG = logging.getLogger(__name__)
+_REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
 # Create SSL context with certifi certificates for HTTPS requests
@@ -62,7 +62,7 @@ class NotificationService:
             "Content-Type": "application/json",
         }
 
-        payload = {
+        payload: dict[str, Any] = {
             "title": title,
             "message": message,
         }
@@ -72,9 +72,9 @@ class NotificationService:
         try:
             ssl_context = _get_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession(connector=connector) as session:  # noqa: SIM117
                 async with session.post(
-                    url, headers=headers, json=payload, timeout=10
+                    url, headers=headers, json=payload, timeout=_REQUEST_TIMEOUT
                 ) as resp:
                     if resp.status == 200:
                         _LOG.info(
@@ -94,7 +94,10 @@ class NotificationService:
                             f"{config.url.rstrip('/')}/api/services/notify/notify"
                         )
                         async with session.post(
-                            fallback_url, headers=headers, json=payload, timeout=10
+                            fallback_url,
+                            headers=headers,
+                            json=payload,
+                            timeout=_REQUEST_TIMEOUT,
                         ) as fallback_resp:
                             if fallback_resp.status == 200:
                                 _LOG.info(
@@ -161,9 +164,9 @@ class NotificationService:
         try:
             ssl_context = _get_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession(connector=connector) as session:  # noqa: SIM117
                 async with session.post(
-                    config.url, headers=headers, json=payload, timeout=10
+                    config.url, headers=headers, json=payload, timeout=_REQUEST_TIMEOUT
                 ) as resp:
                     if resp.status in (200, 201, 202, 204):
                         _LOG.info("Notification sent via webhook successfully")
@@ -214,7 +217,9 @@ class NotificationService:
             ssl_context = _get_ssl_context()
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.post(url, data=payload, timeout=10) as resp:
+                async with session.post(
+                    url, data=payload, timeout=_REQUEST_TIMEOUT
+                ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         if result.get("status") == 1:
@@ -276,7 +281,10 @@ class NotificationService:
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
-                    url, headers=headers, data=message.encode("utf-8"), timeout=10
+                    url,
+                    headers=headers,
+                    data=message.encode("utf-8"),
+                    timeout=_REQUEST_TIMEOUT,
                 ) as resp:
                     if resp.status == 200:
                         _LOG.info("Notification sent via ntfy successfully")
@@ -332,7 +340,7 @@ class NotificationService:
             connector = aiohttp.TCPConnector(ssl=ssl_context)
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
-                    config.webhook_url, json=payload, timeout=10
+                    config.webhook_url, json=payload, timeout=_REQUEST_TIMEOUT
                 ) as resp:
                     if resp.status == 204:
                         _LOG.info("Notification sent to Discord successfully")
@@ -410,13 +418,18 @@ class NotificationService:
         if tasks:
             task_results = await asyncio.gather(*tasks, return_exceptions=True)
             for provider, result in zip(providers, task_results):
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     _LOG.error(
                         "Exception sending notification to %s: %s", provider, result
                     )
                     results[provider] = False
-                else:
+                elif isinstance(result, bool):
                     results[provider] = result
+                else:
+                    _LOG.error(
+                        "Unexpected notification result from %s: %r", provider, result
+                    )
+                    results[provider] = False
         else:
             _LOG.info("No notification providers enabled")
 

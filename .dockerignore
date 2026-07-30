@@ -1,0 +1,20 @@
+.git
+.github
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+
+# The image builds the SPA in its own Node stage.
+ui/node_modules
+intg-manager/static/app
+
+# Never send local configuration, releases, or editor state to the image build.
+config
+data
+dist
+dist-manager
+artifacts
+*.tar.gz
+.DS_Store
