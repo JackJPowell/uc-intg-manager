@@ -12,6 +12,7 @@ const navigation = [
   ['/settings', 'Settings', Settings],
   ['/notifications', 'Notifications', Bell],
   ['/integration-logs', 'Integration logs', FileText],
+  ['/logs', 'Manager logs', BookOpen],
   ['/backups', 'Backups', Archive],
 ] as const
 
@@ -82,7 +83,6 @@ export function AppShell({ children }: PropsWithChildren) {
         </Link>)}
         <div className="sidebar-foot">
           {bootstrap.data?.remoteConfiguratorUrl && <a href={bootstrap.data.remoteConfiguratorUrl} target="_blank" rel="noreferrer"><ExternalLink /><span>Web Configurator</span></a>}
-          <Link to="/logs"><BookOpen /><span>Manager logs</span></Link>
         </div>
       </nav>
       <main className="content">

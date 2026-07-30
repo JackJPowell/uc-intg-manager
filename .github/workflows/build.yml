@@ -48,17 +48,41 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build and validate React UI
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run typecheck
+          npm --prefix ui run build
+
+      - name: Test Python project
+        run: uv run --group dev pytest intg-manager/tests -q
+
+      - name: Export locked runtime dependencies
+        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements-build.txt
+
       - name: Build
         run: |
           echo "Starting pyinstaller build"
           docker run --rm --name builder \
-            --platform=aarch64 \
+            --platform=linux/arm64 \
             --user=$(id -u):$(id -g) \
             -v ${GITHUB_WORKSPACE}:/workspace \
             docker.io/unfoldedcircle/r2-pyinstaller:${PYTHON_VER} \
             bash -c \
             "cd /workspace && \
-              python -m pip install -r requirements.txt && \
+              python -m pip install -r requirements-build.txt && \
               pyinstaller --clean --onedir --name intg-${DRIVER_ID} --collect-all zeroconf \
                 --add-data 'intg-${INTG_NAME}/static:static' \
                 intg-${INTG_NAME}/driver.py"
@@ -70,7 +94,12 @@ jobs:
           mv dist/intg-${{ env.DRIVER_ID }}/* artifacts/bin
           mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
           cp driver.json artifacts/
-          cp intg-manager/static/img/intg-manager.png artifacts/
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends imagemagick
+          convert intg-manager/static/img/intg-manager.png \
+            -resize 90x90 -strip artifacts/intg-manager.png
+          test "$(identify -format '%wx%h' artifacts/intg-manager.png)" = "90x90"
+          test "$(stat --format='%s' artifacts/intg-manager.png)" -lt 16384
           echo "ARTIFACT_NAME=uc-intg-manager-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
 
       - name: Create upload artifact archive
@@ -87,6 +116,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  docker:
     name: Build and Push Docker Image
     runs-on: ubuntu-24.04
     needs: [build]
@@ -113,7 +143,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/uc-intg-${{ env.INTG_NAME }}
           tags: |
-            type=ref,event=tag
+            type=raw,value=v${{ needs.build.outputs.version }}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -128,7 +158,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-24.04
-    needs: [build]
+    needs: [build, docker]
     permissions:
       contents: write
 
@@ -152,21 +182,14 @@ jobs:
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
-
-      - name: Extract build archives from downloaded files
-        run: |
-          ls -R
-          # extract tar.gz build archives from downloaded artifacts
-          # (wrapped in tar from actions/upload-artifact, then extracted into a directory by actions/download-artifact)
-          for D in *
-            do if [ -d "${D}" ]; then
-              mv $D/* ./
-            fi
-          done;
+        with:
+          name: uc-intg-manager-${{ needs.build.outputs.version }}-aarch64
+          path: release-assets
 
       - name: Create hash file
         run: |
-          for filename in *.tar.gz; do echo "sha256  `sha256sum $filename`" >> ${{needs.build.outputs.driver_id}}.hash; done;
+          filename="release-assets/uc-intg-manager-${{ needs.build.outputs.version }}-aarch64.tar.gz"
+          sha256sum "$filename" > "${{ needs.build.outputs.driver_id }}.hash"
 
       - name: Check if pre-release
         id: prerelease_check
@@ -181,7 +204,7 @@ jobs:
       - name: Create release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "*.tar.gz,${{needs.build.outputs.driver_id}}.hash"
+          artifacts: "release-assets/*.tar.gz,${{needs.build.outputs.driver_id}}.hash"
           draft: false
           prerelease: ${{steps.prerelease_check.outputs.IS_PRERELEASE}}
           bodyFile: /tmp/release/release_notes.md

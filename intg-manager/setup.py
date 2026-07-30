@@ -11,14 +11,14 @@ import logging
 from typing import Any
 
 from const import RemoteConfig
-from unfurled.api import CoreAPI
-from unfurled.helpers.exceptions import UnfurledError
 from ucapi import (
     IntegrationSetupError,
     RequestUserInput,
     SetupError,
 )
 from ucapi_framework import BaseSetupFlow
+from unfurled.api import CoreAPI
+from unfurled.helpers.exceptions import UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -130,10 +130,12 @@ class RemoteSetupFlow(BaseSetupFlow[RemoteConfig]):
                     version_info.get("device_name", "Unknown"),
                     version_info.get("os", "Unknown"),
                 )
-                name: str | None = version_info.get("device_name", None)
-                if name is None:
-                    name: str = await client.get_device_name() or version_info.get(
-                        "model", "UCR Remote"
+                name = str(version_info.get("device_name") or "")
+                if not name:
+                    name = str(
+                        (await client.get_device_name())
+                        or version_info.get("model")
+                        or "UCR Remote"
                     )
 
                 # Try to create an API key for better authentication

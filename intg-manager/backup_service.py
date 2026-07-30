@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from const import MANAGER_DATA_FILE, API_DELAY, Settings
+from const import API_DELAY, MANAGER_DATA_FILE, Settings
 from unfurled.api import CoreAPI
 from unfurled.helpers.exceptions import UnfurledError
 

@@ -7,33 +7,33 @@ It manages connections, polls power status, and controls the web server.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
+import asyncio
+import json
 import logging
 import os
 import socket
-import json
 from asyncio import AbstractEventLoop
 from datetime import datetime
 from typing import Any
-import asyncio
 
 from const import (
-    RemoteConfig,
-    Settings,
+    MANAGER_DATA_FILE,
     POWER_POLL_INTERVAL,
     VERSION_CHECK_INTERVAL_POLLS,
     WEB_SERVER_PORT,
-    MANAGER_DATA_FILE,
+    RemoteConfig,
+    Settings,
 )
+from notification_manager import get_notification_manager as _get_nm
+from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, PollingDevice
 from unfurled.api import CoreAPI
 from unfurled.helpers.exceptions import UnfurledError as RemoteAPIError
 from web_server import (
     WebServer,
     set_firmware_version,
-    set_system_update_info,
     set_remote_online,
+    set_system_update_info,
 )
-from ucapi_framework import BaseConfigManager, PollingDevice, BaseIntegrationDriver
-from notification_manager import get_notification_manager as _get_nm
 
 _LOG = logging.getLogger(__name__)
 
@@ -256,7 +256,8 @@ class IntegrationManagerDevice(PollingDevice):
         """Return whether the Remote is docked or wirelessly charging."""
         charger = await self._client.get_charger()
         return bool(
-            charger.get("power_supply", False) or charger.get("wireless_charging", False)
+            charger.get("power_supply", False)
+            or charger.get("wireless_charging", False)
         )
 
     async def establish_connection(self) -> None:
@@ -272,7 +273,9 @@ class IntegrationManagerDevice(PollingDevice):
 
                 # Fetch and cache firmware version for inplace-update capability checks
                 try:
-                    fw_version = str((await self._client.get_version()).get("os", "0.0.0"))
+                    fw_version = str(
+                        (await self._client.get_version()).get("os", "0.0.0")
+                    )
                     set_firmware_version(self.identifier, fw_version)
                     _LOG.info("[%s] Firmware version: %s", self.log_id, fw_version)
                 except Exception as e:
@@ -510,11 +513,19 @@ class IntegrationManagerDevice(PollingDevice):
             if web_server and web_server.is_running:
                 if self._is_owner():
                     # Owner handles ALL remotes — some (added via setup) have no polling device
-                    await web_server.check_all_remote_connectivity()
-                    await web_server.check_all_error_states()
+                    await web_server.run_on_server_loop(
+                        web_server.check_all_remote_connectivity()
+                    )
+                    await web_server.run_on_server_loop(
+                        web_server.check_all_error_states()
+                    )
                 else:
-                    await web_server.check_connectivity(self.identifier)
-                    await web_server.check_error_states(self.identifier)
+                    await web_server.run_on_server_loop(
+                        web_server.check_connectivity(self.identifier)
+                    )
+                    await web_server.run_on_server_loop(
+                        web_server.check_error_states(self.identifier)
+                    )
 
             # Web server health check - verify server is actually accessible when it should be running
             await self._check_web_server_health()
@@ -593,15 +604,21 @@ class IntegrationManagerDevice(PollingDevice):
                     )
                     try:
                         # Per-remote: Check for version updates
-                        await self._web_server.refresh_integration_versions(
-                            self.identifier
+                        await self._web_server.run_on_server_loop(
+                            self._web_server.refresh_integration_versions(
+                                self.identifier
+                            )
                         )
 
                         # Per-remote: Check for new integrations in registry
-                        await self._web_server.check_new_integrations(self.identifier)
+                        await self._web_server.run_on_server_loop(
+                            self._web_server.check_new_integrations(self.identifier)
+                        )
 
                         # Per-remote: Check for orphaned entities in activities
-                        await self._web_server.check_orphaned_entities(self.identifier)
+                        await self._web_server.run_on_server_loop(
+                            self._web_server.check_orphaned_entities(self.identifier)
+                        )
 
                         # Shared (owner only): Check for new system messages from GitHub
                         if self._is_owner():
@@ -673,13 +690,19 @@ class IntegrationManagerDevice(PollingDevice):
         try:
             # Per-remote: Trigger the web server to refresh version data
             # This updates the cached update availability info and sends update notifications
-            await web_server.refresh_integration_versions(self.identifier)
+            await web_server.run_on_server_loop(
+                web_server.refresh_integration_versions(self.identifier)
+            )
 
             # Per-remote: Check for new integrations in registry
-            await web_server.check_new_integrations(self.identifier)
+            await web_server.run_on_server_loop(
+                web_server.check_new_integrations(self.identifier)
+            )
 
             # Per-remote: Check for orphaned entities in activities
-            await web_server.check_orphaned_entities(self.identifier)
+            await web_server.run_on_server_loop(
+                web_server.check_orphaned_entities(self.identifier)
+            )
 
             # Shared (owner only): Check for new system messages from GitHub
             if self._is_owner():
@@ -859,7 +882,9 @@ class IntegrationManagerDevice(PollingDevice):
 
             # Perform the backup via web server
             # Per-remote task: backup for this remote only
-            backup_result = await web_server.perform_scheduled_backup(self.identifier)
+            backup_result = await web_server.run_on_server_loop(
+                web_server.perform_scheduled_backup(self.identifier)
+            )
 
             # Update last backup date on success
             if backup_result:

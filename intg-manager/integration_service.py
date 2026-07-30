@@ -17,7 +17,6 @@ from typing import Any
 
 import aiohttp
 import certifi
-
 from const import KNOWN_INTEGRATIONS_URL
 from github_api import GitHubClient
 from unfurled.api import CoreAPI
@@ -112,15 +111,15 @@ class IntegrationService:
             timeout = aiohttp.ClientTimeout(total=30)
             ssl_context = ssl.create_default_context(cafile=certifi.where())
             connector = aiohttp.TCPConnector(ssl=ssl_context)
-            async with aiohttp.ClientSession(
-                timeout=timeout, connector=connector
-            ) as session:
-                async with session.get(KNOWN_INTEGRATIONS_URL) as response:
-                    if response.status == 200:
-                        self._known_integrations = await response.json()
-                        # Cache for offline use
-                        self._cache_known_integrations()
-                        return self._known_integrations
+            async with (
+                aiohttp.ClientSession(timeout=timeout, connector=connector) as session,
+                session.get(KNOWN_INTEGRATIONS_URL) as response,
+            ):
+                if response.status == 200:
+                    self._known_integrations = await response.json()
+                    # Cache for offline use
+                    self._cache_known_integrations()
+                    return self._known_integrations
         except Exception as e:
             _LOG.warning("Failed to fetch known integrations: %s", e)
 
@@ -201,13 +200,13 @@ class IntegrationService:
         # Extract name (handle multi-language)
         name = driver.get("name", {})
         if isinstance(name, dict):
-            name = name.get("en", name.get(list(name.keys())[0], driver_id))
+            name = name.get("en", name.get(next(iter(name.keys())), driver_id))
 
         # Extract description
         description = driver.get("description", {})
         if isinstance(description, dict):
             description = description.get(
-                "en", description.get(list(description.keys())[0], "")
+                "en", description.get(next(iter(description.keys())), "")
             )
 
         # Extract developer — API may return nested {"developer": {"name": ...}} or flat "developer_name"
@@ -307,7 +306,7 @@ class IntegrationService:
         :return: Updated IntegrationInfo or None
         """
         try:
-            instances = await self._remote.get_integration_instances()
+            instances = await self._remote.get_integrations()
             for instance in instances:
                 if instance.get("integration_id") == instance_id:
                     return await self._get_integration_info(

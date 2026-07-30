@@ -6,7 +6,7 @@
 import json
 import logging
 import os
-from dataclasses import dataclass, asdict, fields
+from dataclasses import asdict, dataclass, fields
 from typing import Any
 
 _LOG = logging.getLogger(__name__)

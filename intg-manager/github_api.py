@@ -14,9 +14,8 @@ from typing import Any
 
 import aiohttp
 import certifi
-from packaging.version import InvalidVersion, Version
-
 from const import GITHUB_API_BASE
+from packaging.version import InvalidVersion, Version
 
 _PRE_RELEASE_PATTERN = re.compile(
     r"(?:[-._]|(?<=\d))(alpha|beta|preview|pre|rc|dev|a|b)\.?(\d*)(?![A-Za-z])",

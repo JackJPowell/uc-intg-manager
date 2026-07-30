@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import ssl
 from datetime import datetime
 from typing import Any
@@ -440,85 +439,3 @@ def load_registry_data() -> dict[str, Any] | list:
     except (requests.RequestException, OSError, json.JSONDecodeError) as e:
         _LOG.warning("Failed to load registry: %s", e)
         return _registry_cache if _registry_cache is not None else {}
-
-
-def migrate_to_multi_remote(default_remote_id: str, default_remote_name: str) -> bool:
-    """
-    Migrate manager.json from v1.0 (single remote) to v2.0 (multi-remote) format.
-    """
-    if not os.path.exists(MANAGER_DATA_FILE):
-        _LOG.info("No existing manager.json found - will create v2.0 format")
-        return True
-
-    try:
-        with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
-            old_data = json.load(f)
-
-        if old_data.get("version") == "2.0":
-            _LOG.info("manager.json already migrated to v2.0")
-            return True
-
-        _LOG.info("Migrating manager.json from v1.0 to v2.0 format")
-        backup_path = f"{MANAGER_DATA_FILE}.v1.backup"
-        shutil.copy2(MANAGER_DATA_FILE, backup_path)
-
-        old_settings = old_data.get("settings", {})
-        old_integrations = old_data.get("integrations", {})
-        old_notification_settings = old_data.get("notification_settings", {})
-        old_notification_state = old_data.get("notification_state", {})
-        old_read_message_ids = old_data.get("read_message_ids", [])
-        old_repo_cache = old_data.get("repo_cache", {})
-
-        ui_preferences = {
-            "sort_by": old_settings.get("sort_by", "stars"),
-            "sort_reverse": old_settings.get("sort_reverse", False),
-        }
-        registry_tracking = {
-            "last_count": old_notification_settings.get("_last_registry_count", 0),
-            "known_ids": old_notification_settings.get("_known_integration_ids", []),
-        }
-        new_settings = {
-            k: v
-            for k, v in old_settings.items()
-            if k not in ["sort_by", "sort_reverse"]
-        }
-        new_notification_settings = {
-            k: v
-            for k, v in old_notification_settings.items()
-            if k not in ["_last_registry_count", "_known_integration_ids"]
-        }
-
-        new_data = {
-            "version": "2.0",
-            "remotes": {
-                default_remote_id: {
-                    "name": default_remote_name,
-                    "settings": new_settings,
-                    "integrations": old_integrations,
-                    "notification_settings": new_notification_settings,
-                    "notification_state": old_notification_state,
-                    "read_message_ids": old_read_message_ids,
-                }
-            },
-            "shared": {
-                "repo_cache": old_repo_cache,
-                "ui_preferences": ui_preferences,
-                "registry_tracking": registry_tracking,
-            },
-        }
-
-        with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(new_data, f, indent=2)
-
-        _LOG.info("Successfully migrated manager.json to v2.0 format")
-        return True
-
-    except Exception as e:
-        _LOG.error("Failed to migrate manager.json: %s", e, exc_info=True)
-        backup_path = f"{MANAGER_DATA_FILE}.v1.backup"
-        if os.path.exists(backup_path):
-            try:
-                shutil.copy2(backup_path, MANAGER_DATA_FILE)
-            except Exception as restore_error:
-                _LOG.error("Failed to restore backup: %s", restore_error)
-        return False

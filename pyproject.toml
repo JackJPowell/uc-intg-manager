@@ -30,3 +30,18 @@ dependencies = [
     "hypercorn>=0.18.0",
     "unfurled>=0.2.2",
 ]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "types-requests>=2.32.4.20260107",
+]
+
+[tool.mypy]
+python_version = "3.11"
+# ucapi, ucapi-framework, and unfurled are typed at runtime but do not yet
+# advertise PEP 561 metadata. This avoids treating their packaging gap as a
+# project defect; mypy continues to check our own code normally.
+disable_error_code = ["import-untyped"]

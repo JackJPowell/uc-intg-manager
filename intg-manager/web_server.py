@@ -1,10 +1,8 @@
-"""
-Flask Web Server for Integration Manager.
+"""Quart/Hypercorn API and SPA host for Integration Manager.
 
-This module provides the web interface for managing integrations
-on the Unfolded Circle Remote.
-
-Uses synchronous HTTP clients (requests) to avoid aiohttp async context issues.
+The React UI is served as static assets and communicates exclusively through
+JSON endpoints. Remote communication is provided by unfurled and must run on
+the Hypercorn event loop that owns its aiohttp sessions.
 
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
@@ -16,16 +14,19 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 import threading
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import datetime
 from html import unescape
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
+from backup_capabilities import backup_support_status
 from backup_service import (
     backup_all_integrations,
     backup_integration,
@@ -35,7 +36,6 @@ from backup_service import (
 )
 from const import (
     API_DELAY,
-    DATA_DIR,
     LEGACY_WEB_SERVER_PORT,
     MANAGER_DATA_FILE,
     REPO_CACHE_VALIDITY,
@@ -48,7 +48,6 @@ from const import (
 )
 from data_migration import migrate as migrate_v1_to_v2
 from log_handler import get_log_entries, get_log_handler
-from migration_service import extract_migration_mappings
 from notification_manager import (
     get_notification_manager as _nm_get_notification_manager,
 )
@@ -57,7 +56,6 @@ from notification_settings import (
     DiscordNotificationConfig,
     HomeAssistantNotificationConfig,
     NotificationSettings,
-    NotificationTriggers,
     NtfyNotificationConfig,
     PushoverNotificationConfig,
     WebhookNotificationConfig,
@@ -90,7 +88,7 @@ _LOG = logging.getLogger(__name__)
 # Set werkzeug logging to WARNING and above to reduce noise
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
-# Get template and static directories from source
+# Get the static directory from source.
 # Handle PyInstaller frozen executables where data is in sys._MEIPASS
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     # Running as PyInstaller bundle
@@ -100,6 +98,42 @@ else:
     BASE_DIR = os.path.dirname(__file__)
 
 STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "static"))
+_SESSION_SECRET_FILE = os.path.join(os.path.dirname(MANAGER_DATA_FILE), ".session-key")
+
+
+def _load_session_secret() -> str:
+    """Load a stable session key without placing it in exported manager data."""
+    if configured_secret := os.environ.get("FLASK_SECRET_KEY"):
+        return configured_secret
+    try:
+        with open(_SESSION_SECRET_FILE, encoding="utf-8") as secret_file:
+            if secret := secret_file.read().strip():
+                return secret
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        _LOG.warning("Unable to read persisted session key: %s", error)
+
+    secret = secrets.token_hex(32)
+    try:
+        descriptor = os.open(
+            _SESSION_SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as secret_file:
+            secret_file.write(secret)
+    except FileExistsError:
+        try:
+            with open(_SESSION_SECRET_FILE, encoding="utf-8") as secret_file:
+                if existing_secret := secret_file.read().strip():
+                    return existing_secret
+        except OSError as error:
+            _LOG.warning("Unable to read concurrently created session key: %s", error)
+    except OSError as error:
+        _LOG.warning(
+            "Unable to persist session key; sessions will reset on restart: %s", error
+        )
+    return secret
+
 
 # Create the API/static application with cache disabled for read-only filesystems.
 app = Quart(
@@ -108,10 +142,8 @@ app = Quart(
 )
 # Additional config for read-only filesystem
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
-app.config["TEMPLATES_AUTO_RELOAD"] = True
-
 # Session configuration for multi-remote support
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+app.secret_key = _load_session_secret()
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["PERMANENT_SESSION_LIFETIME"] = 7776000  # 90 days
 
@@ -152,7 +184,8 @@ async def _redirect_legacy_port() -> Response | None:
         if request.path not in ("/manager/port-moved",) and not request.path.startswith(
             "/static/"
         ):
-            return redirect("/manager/port-moved", 302)  # ty:ignore[invalid-return-type]
+            return cast(Response, redirect("/manager/port-moved", 302))
+    return None
 
 
 def get_active_remote_id() -> str | None:
@@ -223,32 +256,6 @@ def get_notification_manager(remote_id: str | None = None):
     else:
         name = ""
     return _nm_get_notification_manager(rid, remote_name=name)
-
-
-def _load_settings() -> Settings:
-    """Load settings for the currently active remote."""
-    return Settings.load(remote_id=get_active_remote_id())
-
-
-def _save_settings(settings: Settings) -> None:
-    """Save settings for the currently active remote."""
-    settings.save(remote_id=get_active_remote_id())
-
-
-def _load_notification_settings() -> NotificationSettings:
-    """Load notification settings (shared across all remotes)."""
-    return NotificationSettings.load(remote_id=get_active_remote_id())
-
-
-def _save_notification_settings(settings: NotificationSettings) -> None:
-    """Save notification settings (shared across all remotes)."""
-    settings.save(remote_id=get_active_remote_id())
-
-
-def _get_remote_name(remote_id: str) -> str:
-    """Get the display name for a remote."""
-    config = _remote_configs.get(remote_id)
-    return config.name if config else remote_id
 
 
 def _get_localized_name(
@@ -337,36 +344,63 @@ def _supports_inplace_update(remote_id: str | None = None) -> bool:
         return False
 
 
-# Operation lock to prevent concurrent installs/upgrades
+# Per-Remote operation state prevents concurrent mutations of one Remote while
+# allowing independent configured Remotes to be managed in parallel.
 _OPERATION_LOCK_TIMEOUT = 15 * 60  # 15 minutes — force-release stale lock
-_operation_in_progress: bool = False
-_operation_lock_acquired_at: float | None = None
-_operation_lock = asyncio.Lock()
+
+
+@dataclass
+class _OperationState:
+    in_progress: bool = False
+    acquired_at: float | None = None
+
+
+_operation_states: dict[str, _OperationState] = {}
+_operation_locks: dict[str, asyncio.Lock] = {}
+
+
+def _operation_key(remote_id: str | None) -> str:
+    """Return a stable lock key even while setup has no active Remote."""
+    return remote_id or "__unconfigured__"
+
+
+def _operation_lock_for(remote_id: str | None) -> asyncio.Lock:
+    key = _operation_key(remote_id)
+    return _operation_locks.setdefault(key, asyncio.Lock())
+
+
+def _operation_state_for(remote_id: str | None) -> _OperationState:
+    key = _operation_key(remote_id)
+    return _operation_states.setdefault(key, _OperationState())
+
 
 # Set to True while a self-update-inplace is in flight so /health returns
 # "UPDATING" (not "OK"), preventing /updating from redirecting prematurely.
 _self_update_pending: bool = False
 
 
-async def _try_acquire_operation_lock(operation_name: str):
+async def _try_acquire_operation_lock(operation_name: str, remote_id: str | None):
     """Acquire the operation lock.
 
     Returns ``None`` when the lock is acquired successfully.  Returns a
     ``(response, 409)`` tuple when another operation is already running and
     has not timed out yet, so callers can do::
 
-        if conflict := await _try_acquire_operation_lock("install foo"):
+        if conflict := await _try_acquire_operation_lock("install foo", remote_id):
             return conflict
     """
-    global _operation_in_progress, _operation_lock_acquired_at
-    async with _operation_lock:
+    state = _operation_state_for(remote_id)
+    async with _operation_lock_for(remote_id):
         _LOG.debug(
-            "Lock check [%s]: in_progress=%s", operation_name, _operation_in_progress
+            "Lock check [%s/%s]: in_progress=%s",
+            remote_id,
+            operation_name,
+            state.in_progress,
         )
-        if _operation_in_progress:
+        if state.in_progress:
             elapsed = (
-                time.monotonic() - _operation_lock_acquired_at
-                if _operation_lock_acquired_at is not None
+                time.monotonic() - state.acquired_at
+                if state.acquired_at is not None
                 else 0
             )
             if elapsed > _OPERATION_LOCK_TIMEOUT:
@@ -374,8 +408,8 @@ async def _try_acquire_operation_lock(operation_name: str):
                     "Operation lock held for %.0f seconds - force releasing stale lock",
                     elapsed,
                 )
-                _operation_in_progress = False
-                _operation_lock_acquired_at = None
+                state.in_progress = False
+                state.acquired_at = None
             else:
                 _LOG.warning("Blocked [%s] - lock already held", operation_name)
                 return jsonify(
@@ -384,10 +418,19 @@ async def _try_acquire_operation_lock(operation_name: str):
                         "message": "Another install/upgrade is in progress",
                     }
                 ), 409
-        _operation_in_progress = True
-        _operation_lock_acquired_at = time.monotonic()
-        _LOG.info("Lock acquired [%s]", operation_name)
+        state.in_progress = True
+        state.acquired_at = time.monotonic()
+        _LOG.info("Lock acquired [%s/%s]", remote_id, operation_name)
     return None
+
+
+async def _release_operation_lock(remote_id: str | None, operation_name: str) -> None:
+    """Release one Remote's operation state; safe to call from ``finally``."""
+    state = _operation_state_for(remote_id)
+    async with _operation_lock_for(remote_id):
+        state.in_progress = False
+        state.acquired_at = None
+    _LOG.info("Lock released [%s/%s]", remote_id, operation_name)
 
 
 @dataclass
@@ -413,9 +456,8 @@ class IntegrationInfo:
         False  # Integration manages its own updates (like Integration Manager itself)
     )
     configured_entities: int = 0
-    supports_backup: bool = False  # Uses ucapi-framework with backup support
     can_update: bool = False  # Show update button (always true if update available for custom integrations)
-    supports_automated_backup_restore: bool = False
+    backup_available: bool = False
 
 
 @dataclass
@@ -443,8 +485,7 @@ class AvailableIntegration:
     latest_version: str = ""
     instance_id: str = ""  # Instance ID if configured
     can_update: bool = False  # Show update button (always true if update available for custom integrations)
-    supports_automated_backup_restore: bool = False
-    supports_backup: bool = False  # Uses ucapi-framework with backup support
+    backup_available: bool = False
     # Repository stats (from GitHub API)
     stars: int = 0
     created_at: str = ""
@@ -490,7 +531,7 @@ def _developer_api_model(developer: str) -> dict[str, Any] | None:
         )
         for entry in developers:
             if isinstance(entry, dict) and entry.get("name") == developer:
-                templates = {
+                url_templates = {
                     "github": "https://github.com/sponsors/{}",
                     "buy_me_a_coffee": "https://www.buymeacoffee.com/{}",
                     "paypal": "https://www.paypal.com/paypalme/{}",
@@ -504,11 +545,11 @@ def _developer_api_model(developer: str) -> dict[str, Any] | None:
                     {
                         platform: value
                         if value.startswith("http")
-                        else templates[platform].format(value)
+                        else url_templates[platform].format(value)
                         for platform, value in raw_links.items()
                         if isinstance(value, str)
                         and value
-                        and (value.startswith("http") or platform in templates)
+                        and (value.startswith("http") or platform in url_templates)
                     }
                     if isinstance(raw_links, dict)
                     else {}
@@ -544,16 +585,35 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
         if integration.self_managed
         else "custom"
     )
-    if is_available:
+    if isinstance(integration, AvailableIntegration):
         install_state = integration.install_status
         connection_state = "unknown"
         installed = integration.installed
         driver_installed = integration.driver_installed
+        categories = list(integration.categories or [])
+        repository = {
+            "stars": integration.stars,
+            "downloads": integration.downloads,
+            "createdAt": integration.created_at or None,
+            "updatedAt": integration.pushed_at or None,
+        }
+        original_index = integration.original_index
     else:
         install_state = "configured" if integration.instance_id else "installed"
         connection_state = integration.state.lower()
-        installed = True
+        # A driver can be installed without an instance having completed setup.
+        # It has no configuration to snapshot until the Remote reports it as
+        # configured, so do not expose backup/delete-configuration capabilities.
+        installed = integration.state.upper() != "NOT_CONFIGURED"
         driver_installed = True
+        categories = []
+        repository = {
+            "stars": 0,
+            "downloads": 0,
+            "createdAt": None,
+            "updatedAt": None,
+        }
+        original_index = 0
 
     can_mutate = management == "custom"
     developer = _developer_api_model(integration.developer)
@@ -569,14 +629,9 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
         "developerHomepage": developer.get("homepage") if developer else None,
         "supportLinks": developer.get("supportLinks", []) if developer else [],
         "homepage": integration.home_page or None,
-        "categories": list(integration.categories or []) if is_available else [],
-        "repository": {
-            "stars": integration.stars if is_available else 0,
-            "downloads": integration.downloads if is_available else 0,
-            "createdAt": integration.created_at if is_available else None,
-            "updatedAt": integration.pushed_at if is_available else None,
-        },
-        "originalIndex": integration.original_index if is_available else 0,
+        "categories": categories,
+        "repository": repository,
+        "originalIndex": original_index,
         "management": management,
         "installState": install_state,
         "connectionState": connection_state,
@@ -587,8 +642,7 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
         "capabilities": {
             "install": is_available and can_mutate and not driver_installed,
             "update": can_mutate and integration.can_update,
-            "backup": can_mutate and integration.supports_backup,
-            "automatedBackupRestore": can_mutate and integration.supports_automated_backup_restore,
+            "backup": can_mutate and installed and integration.backup_available,
             "deleteConfiguration": can_mutate and installed,
             "deleteDriver": can_mutate and driver_installed,
             "selectVersion": can_mutate and bool(integration.home_page),
@@ -827,11 +881,16 @@ async def _automatic_update_is_safe(remote_id: str) -> bool:
         if not isinstance(activity, dict):
             continue
         attributes = activity.get("attributes")
-        if isinstance(attributes, dict) and str(attributes.get("state", "")).upper() == "ON":
+        if (
+            isinstance(attributes, dict)
+            and str(attributes.get("state", "")).upper() == "ON"
+        ):
             running.append(activity)
     if running:
         names = [
-            _get_localized_name(activity.get("name"), activity.get("entity_id", "activity"))
+            _get_localized_name(
+                activity.get("name"), activity.get("entity_id", "activity")
+            )
             for activity in running
         ]
         _LOG.info(
@@ -853,17 +912,16 @@ async def _run_automatic_updates(remote_id: str) -> None:
     A failure is logged and does not prevent the remaining integrations from
     being attempted on the same scheduled pass.
     """
-    global _operation_in_progress, _operation_lock_acquired_at
-
     settings = Settings.load(remote_id=remote_id)
     if not settings.auto_update or not is_remote_online(remote_id):
         return
 
-    async with _operation_lock:
-        if _operation_in_progress:
+    state = _operation_state_for(remote_id)
+    async with _operation_lock_for(remote_id):
+        if state.in_progress:
             elapsed = (
-                time.monotonic() - _operation_lock_acquired_at
-                if _operation_lock_acquired_at is not None
+                time.monotonic() - state.acquired_at
+                if state.acquired_at is not None
                 else 0
             )
             if elapsed <= _OPERATION_LOCK_TIMEOUT:
@@ -876,8 +934,8 @@ async def _run_automatic_updates(remote_id: str) -> None:
                 "[%s] Releasing stale operation lock before automatic updates",
                 remote_id,
             )
-        _operation_in_progress = True
-        _operation_lock_acquired_at = time.monotonic()
+        state.in_progress = True
+        state.acquired_at = time.monotonic()
 
     candidates: list[IntegrationInfo] = []
     try:
@@ -922,9 +980,7 @@ async def _run_automatic_updates(remote_id: str) -> None:
                     error,
                 )
     finally:
-        async with _operation_lock:
-            _operation_in_progress = False
-            _operation_lock_acquired_at = None
+        await _release_operation_lock(remote_id, "automatic updates")
         # Refresh once after the whole batch so the cache reflects every result.
         if candidates:
             await _refresh_version_cache(remote_id)
@@ -1042,7 +1098,7 @@ async def _get_installed_integrations(
             developer = registry_item["author"]
 
         if not home_page and registry_item.get("repository"):
-            home_page: str = registry_item.get("repository", "")
+            home_page = registry_item.get("repository", "")
         # Also use registry if driver home_page doesn't have github.com
         elif (
             home_page
@@ -1072,7 +1128,9 @@ async def _get_installed_integrations(
             external=is_external,
             self_managed=self_managed,
             configured_entities=len(instance.get("configured_entities", [])),
-            supports_backup=supports_backup,
+            backup_available=backup_support_status(
+                driver.get("version", "0.0.0") if driver else "0.0.0", registry_item
+            )[0],
         )
 
         # Check for updates using cached version data from background checks
@@ -1097,27 +1155,6 @@ async def _get_installed_integrations(
                 #     "Update button enabled for %s (can_update=True)",
                 #     driver_id,
                 # )
-
-                # Check if automated backup/restore is possible
-                # Requires: supports_backup AND version >= backup_min_version (if specified)
-                min_version = registry_item.get("backup_min_version")
-                info.supports_automated_backup_restore = supports_backup
-
-                if min_version and supports_backup:
-                    try:
-                        if Version(info.version) < Version(min_version):
-                            info.supports_automated_backup_restore = False
-                            # _LOG.debug(
-                            #     "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
-                            #     driver_id,
-                            #     info.version,
-                            #     info.latest_version,
-                            #     info.version,
-                            #     min_version,
-                            # )
-                    except (InvalidVersion, TypeError):
-                        # If version parsing fails, allow auto update if supports_backup
-                        pass
 
         integrations.append(info)
 
@@ -1206,7 +1243,9 @@ async def _get_installed_integrations(
             official=is_official,
             external=is_external,
             configured_entities=0,
-            supports_backup=supports_backup,
+            backup_available=backup_support_status(
+                driver.get("version", "0.0.0"), registry_item
+            )[0],
         )
 
         # Check for updates using cached version data (for unconfigured drivers too)
@@ -1224,27 +1263,6 @@ async def _get_installed_integrations(
                 #     "Update button enabled for unconfigured %s (can_update=True)",
                 #     driver_id,
                 # )
-
-                # Check if automated backup/restore is possible
-                # Requires: supports_backup AND not self_managed AND version >= backup_min_version (if specified)
-                min_version = registry_item.get("backup_min_version")
-                info.supports_automated_backup_restore = supports_backup and not self_managed
-
-                if min_version and supports_backup and not self_managed:
-                    try:
-                        if Version(info.version) < Version(min_version):
-                            info.supports_automated_backup_restore = False
-                            # _LOG.debug(
-                            #     "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
-                            #     driver_id,
-                            #     info.version,
-                            #     info.latest_version,
-                            #     info.version,
-                            #     min_version,
-                            # )
-                    except (InvalidVersion, TypeError):
-                        # If version parsing fails, allow auto update if supports_backup
-                        pass
 
         integrations.append(info)
 
@@ -1339,7 +1357,7 @@ async def _get_available_integrations(
 
         return (False, False, False, "", "", "")
 
-    available = []
+    available: list[AvailableIntegration] = []
     _remote_cache = _get_version_cache(remote_id)
     for item in registry:
         # Derive official status from custom field (official = not custom)
@@ -1362,7 +1380,6 @@ async def _get_available_integrations(
         update_available = False
         latest_version = ""
         can_update = False
-        supports_automated_backup_restore = False
         supports_backup = item.get("supports_backup", False)
         self_managed = item.get("self_managed", False)
 
@@ -1377,27 +1394,6 @@ async def _get_available_integrations(
 
                     # Show update button for custom integrations (but not self_managed ones)
                     can_update = not self_managed
-
-                    # Check if automated backup/restore is possible
-                    # Requires: supports_backup AND version >= backup_min_version (if specified)
-                    min_version = item.get("backup_min_version")
-                    supports_automated_backup_restore = supports_backup
-
-                    if min_version and supports_backup and version:
-                        try:
-                            if Version(version) < Version(min_version):
-                                supports_automated_backup_restore = False
-                                # _LOG.debug(
-                                #     "Update available for %s: %s -> %s (requires manual reconfiguration - version %s < minimum %s)",
-                                #     actual_driver_id,
-                                #     version,
-                                #     latest_version,
-                                #     version,
-                                #     min_version,
-                                # )
-                        except (InvalidVersion, TypeError):
-                            # If version parsing fails, allow auto update if supports_backup
-                            pass
 
         # Fetch repository stats from GitHub (cached)
         stars = 0
@@ -1444,8 +1440,7 @@ async def _get_available_integrations(
             latest_version=latest_version,
             instance_id=instance_id,
             can_update=can_update,
-            supports_automated_backup_restore=supports_automated_backup_restore,
-            supports_backup=supports_backup,
+            backup_available=is_installed and backup_support_status(version, item)[0],
             stars=stars,
             created_at=created_at,
             pushed_at=pushed_at,
@@ -1495,37 +1490,6 @@ async def _get_available_integrations(
     return available
 
 
-async def _can_backup_integration(
-    driver_id: str, current_version: str, registry_item: dict
-) -> tuple[bool, str]:
-    """
-    Check if an integration can be backed up based on version requirements.
-
-    :param driver_id: The driver ID
-    :param current_version: Current installed version
-    :param registry_item: Registry entry for the integration
-    :return: (can_backup, reason)
-    """
-    if not registry_item.get("supports_backup", False):
-        return False, "Integration doesn't support backup"
-
-    min_version = registry_item.get("backup_min_version")
-    if not min_version:
-        return True, ""  # No minimum version requirement
-
-    try:
-        if Version(current_version) < Version(min_version):
-            return (
-                False,
-                f"Requires version {min_version} or higher (current: {current_version})",
-            )
-    except (InvalidVersion, TypeError):
-        # If version parsing fails, assume compatible
-        pass
-
-    return True, ""
-
-
 # =============================================================================
 # Routes
 # =============================================================================
@@ -1539,20 +1503,14 @@ async def health():
     return "OK"
 
 
-@app.route("/port-moved")
-async def port_moved():
-    """The legacy port notice is now a client-side SPA route."""
-    return "", 404
-
-
-@app.route("/api/registry")
+@app.route("/api/v1/registry")
 async def get_registry():
     """Serve the integrations registry (for local development/testing)."""
     registry_path = Path(__file__).parent / "integrations-registry.json"
     if registry_path.exists():
         with open(registry_path, encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    return jsonify({"integrations": []})
+            return jsonify({"data": json.load(f)})
+    return jsonify({"data": {"integrations": []}})
 
 
 @app.route("/")
@@ -1680,7 +1638,8 @@ async def api_v1_catalog_integrations():
 @app.route("/api/v1/integrations/refresh", methods=["POST"])
 async def api_v1_refresh_integrations():
     """Refresh the version cache used by installed and catalog lists."""
-    if not _get_active_remote_client() or not _github_client:
+    client = _get_active_remote_client()
+    if not client or not _github_client:
         return _api_error(
             "service_unavailable", "Integration service is not initialized", 503
         )
@@ -1690,24 +1649,6 @@ async def api_v1_refresh_integrations():
     except Exception as e:
         _LOG.exception("Failed to refresh integration versions")
         return _api_error("refresh_failed", str(e), 502)
-
-
-@app.route("/integrations")
-async def integrations_page():
-    """Retired legacy page route."""
-    return "", 404
-
-
-@app.route("/available")
-async def available_page():
-    """Retired legacy page route."""
-    return "", 404
-
-
-@app.route("/updating")
-async def updating_page():
-    """Retired legacy page route."""
-    return "", 404
 
 
 # =============================================================================
@@ -1785,27 +1726,6 @@ async def get_integration_detail(instance_id: str):
         return _api_error("integration_unavailable", str(e), 502)
 
 
-@app.route("/api/integration/<instance_id>/update", methods=["POST"])
-async def update_integration(instance_id: str):
-    """
-    Compatibility route for an integration update.
-
-    The in-place firmware update path always preserves configured entities.
-    """
-    return await update_integration_inplace(instance_id)
-
-
-@app.route("/api/integration/<instance_id>/update-alt", methods=["POST"])
-async def update_integration_alt(instance_id: str):
-    """
-    Retained compatibility route for clients using the former alternate update.
-
-    Entity registrations are preserved for every update; there is no alternate
-    registration behavior.
-    """
-    return await update_integration_inplace(instance_id)
-
-
 @app.route("/api/v1/integrations/<driver_id>")
 async def get_integration_card(driver_id: str):
     """Return one integration's data for client-controlled reconnect polling."""
@@ -1838,19 +1758,20 @@ async def update_integration_inplace(driver_id: str):
     Works for both configured instances (with instance_id) and unconfigured
     drivers (driver_id only).
     """
-    global _operation_in_progress, _operation_lock_acquired_at
-
-    if not _get_active_remote_client() or not _github_client:
+    client = _get_active_remote_client()
+    if not client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
+    remote_id = get_active_remote_id()
     _form = await request.form
     version = request.args.get("version") or _form.get("version")
 
-    if conflict := await _try_acquire_operation_lock(f"update-inplace {driver_id}"):
+    if conflict := await _try_acquire_operation_lock(
+        f"update-inplace {driver_id}", remote_id
+    ):
         return conflict
 
     try:
-        remote_id = get_active_remote_id()
         integrations = await _get_installed_integrations(remote_id)
         integration = next(
             (
@@ -1868,13 +1789,9 @@ async def update_integration_inplace(driver_id: str):
             )
 
         if not integration:
-            async with _operation_lock:
-                _operation_in_progress = False
             return jsonify({"status": "error", "message": "Integration not found"}), 404
 
         if integration.official:
-            async with _operation_lock:
-                _operation_in_progress = False
             return jsonify(
                 {
                     "status": "error",
@@ -1883,8 +1800,6 @@ async def update_integration_inplace(driver_id: str):
             ), 400
 
         if not integration.home_page or "github.com" not in integration.home_page:
-            async with _operation_lock:
-                _operation_in_progress = False
             return jsonify(
                 {
                     "status": "error",
@@ -1894,8 +1809,6 @@ async def update_integration_inplace(driver_id: str):
 
         parsed = GitHubClient.parse_github_url(integration.home_page)
         if not parsed:
-            async with _operation_lock:
-                _operation_in_progress = False
             return jsonify(
                 {"status": "error", "message": "Could not parse GitHub URL"}
             ), 400
@@ -1928,8 +1841,6 @@ async def update_integration_inplace(driver_id: str):
             )
 
         if not download_result:
-            async with _operation_lock:
-                _operation_in_progress = False
             return jsonify(
                 {"status": "error", "message": f"No release found for {owner}/{repo}"}
             ), 404
@@ -1939,21 +1850,13 @@ async def update_integration_inplace(driver_id: str):
             "Downloaded %s (%d bytes) for in-place update", filename, len(archive_data)
         )
 
-        await _get_active_remote_client().api.post_integration_install(
+        await client.api.post_integration_install(
             archive_data, filename, update=True
         )  # ty:ignore[unresolved-attribute]
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
 
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info(
-                "Lock released after in-place update of %s", integration.driver_id
-            )
-
         # Kick off version cache refresh in the background
-        asyncio.get_event_loop().call_soon(
-            lambda: asyncio.ensure_future(_refresh_version_cache(remote_id))
-        )
+        asyncio.create_task(_refresh_version_cache(remote_id))
 
         return jsonify(
             {
@@ -1966,18 +1869,12 @@ async def update_integration_inplace(driver_id: str):
 
     except UnfurledError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
-        async with _operation_lock:
-            _operation_in_progress = False
         return _api_error("update_failed", str(e), 502)
     except Exception as e:
         _LOG.error("Unexpected error during in-place update of %s: %s", driver_id, e)
-        async with _operation_lock:
-            _operation_in_progress = False
-            _operation_lock_acquired_at = None
         return _api_error("update_failed", str(e), 500)
     finally:
-        _operation_in_progress = False
-        _operation_lock_acquired_at = None
+        await _release_operation_lock(remote_id, f"update-inplace {driver_id}")
 
 
 @app.route("/api/v1/integrations/<driver_id>", methods=["DELETE"])
@@ -1988,15 +1885,14 @@ async def delete_integration(driver_id: str):
     Query parameters:
     - type: 'configuration' or 'full'
     """
-    global _operation_in_progress, _operation_lock_acquired_at
-
-    if not _get_active_remote_client():
+    client = _get_active_remote_client()
+    if not client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
-    if conflict := await _try_acquire_operation_lock(f"delete {driver_id}"):
+    remote_id = get_active_remote_id()
+    if conflict := await _try_acquire_operation_lock(f"delete {driver_id}", remote_id):
         return conflict
 
-    remote_id = get_active_remote_id()
     payload = await request.get_json(silent=True) or {}
     delete_type = payload.get("scope")
     delete_type = delete_type or "configuration"
@@ -2010,7 +1906,6 @@ async def delete_integration(driver_id: str):
         instance_id = f"{driver_id}.main"
 
         try:
-            remote_id = get_active_remote_id()
             integrations = await _get_installed_integrations(remote_id)
             # Check if any integration has this instance_id and is not NOT_CONFIGURED
             is_configured = any(
@@ -2023,7 +1918,7 @@ async def delete_integration(driver_id: str):
         # Only delete instance if it's actually configured
         if is_configured:
             try:
-                await _get_active_remote_client().api.delete_integration(instance_id)  # ty:ignore[unresolved-attribute]
+                await client.api.delete_integration(instance_id)
                 _LOG.info("Deleted instance: %s", instance_id)
             except UnfurledError as e:
                 _LOG.warning("Failed to delete instance %s: %s", instance_id, e)
@@ -2034,7 +1929,7 @@ async def delete_integration(driver_id: str):
             await asyncio.sleep(API_DELAY * 2)
 
             try:
-                await _get_active_remote_client().api.delete_driver(driver_id)  # ty:ignore[unresolved-attribute]
+                await client.api.delete_driver(driver_id)
                 _LOG.info("Deleted driver: %s", driver_id)
             except UnfurledError as e:
                 _LOG.error("Failed to delete driver %s: %s", driver_id, e)
@@ -2073,10 +1968,7 @@ async def delete_integration(driver_id: str):
         _LOG.error("Unexpected error during delete for %s: %s", driver_id, e)
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        async with _operation_lock:
-            _operation_in_progress = False
-            _operation_lock_acquired_at = None
-            _LOG.info("Lock released after delete %s", driver_id)
+        await _release_operation_lock(remote_id, f"delete {driver_id}")
 
 
 @app.route("/api/v1/integrations/<driver_id>/install", methods=["POST"])
@@ -2093,16 +1985,16 @@ async def install_integration(driver_id: str):
     4. Validate against migration boundary if version specified
     5. Upload and install on the remote
     """
-    global _operation_in_progress, _operation_lock_acquired_at
-
-    if not _get_active_remote_client() or not _github_client:
+    client = _get_active_remote_client()
+    if not client or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
     # Get optional version parameter from query string or form data
     _form = await request.form
     version = request.args.get("version") or _form.get("version")
 
-    if conflict := await _try_acquire_operation_lock(f"install {driver_id}"):
+    remote_id = get_active_remote_id()
+    if conflict := await _try_acquire_operation_lock(f"install {driver_id}", remote_id):
         return conflict
 
     try:
@@ -2113,11 +2005,6 @@ async def install_integration(driver_id: str):
         )
 
         if not integration:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - integration %s not found in registry", driver_id
-                )
             return jsonify(
                 {"status": "error", "message": "Integration not found in registry"}
             ), 404
@@ -2129,8 +2016,6 @@ async def install_integration(driver_id: str):
             clean_version = version.lstrip("v")
             try:
                 if Version(clean_version) <= Version(migration_required_at):
-                    async with _operation_lock:
-                        _operation_in_progress = False
                     _LOG.warning(
                         "Install blocked for %s - version %s violates migration boundary %s",
                         driver_id,
@@ -2144,8 +2029,6 @@ async def install_integration(driver_id: str):
                         }
                     ), 400
             except InvalidVersion as e:
-                async with _operation_lock:
-                    _operation_in_progress = False
                 _LOG.warning("Invalid version format %s: %s", version, e)
                 return jsonify(
                     {"status": "error", "message": f"Invalid version format: {version}"}
@@ -2153,9 +2036,6 @@ async def install_integration(driver_id: str):
 
         repo_url = integration.get("repository", "")
         if not repo_url or "github.com" not in repo_url:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info("Lock released - no GitHub URL for integration %s", driver_id)
             return jsonify(
                 {
                     "status": "error",
@@ -2166,12 +2046,6 @@ async def install_integration(driver_id: str):
         # Parse GitHub URL
         parsed = GitHubClient.parse_github_url(repo_url)
         if not parsed:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - could not parse GitHub URL for integration %s",
-                    driver_id,
-                )
             return jsonify(
                 {"status": "error", "message": "Could not parse GitHub URL"}
             ), 400
@@ -2201,11 +2075,6 @@ async def install_integration(driver_id: str):
                 owner, repo, asset_pattern=asset_pattern
             )
         if not download_result:
-            async with _operation_lock:
-                _operation_in_progress = False
-                _LOG.info(
-                    "Lock released - no release found for integration %s", driver_id
-                )
             return jsonify(
                 {
                     "status": "error",
@@ -2218,15 +2087,10 @@ async def install_integration(driver_id: str):
         _LOG.info("Downloaded %s (%d bytes) for install", filename, len(archive_data))
 
         # Install the integration
-        await _get_active_remote_client().api.post_integration_install(
+        await client.api.post_integration_install(
             archive_data, filename
         )  # ty:ignore[unresolved-attribute]
         _LOG.info("Installed integration %s successfully", integration.get("name"))
-
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info("Lock released after successful install of %s", driver_id)
 
         # Return the updated integration data for the SPA.
         _cat_map = _get_category_name_map()
@@ -2265,59 +2129,39 @@ async def install_integration(driver_id: str):
 
     except UnfurledError as e:
         _LOG.error("Install failed: %s", e)
-
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _LOG.info(
-                "Lock released after UnfurledError in install_integration for %s",
-                driver_id,
-            )
-
         return _api_error("install_failed", str(e), 502)
     except Exception as e:
         _LOG.error("Unexpected error during install: %s", e)
-
-        # Release operation lock
-        async with _operation_lock:
-            _operation_in_progress = False
-            _operation_lock_acquired_at = None
-            _LOG.info(
-                "Lock released after generic exception in install_integration for %s",
-                driver_id,
-            )
-
         return _api_error("install_failed", str(e), 500)
     finally:
-        # Safety net: ensure lock is released even on asyncio.CancelledError
-        _operation_in_progress = False
-        _operation_lock_acquired_at = None
+        await _release_operation_lock(remote_id, f"install {driver_id}")
 
 
 @app.route("/api/v1/operations/lock")
 async def get_operation_lock_status():
     """Return whether an install/update operation is currently in progress."""
+    remote_id = get_active_remote_id()
+    state = _operation_state_for(remote_id)
     elapsed: float | None = None
-    if _operation_in_progress and _operation_lock_acquired_at is not None:
-        elapsed = round(time.monotonic() - _operation_lock_acquired_at)
-    return jsonify(
-        {"data": {"locked": _operation_in_progress, "elapsedSeconds": elapsed}}
-    )
+    if state.in_progress and state.acquired_at is not None:
+        elapsed = round(time.monotonic() - state.acquired_at)
+    return jsonify({"data": {"locked": state.in_progress, "elapsedSeconds": elapsed}})
 
 
 @app.route("/api/v1/operations/lock/release", methods=["POST"])
 async def release_operation_lock():
     """Manually release a stuck operation lock."""
-    global _operation_in_progress, _operation_lock_acquired_at
-    async with _operation_lock:
-        was_locked = _operation_in_progress
+    remote_id = get_active_remote_id()
+    state = _operation_state_for(remote_id)
+    async with _operation_lock_for(remote_id):
+        was_locked = state.in_progress
         elapsed = (
-            round(time.monotonic() - _operation_lock_acquired_at)
-            if _operation_in_progress and _operation_lock_acquired_at is not None
+            round(time.monotonic() - state.acquired_at)
+            if state.in_progress and state.acquired_at is not None
             else None
         )
-        _operation_in_progress = False
-        _operation_lock_acquired_at = None
+        state.in_progress = False
+        state.acquired_at = None
     if was_locked:
         _LOG.warning(
             "Operation lock manually released by user (was held for %s seconds)",
@@ -2327,7 +2171,6 @@ async def release_operation_lock():
 
 
 @app.route("/api/v1/backups", methods=["POST"])
-@app.route("/api/backup/all", methods=["POST"])
 async def backup_all():
     """
     Backup all custom integrations' configurations.
@@ -2340,35 +2183,26 @@ async def backup_all():
 
     try:
         results = await backup_all_integrations(
-            client, remote_id=get_active_remote_id()
+            client.api, remote_id=get_active_remote_id()
         )
         successful = sum(1 for v in results.values() if v)
         failed = sum(1 for v in results.values() if not v)
 
-        if request.path.startswith("/api/v1/"):
-            return jsonify(
-                {
-                    "data": {
-                        "successful": successful,
-                        "failed": failed,
-                        "results": results,
-                    }
-                }
-            )
         return jsonify(
             {
-                "status": "ok",
-                "message": f"Backed up {successful} integrations, {failed} failed",
-                "results": results,
+                "data": {
+                    "successful": successful,
+                    "failed": failed,
+                    "results": results,
+                }
             }
         )
     except Exception as e:
         _LOG.error("Backup all failed: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error("backup_failed", str(e), 500)
 
 
 @app.route("/api/v1/integrations/<driver_id>/backup", methods=["POST"])
-@app.route("/api/backup/<driver_id>", methods=["POST"])
 async def backup_single(driver_id: str):
     """
     Backup a single integration's configuration.
@@ -2383,68 +2217,25 @@ async def backup_single(driver_id: str):
 
     try:
         backup_data = await backup_integration(
-            client,
+            client.api,
             driver_id,
             save_to_file=True,
             remote_id=get_active_remote_id(),
         )
         if backup_data:
             _LOG.info("Backup completed successfully for integration: %s", driver_id)
-            if request.path.startswith("/api/v1/"):
-                return jsonify({"data": {"driverId": driver_id, "hasData": True}})
-            return jsonify(
-                {
-                    "status": "ok",
-                    "message": f"Successfully backed up {driver_id}",
-                    "has_data": True,
-                }
-            )
+            return jsonify({"data": {"driverId": driver_id, "hasData": True}})
         else:
             _LOG.warning("No backup data retrieved for integration: %s", driver_id)
-            if request.path.startswith("/api/v1/"):
-                return jsonify({"data": {"driverId": driver_id, "hasData": False}})
-            return jsonify(
-                {
-                    "status": "warning",
-                    "message": f"No backup data retrieved for {driver_id}",
-                    "has_data": False,
-                }
+            return _api_error(
+                "backup_unavailable",
+                "The integration did not return configuration backup data. "
+                "Verify that this installed version supports backups and try again.",
+                422,
             )
     except Exception as e:
         _LOG.error("Backup failed for %s: %s", driver_id, e)
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-@app.route("/api/backup/<driver_id>", methods=["GET"])
-async def get_backup_data(driver_id: str):
-    """
-    Get the stored backup data for an integration.
-
-    :param driver_id: The driver ID
-    """
-    backup_data = get_backup(driver_id, remote_id=get_active_remote_id())
-    if backup_data:
-        return jsonify(
-            {
-                "status": "ok",
-                "driver_id": driver_id,
-                "data": backup_data,
-            }
-        )
-    else:
-        return jsonify(
-            {
-                "status": "not_found",
-                "message": f"No backup found for {driver_id}",
-            }
-        ), 404
-
-
-@app.route("/api/backups", methods=["GET"])
-async def list_integration_backups():
-    """List all stored integration config backups."""
-    backups = get_all_backups()
-    return jsonify(backups)
+        return _api_error("backup_failed", str(e), 500)
 
 
 @app.route("/api/v1/release-notes/unavailable/<version>")
@@ -2540,7 +2331,7 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
         # Load registry to get version floor values:
         #   migration_required_at   – normal updates: versions <= this are excluded
         #   min_compatible_version  – self-update picker: versions < this are excluded
-        #                             (separate from backup_min_version which gates backup/restore support)
+        #                             (separate from backup_min_version for config backups)
         migration_required_at = None
         min_compatible_version = None
         is_update = False
@@ -2680,7 +2471,7 @@ async def get_version_selector(owner: str, repo: str, driver_id: str):
 
 
 async def _do_self_update_inplace(
-    im_owner: str, im_repo: str, asset_pattern: str, version: str
+    remote_id: str, im_owner: str, im_repo: str, asset_pattern: str, version: str
 ) -> None:
     """Background task: download the IM release asset and install it in-place.
 
@@ -2689,7 +2480,7 @@ async def _do_self_update_inplace(
     killed by the remote restart (the new process starts with it False).
     On failure the flag is cleared so /health resumes returning "OK".
     """
-    global _self_update_pending, _operation_in_progress
+    global _self_update_pending
     try:
         _LOG.info(
             "Self-update-inplace background: downloading IM %s from %s/%s",
@@ -2697,7 +2488,10 @@ async def _do_self_update_inplace(
             im_owner,
             im_repo,
         )
-        download_result = await _github_client.download_release_asset(  # ty:ignore[unresolved-attribute]
+        github_client = _github_client
+        if not github_client:
+            raise RuntimeError("GitHub client is no longer initialized")
+        download_result = await github_client.download_release_asset(
             im_owner, im_repo, asset_pattern=asset_pattern, version=version
         )
         if not download_result:
@@ -2717,9 +2511,10 @@ async def _do_self_update_inplace(
             len(archive_data),
         )
 
-        await _get_active_remote_client().api.post_integration_install(
-            archive_data, filename, update=True
-        )  # ty:ignore[unresolved-attribute]
+        client = _remote_clients.get(remote_id)
+        if not client:
+            raise RuntimeError("Active Remote is no longer configured")
+        await client.api.post_integration_install(archive_data, filename, update=True)  # ty:ignore[unresolved-attribute]
         # Install accepted — remote will restart IM.  Keep _self_update_pending
         # True so /health returns "UPDATING" until the new IM process takes over.
         _LOG.info(
@@ -2730,8 +2525,7 @@ async def _do_self_update_inplace(
         # Clear flag so /health goes back to "OK" and /updating can navigate away
         _self_update_pending = False
     finally:
-        async with _operation_lock:
-            _operation_in_progress = False
+        await _release_operation_lock(remote_id, "self-update")
 
 
 @app.route("/api/v1/self-update/inplace", methods=["POST"])
@@ -2746,7 +2540,7 @@ async def self_update_inplace():
     Queues the background install and returns JSON immediately. The SPA owns
     its pending-state presentation while the Remote restarts the manager.
     """
-    global _operation_in_progress, _self_update_pending
+    global _self_update_pending
 
     if not _get_active_remote_client() or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
@@ -2761,12 +2555,9 @@ async def self_update_inplace():
     if not version.startswith("v"):
         version = f"v{version}"
 
-    async with _operation_lock:
-        if _operation_in_progress:
-            return jsonify(
-                {"status": "error", "message": "Another install/upgrade is in progress"}
-            ), 409
-        _operation_in_progress = True
+    remote_id = get_active_remote_id()
+    if conflict := await _try_acquire_operation_lock("self-update", remote_id):
+        return conflict
 
     registry = load_registry()
     manager_entry = next(
@@ -2774,8 +2565,7 @@ async def self_update_inplace():
         None,
     )
     if not manager_entry:
-        async with _operation_lock:
-            _operation_in_progress = False
+        await _release_operation_lock(remote_id, "self-update")
         return jsonify(
             {
                 "status": "error",
@@ -2786,8 +2576,7 @@ async def self_update_inplace():
     manager_repo_url = manager_entry.get("repository", "")
     parsed = GitHubClient.parse_github_url(manager_repo_url)
     if not parsed:
-        async with _operation_lock:
-            _operation_in_progress = False
+        await _release_operation_lock(remote_id, "self-update")
         return jsonify(
             {
                 "status": "error",
@@ -2808,7 +2597,7 @@ async def self_update_inplace():
     _self_update_pending = True
     _LOG.info("Self-update-inplace: queuing background task for %s", version)
     asyncio.create_task(
-        _do_self_update_inplace(im_owner, im_repo, asset_pattern, version)
+        _do_self_update_inplace(remote_id, im_owner, im_repo, asset_pattern, version)
     )
 
     return jsonify({"data": {"started": True, "targetVersion": version}})
@@ -2946,34 +2735,6 @@ async def get_versions():
     )
 
 
-@app.route("/api/status")
-async def get_status():
-    """Get current system status as JSON."""
-    if not _get_active_remote_client():
-        return jsonify(
-            {
-                "online": False,
-                "docked": None,
-                "server": None,
-                "error": "Service not initialized",
-            }
-        )
-    if not is_remote_online(get_active_remote_id()):
-        return jsonify({"online": False, "docked": None, "server": None})
-
-    try:
-        charger = await _get_active_remote_client().api.get_charger()  # ty:ignore[unresolved-attribute]
-        is_docked = bool(
-            charger.get("power_supply", False)
-            or charger.get("wireless_charging", False)
-        )
-        return jsonify({"online": True, "docked": is_docked, "server": "running"})
-    except Exception as e:
-        return jsonify(
-            {"online": False, "docked": None, "server": None, "error": str(e)}
-        )
-
-
 # =============================================================================
 # Settings Routes
 # =============================================================================
@@ -2985,12 +2746,6 @@ def _is_external_runtime() -> bool:
     return not config_home or config_home.startswith("/config")
 
 
-@app.route("/settings")
-async def settings_page():
-    """Retired legacy page route; the SPA owns settings at /manager/settings."""
-    return "", 404
-
-
 @app.route("/api/v1/settings", methods=["GET"])
 async def api_v1_get_settings():
     """Return settings and UI preferences for the SPA settings form."""
@@ -3000,9 +2755,7 @@ async def api_v1_get_settings():
                 "settings": Settings.load(remote_id=get_active_remote_id()).to_dict(),
                 "preferences": UIPreferences.load().to_dict(),
                 "runtime": {
-                    "remoteAddress": _remote_configs.get(
-                        get_active_remote_id()
-                    ).address
+                    "remoteAddress": _remote_configs.get(get_active_remote_id()).address
                     if get_active_remote_id() in _remote_configs
                     else None,
                     "webServerPort": WEB_SERVER_PORT,
@@ -3050,9 +2803,7 @@ async def api_v1_save_settings():
                 "settings": settings.to_dict(),
                 "preferences": ui_prefs.to_dict(),
                 "runtime": {
-                    "remoteAddress": _remote_configs.get(
-                        get_active_remote_id()
-                    ).address
+                    "remoteAddress": _remote_configs.get(get_active_remote_id()).address
                     if get_active_remote_id() in _remote_configs
                     else None,
                     "webServerPort": WEB_SERVER_PORT,
@@ -3061,74 +2812,6 @@ async def api_v1_save_settings():
             }
         }
     )
-
-
-# ============================================================================
-# Remote Switching Routes
-# ============================================================================
-
-
-@app.route("/api/active-remote", methods=["GET"])
-async def get_active_remote():
-    """Get current active remote information."""
-    remote_id = get_active_remote_id()
-    if not remote_id or remote_id not in _remote_configs:
-        return jsonify({"error": "No active remote"}), 404
-
-    config = _remote_configs[remote_id]
-
-    return jsonify(
-        {
-            "id": remote_id,
-            "name": config.name,
-            "address": config.address,
-            "connected": is_remote_online(remote_id),
-        }
-    )
-
-
-@app.route("/api/active-remote", methods=["POST"])
-async def set_active_remote():
-    """Switch active remote via session."""
-    try:
-        data = await request.get_json()
-        remote_id = data.get("remote_id")
-
-        if not remote_id:
-            return jsonify({"error": "remote_id required"}), 400
-
-        if remote_id not in _remote_clients:
-            return jsonify({"error": "Invalid remote_id"}), 400
-
-        # Update session
-        session["active_remote_id"] = remote_id
-        session.permanent = True
-
-        _LOG.info(
-            "Switched active remote to: %s (%s)", remote_id, _get_remote_name(remote_id)
-        )
-
-        return jsonify(
-            {
-                "status": "ok",
-                "active_remote_id": remote_id,
-                "remote_name": _get_remote_name(remote_id),
-            }
-        )
-    except Exception as e:
-        _LOG.error("Failed to switch active remote: %s", e)
-        return jsonify({"error": str(e)}), 500
-
-
-# ============================================================================
-# Notification Routes
-# ============================================================================
-
-
-@app.route("/notifications")
-async def notifications_page():
-    """Retired legacy page route; the SPA owns notifications."""
-    return "", 404
 
 
 @app.route("/api/v1/notifications", methods=["GET"])
@@ -3153,29 +2836,6 @@ async def api_v1_save_notifications():
         return jsonify({"data": settings.to_dict()})
     except (TypeError, ValueError) as e:
         return _api_error("invalid_notifications", str(e))
-
-
-@app.route("/api/notifications/home-assistant", methods=["POST"])
-async def save_home_assistant_settings():
-    """Save Home Assistant notification settings."""
-
-    try:
-        data = await request.get_json()
-        settings = NotificationSettings.load(remote_id=get_active_remote_id())
-
-        settings.home_assistant = HomeAssistantNotificationConfig(
-            enabled=data.get("enabled", False),
-            url=data.get("url", ""),
-            token=data.get("token", ""),
-            service=data.get("service", "notify"),
-        )
-
-        settings.save(remote_id=get_active_remote_id())
-        _LOG.info("Home Assistant notification settings saved")
-        return jsonify({"success": True})
-    except Exception as e:
-        _LOG.error("Failed to save Home Assistant settings: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route("/api/v1/notifications/home-assistant/test", methods=["POST"])
@@ -3278,28 +2938,6 @@ async def get_home_assistant_services():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route("/api/notifications/webhook", methods=["POST"])
-async def save_webhook_settings():
-    """Save webhook notification settings."""
-
-    try:
-        data = await request.get_json()
-        settings = NotificationSettings.load(remote_id=get_active_remote_id())
-
-        settings.webhook = WebhookNotificationConfig(
-            enabled=data.get("enabled", False),
-            url=data.get("url", ""),
-            headers=data.get("headers", {}),
-        )
-
-        settings.save(remote_id=get_active_remote_id())
-        _LOG.info("Webhook notification settings saved")
-        return jsonify({"success": True})
-    except Exception as e:
-        _LOG.error("Failed to save webhook settings: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 400
-
-
 @app.route("/api/v1/notifications/webhook/test", methods=["POST"])
 async def test_webhook_notification():
     """Send a test notification via webhook."""
@@ -3337,28 +2975,6 @@ async def test_webhook_notification():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route("/api/notifications/pushover", methods=["POST"])
-async def save_pushover_settings():
-    """Save Pushover notification settings."""
-
-    try:
-        data = await request.get_json()
-        settings = NotificationSettings.load(remote_id=get_active_remote_id())
-
-        settings.pushover = PushoverNotificationConfig(
-            enabled=data.get("enabled", False),
-            user_key=data.get("user_key", ""),
-            app_token=data.get("app_token", ""),
-        )
-
-        settings.save(remote_id=get_active_remote_id())
-        _LOG.info("Pushover notification settings saved")
-        return jsonify({"success": True})
-    except Exception as e:
-        _LOG.error("Failed to save Pushover settings: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 400
-
-
 @app.route("/api/v1/notifications/pushover/test", methods=["POST"])
 async def test_pushover_notification():
     """Send a test notification via Pushover."""
@@ -3393,29 +3009,6 @@ async def test_pushover_notification():
     except Exception as e:
         _LOG.error("Failed to send test notification: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/notifications/ntfy", methods=["POST"])
-async def save_ntfy_settings():
-    """Save ntfy notification settings."""
-
-    try:
-        data = await request.get_json()
-        settings = NotificationSettings.load(remote_id=get_active_remote_id())
-
-        settings.ntfy = NtfyNotificationConfig(
-            enabled=data.get("enabled", False),
-            server=data.get("server", "https://ntfy.sh"),
-            topic=data.get("topic", ""),
-            token=data.get("token", ""),
-        )
-
-        settings.save(remote_id=get_active_remote_id())
-        _LOG.info("ntfy notification settings saved")
-        return jsonify({"success": True})
-    except Exception as e:
-        _LOG.error("Failed to save ntfy settings: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route("/api/v1/notifications/ntfy/test", methods=["POST"])
@@ -3456,27 +3049,6 @@ async def test_ntfy_notification():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@app.route("/api/notifications/discord", methods=["POST"])
-async def save_discord_settings():
-    """Save Discord notification settings."""
-
-    try:
-        data = await request.get_json()
-        settings = NotificationSettings.load(remote_id=get_active_remote_id())
-
-        settings.discord = DiscordNotificationConfig(
-            enabled=data.get("enabled", False),
-            webhook_url=data.get("webhook_url", ""),
-        )
-
-        settings.save(remote_id=get_active_remote_id())
-        _LOG.info("Discord notification settings saved")
-        return jsonify({"success": True})
-    except Exception as e:
-        _LOG.error("Failed to save Discord settings: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 400
-
-
 @app.route("/api/v1/notifications/discord/test", methods=["POST"])
 async def test_discord_notification():
     """Send a test notification via Discord."""
@@ -3510,34 +3082,6 @@ async def test_discord_notification():
     except Exception as e:
         _LOG.error("Failed to send test notification: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/notifications/triggers", methods=["POST"])
-async def save_notification_triggers():
-    """Save notification trigger preferences."""
-
-    try:
-        data = await request.get_json()
-        if not data:
-            return jsonify({"success": False, "error": "No data provided"}), 400
-
-        settings = NotificationSettings.load(remote_id=get_active_remote_id())
-
-        # Update trigger settings
-        settings.triggers = NotificationTriggers(
-            integration_update_available=data.get("integration_update_available", True),
-            new_integration_in_registry=data.get("new_integration_in_registry", False),
-            integration_error_state=data.get("integration_error_state", True),
-            orphaned_entities_detected=data.get("orphaned_entities_detected", True),
-        )
-
-        settings.save(remote_id=get_active_remote_id())
-
-        _LOG.info("Notification trigger preferences saved")
-        return jsonify({"success": True})
-    except Exception as e:
-        _LOG.error("Failed to save notification triggers: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 400
 
 
 # ============================================================================
@@ -3607,6 +3151,22 @@ def _normalize_integration_log_entry(entry: Any) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_integration_log_payload(payload: list[Any] | str) -> list[dict[str, Any]]:
+    """Normalize either Remote log response format into individual records.
+
+    Recent Remote firmware returns ``/system/logs`` as ``text/plain`` even
+    when requesting the normal log view. Older releases may still return a
+    structured JSON list, so retain support for both forms.
+    """
+    if isinstance(payload, str):
+        return [
+            _normalize_integration_log_entry(line)
+            for line in payload.splitlines()
+            if line.strip()
+        ]
+    return [_normalize_integration_log_entry(entry) for entry in payload]
+
+
 @app.route("/api/v1/integration-logs/services")
 async def api_v1_integration_log_services():
     """List active Remote log services as JSON."""
@@ -3633,7 +3193,7 @@ async def api_v1_integration_log_services():
 
 @app.route("/api/v1/integration-logs")
 async def api_v1_integration_logs():
-    """Read selected Remote log services without returning a template fragment."""
+    """Read selected Remote log services as JSON; React renders the log stream."""
     client = _get_active_remote_client()
     services = [item for item in request.args.get("services", "").split(",") if item]
     if not client or not is_remote_online(get_active_remote_id()):
@@ -3651,12 +3211,9 @@ async def api_v1_integration_logs():
                 priority=priority,
                 service=service,
                 limit=max(200, 1000 // len(services)),
-                as_text=False,
+                as_text=True,
             )
-            if isinstance(logs, list):
-                entries.extend(
-                    _normalize_integration_log_entry(entry) for entry in logs
-                )
+            entries.extend(_normalize_integration_log_payload(logs))
         entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         return jsonify({"data": entries[:1000]})
     except UnfurledError as e:
@@ -3666,7 +3223,8 @@ async def api_v1_integration_logs():
 @app.route("/api/v1/integration-logs/export")
 async def download_integration_logs():
     """Download integration logs as a text file."""
-    if not _get_active_remote_client():
+    client = _get_active_remote_client()
+    if not client:
         return "Not connected to remote", 500
 
     service_param = request.args.get("service", "")
@@ -3753,12 +3311,6 @@ def _get_category_name_map() -> dict[str, str]:
     return {}
 
 
-@app.route("/system-messages")
-async def system_messages_page():
-    """Retired legacy page route; the SPA owns system messages."""
-    return "", 404
-
-
 @app.route("/api/v1/system-messages")
 async def api_v1_system_messages():
     """Return messages as text data; React owns the message presentation."""
@@ -3804,48 +3356,6 @@ async def api_v1_refresh_system_messages():
         return _api_error("message_refresh_failed", str(e), 500)
 
 
-@app.route("/diagnostics")
-async def diagnostics_page():
-    """Retired legacy page route; the SPA owns diagnostics."""
-    return "", 404
-
-
-@app.route("/api/diagnostics/system-update-check", methods=["POST"])
-async def system_update_check():
-    """Trigger an immediate firmware update check on the remote and return updated status."""
-    client = _get_active_remote_client()
-    if not client:
-        return jsonify({"success": False, "message": "No remote connected"}), 503
-    try:
-        update_info = await client.api.put_system_update()
-        remote_id = get_active_remote_id()
-        if remote_id:
-            _system_update_cache[remote_id] = update_info
-        installed = update_info.get("installed_version", "Unknown")
-        available = update_info.get("available", [])
-        if available:
-            latest = available[0]
-            return jsonify(
-                {
-                    "success": True,
-                    "installed_version": installed,
-                    "update_available": True,
-                    "available_version": latest.get("version", ""),
-                    "title": latest.get("title", ""),
-                    "release_notes_url": latest.get("release_notes_url", ""),
-                }
-            )
-        return jsonify(
-            {
-                "success": True,
-                "installed_version": installed,
-                "update_available": False,
-            }
-        )
-    except UnfurledError as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-
-
 @app.route("/api/v1/diagnostics/system-update", methods=["POST"])
 async def api_v1_system_update_check():
     """Check firmware update status with the v1 JSON envelope."""
@@ -3880,7 +3390,9 @@ async def get_orphaned_entities():
         return _api_error("remote_offline", "The active remote is offline", 503)
 
     try:
-        orphaned_entities = await _get_active_remote_client().helpers.find_orphaned_entities()  # ty:ignore[unresolved-attribute]
+        orphaned_entities = (
+            await _get_active_remote_client().helpers.find_orphaned_entities()
+        )  # ty:ignore[unresolved-attribute]
         _LOG.debug("Orphaned entities data: %s", orphaned_entities)
 
         # Group entities by activity for display
@@ -3925,7 +3437,9 @@ async def get_unused_activity_entities():
         return jsonify({"data": {"activities": {}}})
 
     try:
-        unused = await _get_active_remote_client().helpers.find_unused_activity_entities()  # ty:ignore[unresolved-attribute]
+        unused = (
+            await _get_active_remote_client().helpers.find_unused_activity_entities()
+        )  # ty:ignore[unresolved-attribute]
         _LOG.debug("Unused activity entities data: %s", unused)
 
         # Group by activity for display
@@ -3981,11 +3495,12 @@ async def get_orphaned_ir_codesets():
 @app.route("/api/v1/diagnostics/ir-codesets/<device_id>", methods=["DELETE"])
 async def delete_ir_codeset(device_id: str):
     """Delete a custom IR codeset."""
-    if not _get_active_remote_client():
+    client = _get_active_remote_client()
+    if not client:
         return _api_error("remote_unavailable", "Not connected to remote", 503)
 
     try:
-        await _get_active_remote_client().api.delete_ir_custom_code(device_id)  # ty:ignore[unresolved-attribute]
+        await client.api.delete_ir_custom_code(device_id)
         _LOG.info("Deleted IR codeset: %s", device_id)
         return jsonify({"data": {"deleted": True, "deviceId": device_id}})
     except UnfurledError as e:
@@ -4060,74 +3575,6 @@ async def system_power_off():
     except UnfurledError as e:
         _LOG.error("Failed to power off remote: %s", e)
         return _api_error("power_off_failed", str(e), 502)
-
-
-@app.route("/api/backups/create", methods=["POST"])
-async def create_backup_now():
-    """Create a backup of all integration configs that support backup."""
-    try:
-        remote_id = get_active_remote_id()
-        client = _get_active_remote_client()
-
-        if not client:
-            return _api_error("service_unavailable", "Not connected to remote", 503)
-
-        # Load registry to check which integrations support backup
-        registry = load_registry()
-        registry_by_driver_id = {}
-        for item in registry:
-            if item.get("driver_id"):
-                registry_by_driver_id[item["driver_id"]] = item
-            registry_by_driver_id[item["id"]] = item
-
-        # Get installed integrations using the helper function
-        integrations = await _get_installed_integrations(remote_id)
-
-        backed_up = []
-        skipped = []
-        failed = []
-
-        for integration in integrations:
-            driver_id = integration.driver_id
-            name = integration.name
-            version = integration.version
-
-            # Skip unconfigured integrations
-            if integration.state == "NOT_CONFIGURED":
-                continue
-
-            # Check if this integration supports backup and meets version requirements
-            reg_item = registry_by_driver_id.get(driver_id)
-            if not reg_item:
-                skipped.append(f"{name} (not in registry)")
-                continue
-
-            can_backup, reason = await _can_backup_integration(
-                driver_id, version, reg_item
-            )
-            if not can_backup:
-                skipped.append(f"{name} ({reason})")
-                continue
-
-            # Perform the backup
-            backup_data = await backup_integration(
-                client,
-                driver_id,
-                save_to_file=True,
-                remote_id=remote_id,
-            )
-            if backup_data:
-                backed_up.append(name)
-            else:
-                failed.append(name)
-
-        return jsonify(
-            {"data": {"backedUp": backed_up, "skipped": skipped, "failed": failed}}
-        )
-
-    except Exception as e:
-        _LOG.error("Failed to create backup: %s", e)
-        return _api_error("backup_failed", str(e), 500)
 
 
 @app.route("/api/v1/backups")
@@ -4211,36 +3658,29 @@ async def upload_complete_backup():
     try:
         files = await request.files
         if "file" not in files:
-            return jsonify({"status": "error", "message": "No file provided"}), 400
+            return _api_error("backup_file_required", "No file provided")
 
         file = files["file"]
         if file.filename == "":
-            return jsonify({"status": "error", "message": "No file selected"}), 400
+            return _api_error("backup_file_required", "No file selected")
 
         # Read and validate JSON
         try:
             content = file.read().decode("utf-8")
             backup_data = json.loads(content)
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            return jsonify(
-                {"status": "error", "message": f"Invalid backup file: {e}"}
-            ), 400
+            return _api_error("invalid_backup_file", f"Invalid backup file: {e}")
 
         # Validate backup structure
         if "version" not in backup_data:
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Invalid backup file: missing version field",
-                }
-            ), 400
+            return _api_error(
+                "invalid_backup_file", "Invalid backup file: missing version field"
+            )
 
         # Save uploaded backup temporarily and migrate if needed
         active_remote_id = get_active_remote_id()
         if active_remote_id is None:
-            return jsonify(
-                {"status": "error", "message": "No active remote selected"}
-            ), 400
+            return _api_error("remote_required", "No active remote selected")
 
         # If v1.0 format, save it and run migration
         if backup_data.get("version") == "1.0":
@@ -4251,30 +3691,28 @@ async def upload_complete_backup():
                 with open(MANAGER_DATA_FILE, "w", encoding="utf-8") as f:
                     json.dump(backup_data, f, indent=2)
             except OSError as e:
-                return jsonify(
-                    {"status": "error", "message": f"Failed to save backup: {e}"}
-                ), 500
+                return _api_error(
+                    "backup_save_failed", f"Failed to save backup: {e}", 500
+                )
 
             # Run the migration with the active remote ID
             if not migrate_v1_to_v2(target_remote_id=active_remote_id):
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Failed to migrate v1.0 backup to v2.0 format",
-                    }
-                ), 500
+                return _api_error(
+                    "backup_migration_failed",
+                    "Failed to migrate v1.0 backup to v2.0 format",
+                    500,
+                )
 
             # Reload the migrated data
             try:
                 with open(MANAGER_DATA_FILE, "r", encoding="utf-8") as f:
                     backup_data = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Failed to reload migrated backup: {e}",
-                    }
-                ), 500
+                return _api_error(
+                    "backup_reload_failed",
+                    f"Failed to reload migrated backup: {e}",
+                    500,
+                )
 
             _LOG.info("Successfully migrated v1.0 backup to v2.0 format")
 
@@ -4347,9 +3785,7 @@ async def upload_complete_backup():
                 json.dump(backup_data, f, indent=2)
             _LOG.info("Restored complete backup file")
         except OSError as e:
-            return jsonify(
-                {"status": "error", "message": f"Failed to save backup: {e}"}
-            ), 500
+            return _api_error("backup_save_failed", f"Failed to save backup: {e}", 500)
 
         # Calculate integration count from v2.0 structure
         integration_count = 0
@@ -4361,10 +3797,12 @@ async def upload_complete_backup():
                     integration_count = len(integrations)
 
         message = f"Successfully restored {integration_count} integration backup(s)"
-        return jsonify({"status": "ok", "message": message})
+        return jsonify(
+            {"data": {"message": message, "integrationCount": integration_count}}
+        )
     except Exception as e:
         _LOG.error("Failed to upload backup: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return _api_error("backup_import_failed", str(e), 500)
 
 
 # =============================================================================
@@ -4373,11 +3811,7 @@ async def upload_complete_backup():
 
 
 class WebServer:
-    """
-    Flask web server manager.
-
-    Handles starting and stopping the web server in a separate thread.
-    """
+    """Manage the Quart/Hypercorn server on its dedicated event-loop thread."""
 
     def __init__(
         self,
@@ -4404,16 +3838,9 @@ class WebServer:
         self._server_thread: threading.Thread | None = None
         self._running = False
 
-        # Initialize remote clients and configs
-        _remote_clients.clear()
-        _remote_configs.clear()
-        for config in remote_configs:
-            _remote_configs[config.identifier] = config
-            _remote_clients[config.identifier] = Remote(
-                f"http://{config.address}:80/api/",
-                pin=config.pin,
-                api_key=config.api_key,
-            )
+        # No Remote session has been opened at construction time. All future
+        # replacement and closure is performed on Hypercorn's event loop.
+        self._replace_remote_references(remote_configs)
         _LOG.info(
             "WebServer.__init__: loaded %d remote(s): %s",
             len(_remote_clients),
@@ -4425,6 +3852,56 @@ class WebServer:
 
         # Ensure the static bundle directory exists.
         self._setup_directories()
+
+    @staticmethod
+    def _make_remote(config: RemoteConfig) -> Remote:
+        return Remote(
+            f"http://{config.address}:80/api/",
+            pin=config.pin,
+            api_key=config.api_key,
+        )
+
+    def _replace_remote_references(
+        self, remote_configs: list[RemoteConfig]
+    ) -> list[Remote]:
+        """Replace the global client map and return clients that need closing."""
+        previous_clients = list(_remote_clients.values())
+        _remote_clients.clear()
+        _remote_configs.clear()
+        for config in remote_configs:
+            _remote_configs[config.identifier] = config
+            _remote_clients[config.identifier] = self._make_remote(config)
+            if config.identifier not in _remote_online:
+                _remote_online[config.identifier] = True
+        return previous_clients
+
+    async def _replace_remotes_on_server_loop(
+        self, remote_configs: list[RemoteConfig]
+    ) -> None:
+        """Atomically replace Remote clients and close prior aiohttp sessions."""
+        previous_clients = self._replace_remote_references(remote_configs)
+        if previous_clients:
+            results = await asyncio.gather(
+                *(client.close() for client in previous_clients),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, Exception):
+                    _LOG.warning("Failed to close replaced Remote client: %s", result)
+
+    async def _close_remote_clients_on_server_loop(self) -> None:
+        """Close unfurled resources before Hypercorn's owning loop exits."""
+        clients = list(_remote_clients.values())
+        if not clients:
+            return
+        results = await asyncio.gather(
+            *(client.close() for client in clients), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                _LOG.warning(
+                    "Failed to close Remote client during shutdown: %s", result
+                )
 
     def _setup_directories(self) -> None:
         """Create required directories if they don't exist."""
@@ -4451,6 +3928,9 @@ class WebServer:
         from hypercorn.asyncio import serve as hypercorn_serve
         import asyncio as _asyncio
 
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+        self._loop = loop
         self._shutdown_event = _asyncio.Event()
         try:
             is_docker = os.environ.get("UC_CONFIG_HOME", "").startswith("/config")
@@ -4467,8 +3947,6 @@ class WebServer:
             config.bind = bindings
             config.loglevel = "WARNING"
             _LOG.info("Server configured, starting to serve...")
-            loop = _asyncio.new_event_loop()
-            self._loop = loop
             loop.run_until_complete(
                 hypercorn_serve(app, config, shutdown_trigger=self._shutdown_trigger)
             )
@@ -4481,6 +3959,7 @@ class WebServer:
         finally:
             if hasattr(self, "_loop"):
                 self._loop.close()
+                _asyncio.set_event_loop(None)
 
     async def _shutdown_trigger(self) -> None:
         """Awaitable trigger used by hypercorn to initiate graceful shutdown."""
@@ -4493,6 +3972,16 @@ class WebServer:
             return
 
         _LOG.info("Stopping web server")
+        loop = getattr(self, "_loop", None)
+        if loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._close_remote_clients_on_server_loop(), loop
+                ).result(timeout=5)
+            except Exception as error:
+                _LOG.warning(
+                    "Failed to close Remote clients before shutdown: %s", error
+                )
         self._running = False
 
         if self._server_thread:
@@ -4528,24 +4017,16 @@ class WebServer:
             len(remote_configs),
         )
 
-        # Clear and rebuild remote clients and configs
-        _remote_clients.clear()
-        _remote_configs.clear()
+        loop = getattr(self, "_loop", None)
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._replace_remotes_on_server_loop(remote_configs), loop
+            ).result(timeout=10)
+        else:
+            # During initial setup no client session can exist yet.
+            self._replace_remote_references(remote_configs)
 
         for config in remote_configs:
-            _remote_configs[config.identifier] = config
-            _remote_clients[config.identifier] = Remote(
-                f"http://{config.address}:80/api/",
-                pin=config.pin,
-                api_key=config.api_key,
-            )
-            # If this remote is new (no prior online status), assume online — setup
-            # already verified it was reachable before adding it to the config.
-            if config.identifier not in _remote_online:
-                _LOG.info(
-                    "[%s] New remote — marking online immediately", config.identifier
-                )
-                _remote_online[config.identifier] = True
             _LOG.info("Loaded remote: %s (%s)", config.name, config.identifier)
 
         _LOG.info(
@@ -4558,6 +4039,23 @@ class WebServer:
     def is_running(self) -> bool:
         """Check if the web server is running."""
         return self._running
+
+    async def run_on_server_loop(self, operation: Coroutine[Any, Any, Any]) -> Any:
+        """Run a web-server operation on Hypercorn's event loop.
+
+        Polling devices live on the integration driver's loop, while unfurled's
+        Remote sessions belong to Hypercorn's loop.  Crossing that boundary
+        through ``run_coroutine_threadsafe`` prevents aiohttp futures from
+        being reused by the wrong event loop.
+        """
+        loop = getattr(self, "_loop", None)
+        if loop is None or not loop.is_running():
+            operation.close()
+            raise RuntimeError("Web server event loop is not running")
+        if asyncio.get_running_loop() is loop:
+            return await operation
+        future = asyncio.run_coroutine_threadsafe(operation, loop)
+        return await asyncio.wrap_future(future)
 
     async def refresh_integration_versions(self, remote_id: str) -> None:
         """
@@ -4862,84 +4360,6 @@ class WebServer:
                 "[%s] Unexpected error checking orphaned entities: %s", remote_id, e
             )
 
-    async def check_orphaned_entities_async(self, remote_id: str) -> None:
-        """
-        Check for orphaned entities in activities and send notifications (async version).
-
-        This is called from async contexts like startup to detect orphaned entities
-        that may prevent activities from functioning correctly.
-
-        :param remote_id: Remote identifier to check orphaned entities for
-        """
-        client = _remote_clients.get(remote_id)
-        if not client:
-            _LOG.debug(
-                "[%s] Skipping orphaned entities check - no remote client", remote_id
-            )
-            return
-
-        try:
-            _LOG.debug("[%s] Checking for orphaned entities...", remote_id)
-            orphaned_entities = await client.helpers.find_orphaned_entities()
-            _LOG.debug(
-                "[%s] Found %d orphaned entities",
-                remote_id,
-                len(orphaned_entities) if orphaned_entities else 0,
-            )
-
-            if orphaned_entities:
-                # Group by activity to get unique activities with orphaned entities
-                activities = {}
-                for entity in orphaned_entities:
-                    activity_id = entity.get("activity_id")
-                    if not activity_id:
-                        continue
-
-                    if activity_id not in activities:
-                        activity_name = entity.get("activity_name", {})
-                        name = _get_localized_name(activity_name, "Unknown Activity")
-                        activities[activity_id] = name
-
-                if activities:
-                    activity_names = list(activities.values())
-                    activity_ids = list(activities.keys())
-
-                    _LOG.info(
-                        "Found %d activities with orphaned entities: %s",
-                        len(activity_names),
-                        ", ".join(activity_names),
-                    )
-
-                    # Send notification
-                    _LOG.debug("Attempting to send orphaned entities notification...")
-                    notification_manager = get_notification_manager(remote_id)
-                    await notification_manager.notify_orphaned_entities(
-                        activity_names,
-                        activity_ids,
-                    )
-                    _LOG.debug("Orphaned entities notification sent")
-                else:
-                    _LOG.debug("No activities with orphaned entities")
-                    # Clear any previously notified activities if they're now resolved
-                    notification_manager = get_notification_manager(remote_id)
-                    if notification_manager._notified_orphaned_activities:
-                        notification_manager.clear_orphaned_activities(
-                            list(notification_manager._notified_orphaned_activities)
-                        )
-            else:
-                _LOG.debug("No orphaned entities detected")
-                # Clear any previously notified activities
-                notification_manager = get_notification_manager(remote_id)
-                if notification_manager._notified_orphaned_activities:
-                    notification_manager.clear_orphaned_activities(
-                        list(notification_manager._notified_orphaned_activities)
-                    )
-
-        except UnfurledError as e:
-            _LOG.warning("Failed to check for orphaned entities: %s", e)
-        except Exception as e:
-            _LOG.warning("Error checking orphaned entities: %s", e)
-
     def check_system_messages(self) -> None:
         """
         Check for new system messages from GitHub.
@@ -5003,9 +4423,7 @@ class WebServer:
                 if not reg_item:
                     continue
 
-                can_backup, reason = await _can_backup_integration(
-                    driver_id, version, reg_item
-                )
+                can_backup, reason = backup_support_status(version, reg_item)
                 if not can_backup:
                     continue
 
@@ -5013,7 +4431,7 @@ class WebServer:
 
                 # Try to backup (with remote_id for namespacing)
                 backup_data = await backup_integration(
-                    client, driver_id, save_to_file=True, remote_id=remote_id
+                    client.api, driver_id, save_to_file=True, remote_id=remote_id
                 )
                 if backup_data:
                     backed_up_count += 1
