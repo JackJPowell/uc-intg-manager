@@ -219,6 +219,20 @@ def _get_active_remote_client() -> Remote | None:
 _remote_online: dict[str, bool] = {}
 
 
+@dataclass
+class _ConnectivityProbeState:
+    """Failure/backoff state for a remote's inexpensive liveness probe."""
+
+    failure_count: int = 0
+    next_probe_at: float = 0.0
+
+
+# A heartbeat must never make managing several sleeping remotes feel serial.
+_CONNECTIVITY_TIMEOUT = aiohttp.ClientTimeout(total=2, connect=1)
+_OFFLINE_HEARTBEAT_MAX_INTERVAL = 300.0
+_remote_connectivity: dict[str, _ConnectivityProbeState] = {}
+
+
 def set_remote_online(remote_id: str, online: bool) -> None:
     """Called by device.py to push connectivity changes into the web server."""
     caller = inspect.stack()[1].function
@@ -316,6 +330,91 @@ _system_update_cache: dict[str, dict] = {}
 def set_system_update_info(remote_id: str, update_info: dict) -> None:
     """Cache system firmware update info for a remote (called from device.py)."""
     _system_update_cache[remote_id] = update_info
+
+
+def _available_firmware_updates(update_info: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize the firmware-update list returned by different Remote releases."""
+    candidates = update_info.get("available") or update_info.get("updates") or []
+    if not isinstance(candidates, list):
+        return []
+    return [item for item in candidates if isinstance(item, dict)]
+
+
+def _firmware_update_api_model(
+    update_info: dict[str, Any],
+    client: Remote | None = None,
+    status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Serialize firmware availability and live update progress for the SPA."""
+    available = _available_firmware_updates(update_info)
+    latest = available[0] if available else {}
+    status = status or {}
+    raw_progress = status.get("progress")
+    progress: dict[str, Any] = (
+        cast(dict[str, Any], raw_progress) if isinstance(raw_progress, dict) else {}
+    )
+    state = str(status.get("state") or "").upper()
+    remote_progress = client.system.update_info if client else None
+    active_states = {"START", "RUN", "PROGRESS", "DOWNLOAD", "UPDATING", "INSTALLING"}
+    in_progress = bool(
+        state in active_states or (remote_progress and remote_progress.in_progress)
+    )
+    update_percent = int(
+        progress.get("current_percent", 0)
+        or (remote_progress.update_percent if remote_progress else 0)
+    )
+    download_percent = int(
+        progress.get("download_percent", 0)
+        or (remote_progress.download_percent if remote_progress else 0)
+    )
+    return {
+        "installedVersion": update_info.get("installed_version", "Unknown"),
+        "updateAvailable": bool(available),
+        "availableVersion": latest.get("version"),
+        "title": latest.get("title"),
+        "releaseNotesUrl": latest.get("release_notes_url"),
+        "inProgress": in_progress,
+        "state": state or ("UPDATING" if in_progress else "IDLE"),
+        "updatePercent": max(0, min(100, update_percent)),
+        "downloadPercent": max(0, min(100, download_percent)),
+    }
+
+
+# Firmware progress is the sole use of a Remote WebSocket.  Keeping this
+# separate from the normal HTTP heartbeat avoids persistent connections to
+# battery-powered remotes that are likely to be asleep.
+_firmware_update_websockets: set[str] = set()
+_FIRMWARE_UPDATE_TERMINAL_STATES = {"DONE", "SUCCESS", "ERROR", "FAILED"}
+
+
+async def _start_firmware_update_websocket(remote_id: str, client: Remote) -> None:
+    """Open the short-lived progress WebSocket for an active firmware update."""
+    if remote_id in _firmware_update_websockets:
+        return
+    config = _remote_configs.get(remote_id)
+    if not config or not config.api_key:
+        return
+    try:
+        await client.connect_websocket()
+        _firmware_update_websockets.add(remote_id)
+    except Exception as error:
+        # The update API still provides polling status, so this is non-fatal.
+        _LOG.warning(
+            "[%s] Firmware progress WebSocket unavailable: %s", remote_id, error
+        )
+
+
+async def _stop_firmware_update_websocket(remote_id: str, client: Remote) -> None:
+    """Release a firmware-progress WebSocket after its update is complete."""
+    if remote_id not in _firmware_update_websockets:
+        return
+    _firmware_update_websockets.discard(remote_id)
+    try:
+        await client.disconnect_websocket()
+    except Exception as error:
+        _LOG.debug(
+            "[%s] Failed to close firmware progress WebSocket: %s", remote_id, error
+        )
 
 
 # Firmware version cache keyed by remote_id (populated at connect time)
@@ -1097,13 +1196,14 @@ async def _get_installed_integrations(
         if registry_item.get("author"):
             developer = registry_item["author"]
 
-        if not home_page and registry_item.get("repository"):
-            home_page = registry_item.get("repository", "")
-        # Also use registry if driver home_page doesn't have github.com
-        elif (
-            home_page
-            and "github.com" not in home_page
+        if (
+            not home_page
             and registry_item.get("repository")
+            or (
+                home_page
+                and "github.com" not in home_page
+                and registry_item.get("repository")
+            )
         ):
             home_page = registry_item.get("repository", "")
 
@@ -1213,13 +1313,14 @@ async def _get_installed_integrations(
             developer = registry_item["author"]
 
         # Use registry repository as fallback for home_page
-        if not home_page and registry_item.get("repository"):
-            home_page = registry_item.get("repository", "")
-        # Also use registry if driver home_page doesn't have github.com
-        elif (
-            home_page
-            and "github.com" not in home_page
+        if (
+            not home_page
             and registry_item.get("repository")
+            or (
+                home_page
+                and "github.com" not in home_page
+                and registry_item.get("repository")
+            )
         ):
             home_page = registry_item.get("repository", "")
 
@@ -1850,9 +1951,7 @@ async def update_integration_inplace(driver_id: str):
             "Downloaded %s (%d bytes) for in-place update", filename, len(archive_data)
         )
 
-        await client.api.post_integration_install(
-            archive_data, filename, update=True
-        )  # ty:ignore[unresolved-attribute]
+        await client.api.post_integration_install(archive_data, filename, update=True)  # ty:ignore[unresolved-attribute]
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
 
         # Kick off version cache refresh in the background
@@ -2087,9 +2186,7 @@ async def install_integration(driver_id: str):
         _LOG.info("Downloaded %s (%d bytes) for install", filename, len(archive_data))
 
         # Install the integration
-        await client.api.post_integration_install(
-            archive_data, filename
-        )  # ty:ignore[unresolved-attribute]
+        await client.api.post_integration_install(archive_data, filename)  # ty:ignore[unresolved-attribute]
         _LOG.info("Installed integration %s successfully", integration.get("name"))
 
         # Return the updated integration data for the SPA.
@@ -2597,7 +2694,7 @@ async def self_update_inplace():
     _self_update_pending = True
     _LOG.info("Self-update-inplace: queuing background task for %s", version)
     asyncio.create_task(
-        _do_self_update_inplace(remote_id, im_owner, im_repo, asset_pattern, version)
+        _do_self_update_inplace(remote_id, im_owner, im_repo, asset_pattern, version)  # ty:ignore[invalid-argument-type]
     )
 
     return jsonify({"data": {"started": True, "targetVersion": version}})
@@ -2755,7 +2852,7 @@ async def api_v1_get_settings():
                 "settings": Settings.load(remote_id=get_active_remote_id()).to_dict(),
                 "preferences": UIPreferences.load().to_dict(),
                 "runtime": {
-                    "remoteAddress": _remote_configs.get(get_active_remote_id()).address
+                    "remoteAddress": _remote_configs.get(get_active_remote_id()).address  # ty:ignore[unresolved-attribute]
                     if get_active_remote_id() in _remote_configs
                     else None,
                     "webServerPort": WEB_SERVER_PORT,
@@ -2803,7 +2900,7 @@ async def api_v1_save_settings():
                 "settings": settings.to_dict(),
                 "preferences": ui_prefs.to_dict(),
                 "runtime": {
-                    "remoteAddress": _remote_configs.get(get_active_remote_id()).address
+                    "remoteAddress": _remote_configs.get(get_active_remote_id()).address  # ty:ignore[unresolved-attribute]
                     if get_active_remote_id() in _remote_configs
                     else None,
                     "webServerPort": WEB_SERVER_PORT,
@@ -2899,7 +2996,7 @@ async def get_home_assistant_services():
                 ssl_context = _get_ssl_context()
                 connector = aiohttp.TCPConnector(ssl=ssl_context)
                 async with aiohttp.ClientSession(connector=connector) as session:
-                    async with session.get(url, headers=headers, timeout=10) as resp:
+                    async with session.get(url, headers=headers, timeout=10) as resp:  # ty:ignore[invalid-argument-type]
                         if resp.status == 200:
                             data = await resp.json()
                             # Find notify domain
@@ -3110,7 +3207,7 @@ async def api_v1_clear_logs():
 
 
 _REMOTE_LOG_LINE = re.compile(
-    r"^\[(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s+(?P<level>[A-Z]+)\s+(?P<message>.*)$"
+    r"^\[?(?P<timestamp>\d{4}-\d{2}-\d{2}(?:T|\s)\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\s?[+-]\d{2}:?\d{2})?)\s+(?:(?P<source>[a-z0-9_.-]+)\s+)?(?:(?P<level>[A-Z]+)\s+)?(?P<message>.*)$"
 )
 
 
@@ -3118,9 +3215,10 @@ def _normalize_integration_log_entry(entry: Any) -> dict[str, Any]:
     """Give Remote log lines a stable JSON shape for the SPA.
 
     Some Remote services return structured log records while others return the
-    timestamp and severity as a prefix inside ``message``.  Preserve both forms
+    timestamp and severity as a prefix inside ``message``. Preserve both forms
     but promote those prefix values so the client can consistently render and
-    sort the timestamp column.
+    sort the timestamp column. This includes the space-separated UTC timestamp
+    emitted by current Remote journal output.
     """
     normalized = dict(entry) if isinstance(entry, dict) else {"message": str(entry)}
     message = str(
@@ -3134,8 +3232,14 @@ def _normalize_integration_log_entry(entry: Any) -> dict[str, Any]:
     if match:
         if not normalized.get("timestamp"):
             normalized["timestamp"] = match.group("timestamp")
-        normalized.setdefault("level", match.group("level").lower())
-        normalized["message"] = match.group("message")
+        source = match.group("source")
+        if level := match.group("level"):
+            # Journal records can carry a default debug priority in their
+            # structure while the rendered line gives the real service level.
+            normalized["level"] = level.lower()
+        normalized["message"] = (
+            f"{source}  {match.group('message')}" if source else match.group("message")
+        )
     else:
         if not normalized.get("timestamp"):
             normalized["timestamp"] = (
@@ -3151,7 +3255,9 @@ def _normalize_integration_log_entry(entry: Any) -> dict[str, Any]:
     return normalized
 
 
-def _normalize_integration_log_payload(payload: list[Any] | str) -> list[dict[str, Any]]:
+def _normalize_integration_log_payload(
+    payload: list[Any] | str,
+) -> list[dict[str, Any]]:
     """Normalize either Remote log response format into individual records.
 
     Recent Remote firmware returns ``/system/logs`` as ``text/plain`` even
@@ -3364,21 +3470,66 @@ async def api_v1_system_update_check():
         return _api_error("remote_unavailable", "No remote connected", 503)
     try:
         update_info = await client.api.put_system_update()
-        available = update_info.get("available", [])
-        latest = available[0] if available else {}
+        set_system_update_info(get_active_remote_id() or "", update_info)
+        return jsonify({"data": _firmware_update_api_model(update_info, client)})
+    except UnfurledError as e:
+        return _api_error("firmware_check_failed", str(e), 502)
+
+
+@app.route("/api/v1/diagnostics/system-update/status")
+async def api_v1_system_update_status():
+    """Return firmware update progress without exposing the Remote WebSocket."""
+    remote_id = get_active_remote_id()
+    client = _get_active_remote_client()
+    if not remote_id or not client:
+        return _api_error("remote_unavailable", "No remote connected", 503)
+    update_info = _system_update_cache.get(remote_id, {})
+    try:
+        status = await client.system.get_update_status()
+        if not update_info:
+            update_info = await client.api.get_system_update()
+            set_system_update_info(remote_id, update_info)
+        model = _firmware_update_api_model(update_info, client, status)
+        if model["state"] in _FIRMWARE_UPDATE_TERMINAL_STATES:
+            await _stop_firmware_update_websocket(remote_id, client)
+        return jsonify({"data": model})
+    except UnfurledError as e:
+        await _stop_firmware_update_websocket(remote_id, client)
+        return _api_error("firmware_status_failed", str(e), 502)
+
+
+@app.route("/api/v1/diagnostics/system-update/install", methods=["POST"])
+async def api_v1_system_update_install():
+    """Start installation of the latest available Remote firmware."""
+    remote_id = get_active_remote_id()
+    client = _get_active_remote_client()
+    if not remote_id or not client:
+        return _api_error("remote_unavailable", "No remote connected", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active remote is offline", 503)
+    try:
+        update_info = await client.api.get_system_update()
+        if not _available_firmware_updates(update_info):
+            return _api_error(
+                "firmware_up_to_date", "No firmware update is available", 409
+            )
+        set_system_update_info(remote_id, update_info)
+        await _start_firmware_update_websocket(remote_id, client)
+        state = await client.system.update_firmware()
+        _LOG.info("[%s] Firmware update requested: %s", remote_id, state)
         return jsonify(
             {
                 "data": {
-                    "installedVersion": update_info.get("installed_version", "Unknown"),
-                    "updateAvailable": bool(available),
-                    "availableVersion": latest.get("version"),
-                    "title": latest.get("title"),
-                    "releaseNotesUrl": latest.get("release_notes_url"),
+                    **_firmware_update_api_model(
+                        update_info, client, {"state": state or "UPDATING"}
+                    ),
+                    "inProgress": True,
                 }
             }
         )
     except UnfurledError as e:
-        return _api_error("firmware_check_failed", str(e), 502)
+        await _stop_firmware_update_websocket(remote_id, client)
+        return _api_error("firmware_update_failed", str(e), 502)
 
 
 @app.route("/api/v1/diagnostics/orphaned-entities")
@@ -3391,7 +3542,7 @@ async def get_orphaned_entities():
 
     try:
         orphaned_entities = (
-            await _get_active_remote_client().helpers.find_orphaned_entities()
+            await _get_active_remote_client().helpers.find_orphaned_entities()  # ty:ignore[unresolved-attribute]
         )  # ty:ignore[unresolved-attribute]
         _LOG.debug("Orphaned entities data: %s", orphaned_entities)
 
@@ -3422,7 +3573,7 @@ async def get_orphaned_entities():
                 )
                 entity_copy["integration"] = integration_copy
 
-            activities[activity_id]["entities"].append(entity_copy)
+            activities[activity_id]["entities"].append(entity_copy)  # ty:ignore[unresolved-attribute]
 
         return jsonify({"data": {"activities": activities}})
     except UnfurledError as e:
@@ -3438,7 +3589,7 @@ async def get_unused_activity_entities():
 
     try:
         unused = (
-            await _get_active_remote_client().helpers.find_unused_activity_entities()
+            await _get_active_remote_client().helpers.find_unused_activity_entities()  # ty:ignore[unresolved-attribute]
         )  # ty:ignore[unresolved-attribute]
         _LOG.debug("Unused activity entities data: %s", unused)
 
@@ -3465,7 +3616,7 @@ async def get_unused_activity_entities():
                     integration.get("name"), "Unknown Integration"
                 )
                 entity_copy["integration"] = integration_copy
-            activities[activity_id]["entities"].append(entity_copy)
+            activities[activity_id]["entities"].append(entity_copy)  # ty:ignore[unresolved-attribute]
 
         return jsonify({"data": {"activities": activities}})
     except UnfurledError as e:
@@ -3717,6 +3868,7 @@ async def upload_complete_backup():
             _LOG.info("Successfully migrated v1.0 backup to v2.0 format")
 
         # Restore settings if present in v2.0 format
+        settings_restored = False
         remotes_data = backup_data.get("remotes")
         if isinstance(remotes_data, dict) and active_remote_id in remotes_data:
             remote_data = remotes_data[active_remote_id]
@@ -3727,6 +3879,7 @@ async def upload_complete_backup():
                     try:
                         settings = Settings(**settings_data)
                         settings.save(remote_id=active_remote_id)
+                        settings_restored = True
                         _LOG.info("Restored settings from backup")
                     except Exception as e:
                         _LOG.warning("Failed to restore settings: %s", e)
@@ -3798,7 +3951,14 @@ async def upload_complete_backup():
 
         message = f"Successfully restored {integration_count} integration backup(s)"
         return jsonify(
-            {"data": {"message": message, "integrationCount": integration_count}}
+            {
+                "data": {
+                    "message": message,
+                    "integrationCount": integration_count,
+                    "settingsRestored": settings_restored,
+                    "restartRequired": False,
+                }
+            }
         )
     except Exception as e:
         _LOG.error("Failed to upload backup: %s", e)
@@ -3868,6 +4028,10 @@ class WebServer:
         previous_clients = list(_remote_clients.values())
         _remote_clients.clear()
         _remote_configs.clear()
+        _remote_connectivity.clear()
+        # Previous Remote instances are closed below, which also closes any
+        # short-lived firmware-progress socket they owned.
+        _firmware_update_websockets.clear()
         for config in remote_configs:
             _remote_configs[config.identifier] = config
             _remote_clients[config.identifier] = self._make_remote(config)
@@ -4069,7 +4233,7 @@ class WebServer:
         await _refresh_version_cache(remote_id)
         await _run_automatic_updates(remote_id)
 
-    async def check_connectivity(self, remote_id: str) -> None:
+    async def check_connectivity(self, remote_id: str, *, force: bool = False) -> None:
         """
         Test whether a remote is reachable and update its online status.
 
@@ -4078,6 +4242,7 @@ class WebServer:
         are handled directly in device.py.
 
         :param remote_id: Remote identifier to test
+        :param force: Bypass offline backoff after an explicit reconnect event
         """
         client = _remote_clients.get(remote_id)
         if not client:
@@ -4088,17 +4253,51 @@ class WebServer:
             )
             return
 
+        probe = _remote_connectivity.setdefault(remote_id, _ConnectivityProbeState())
+        now = time.monotonic()
+        if not force and not is_remote_online(remote_id) and now < probe.next_probe_at:
+            _LOG.debug(
+                "[%s] Skipping offline heartbeat for %.0fs",
+                remote_id,
+                probe.next_probe_at - now,
+            )
+            return
+
+        was_online = is_remote_online(remote_id)
         try:
-            await client.api.get_version()
+            # This public endpoint is deliberately a small, separately timed
+            # liveness check rather than a full authenticated API operation.
+            await client.api.request(
+                "GET", "pub/version", timeout=_CONNECTIVITY_TIMEOUT
+            )
             set_remote_online(remote_id, True)
+            probe.failure_count = 0
+            probe.next_probe_at = 0.0
+            if not was_online:
+                _LOG.info("[%s] Remote connectivity restored", remote_id)
         except Exception as e:
-            _LOG.warning("[%s] Connectivity check failed: %s", remote_id, e)
+            probe.failure_count += 1
+            delay = min(
+                30.0 * (2 ** (probe.failure_count - 1)),
+                _OFFLINE_HEARTBEAT_MAX_INTERVAL,
+            )
+            probe.next_probe_at = now + delay
+            if was_online:
+                _LOG.warning("[%s] Connectivity check failed: %s", remote_id, e)
+            else:
+                _LOG.debug("[%s] Offline heartbeat failed: %s", remote_id, e)
             set_remote_online(remote_id, False)
 
-    async def check_all_remote_connectivity(self) -> None:
+    async def check_all_remote_connectivity(self, *, force: bool = False) -> None:
         """Test connectivity for every configured remote and update online status."""
-        for remote_id in list(_remote_clients.keys()):
-            await self.check_connectivity(remote_id)
+        remote_ids = list(_remote_clients.keys())
+        if remote_ids:
+            await asyncio.gather(
+                *(
+                    self.check_connectivity(remote_id, force=force)
+                    for remote_id in remote_ids
+                )
+            )
 
     async def check_error_states(self, remote_id: str) -> None:
         """

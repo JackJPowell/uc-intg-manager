@@ -82,9 +82,6 @@ class IntegrationManagerDevice(PollingDevice):
 
         self._device_config: RemoteConfig = device_config
 
-        # Load user settings for this remote
-        self._settings = Settings.load(remote_id=device_config.identifier)
-
         # Keep one unfurled client per configured Remote for polling.
         self._client = CoreAPI(
             f"http://{device_config.address}:80/api/",
@@ -320,7 +317,7 @@ class IntegrationManagerDevice(PollingDevice):
                                 "[%s] Remote is on battery at startup", self.log_id
                             )
                             # Check if web server should run even on battery
-                            if not self._settings.shutdown_on_battery:
+                            if not Settings.load(self.identifier).shutdown_on_battery:
                                 _LOG.info(
                                     "[%s] Starting web server on battery (shutdown_on_battery=False)",
                                     self.log_id,
@@ -924,7 +921,7 @@ class IntegrationManagerDevice(PollingDevice):
         elif self._is_docked:
             # Docked - always running
             should_be_running = True
-        elif not self._settings.shutdown_on_battery:
+        elif not Settings.load(self.identifier).shutdown_on_battery:
             # On battery but configured to keep running
             should_be_running = True
 

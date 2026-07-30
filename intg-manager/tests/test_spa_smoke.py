@@ -120,7 +120,7 @@ def test_polling_operations_are_marshalled_to_the_web_server_loop():
     assert "async def run_on_server_loop" in server
     assert "asyncio.run_coroutine_threadsafe(operation, loop)" in server
     assert "await web_server.run_on_server_loop(" in device
-    assert "await ws.run_on_server_loop(ws.check_all_remote_connectivity())" in driver
+    assert "await ws.run_on_server_loop(ws.check_all_remote_connectivity(force=True))" in driver
 
 
 def test_integration_lifecycle_uses_coreapi_operations():
@@ -193,7 +193,14 @@ def test_remote_log_regex_compiles():
         )
     )
     pattern = ast.literal_eval(assignment.value.args[0])
-    assert re.compile(pattern).match("[2026-07-27T21:27:49Z DEBUG service: ready")
+    compiled = re.compile(pattern)
+    assert compiled.match("[2026-07-27T21:27:49Z DEBUG service: ready")
+    journal = compiled.match(
+        "2026-07-30 12:27:18.259341 +00:00 core ERROR [driver] unavailable"
+    )
+    assert journal and journal.group("timestamp") == "2026-07-30 12:27:18.259341 +00:00"
+    assert journal.group("source") == "core"
+    assert journal.group("level") == "ERROR"
 
 
 def test_integration_log_normalization_supports_remote_compact_keys():
@@ -219,6 +226,28 @@ def test_integration_logs_accept_remote_plain_text_responses():
     assert "as_text=True" in log_routes
 
 
+def test_backup_import_applies_settings_without_restarting_the_manager():
+    source = SERVER.read_text(encoding="utf-8")
+    device = (ROOT / "intg-manager" / "device.py").read_text(encoding="utf-8")
+    settings = (ROOT / "ui" / "src" / "components" / "SettingsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert '"restartRequired": False' in source
+    assert '"settingsRestored": settings_restored' in source
+    assert "Settings.load(self.identifier).shutdown_on_battery" in device
+    assert "self._settings" not in device
+    assert "Backup imported." in settings
+    assert "no manager restart is needed" in settings
+
+
+def test_settings_save_has_stable_feedback():
+    settings = (ROOT / "ui" / "src" / "components" / "SettingsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "settings-save-button" in settings
+    assert "Settings saved. Changes take effect immediately." in settings
+
+
 def test_manager_logs_are_part_of_the_mobile_navigation_list():
     shell = (ROOT / "ui" / "src" / "components" / "AppShell.tsx").read_text(
         encoding="utf-8"
@@ -235,6 +264,42 @@ def test_installed_integrations_include_a_disconnected_attention_summary():
     assert "Needs attention" in collection
     assert "setFilter('disconnected')" in collection
     assert "integration-overview-note" not in collection
+
+
+def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
+    server = SERVER.read_text(encoding="utf-8")
+    diagnostics = (ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    assert '"/api/v1/diagnostics/system-update/install"' in server
+    assert '"/api/v1/diagnostics/system-update/status"' in server
+    assert "await client.system.update_firmware()" in server
+    assert "await _start_firmware_update_websocket(remote_id, client)" in server
+    assert "await _stop_firmware_update_websocket(remote_id, client)" in server
+    assert "firmwareUpdateStatus" in api
+    assert "installFirmware" in api
+    assert "Update firmware" in diagnostics
+    assert "firmware-progress" in diagnostics
+
+
+def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes():
+    server = SERVER.read_text(encoding="utf-8")
+    driver = (ROOT / "intg-manager" / "driver.py").read_text(encoding="utf-8")
+    startup = server[server.index("async def _startup_fetch_localization") : server.index("@app.before_request")]
+    replacement = server[
+        server.index("async def _replace_remotes_on_server_loop") : server.index(
+            "async def _close_remote_clients_on_server_loop"
+        )
+    ]
+
+    assert "_CONNECTIVITY_TIMEOUT = aiohttp.ClientTimeout(total=2, connect=1)" in server
+    assert '"GET", "pub/version", timeout=_CONNECTIVITY_TIMEOUT' in server
+    assert "next_probe_at" in server
+    assert "asyncio.gather(" in server
+    assert "connect_websocket" not in startup
+    assert "connect_websocket" not in replacement
+    assert "check_all_remote_connectivity(force=True)" in driver
 
 
 def test_backups_pass_the_unfurled_coreapi_not_the_remote_wrapper():
