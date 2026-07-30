@@ -253,6 +253,23 @@ def test_settings_save_has_stable_feedback():
     assert "Settings saved" in settings
 
 
+def test_integration_mark_border_tracks_its_state_on_hover():
+    styles = (ROOT / "ui" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".integration-mark.success{--mark-border:" in styles
+    assert ".integration-mark.warning{--mark-border:" in styles
+    assert ".integration-mark.danger{--mark-border:" in styles
+    assert "var(--mark-inset),0 7px 16px" in styles
+
+
+def test_inplace_update_clears_stale_release_data_before_the_spa_refetches():
+    server = SERVER.read_text(encoding="utf-8")
+    collection = (
+        ROOT / "ui" / "src" / "components" / "IntegrationCollection.tsx"
+    ).read_text(encoding="utf-8")
+    assert "_get_version_cache(remote_id).pop(integration.driver_id, None)" in server
+    assert "queryClient.refetchQueries({ queryKey: [mode, 'integrations'], type: 'active' })" in collection
+
+
 def test_manager_logs_are_part_of_the_mobile_navigation_list():
     shell = (ROOT / "ui" / "src" / "components" / "AppShell.tsx").read_text(
         encoding="utf-8"
@@ -288,6 +305,14 @@ def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
     assert "firmware-progress" in diagnostics
     assert "enabled: firmwareUpdateActive" in diagnostics
     assert "refetchInterval: firmwareUpdateActive ? 2_000 : false" in diagnostics
+    assert "total_steps" in server
+    assert "current_step" in server
+    assert '"currentStepPercent"' in server
+    assert "firmwareStepLabel" in diagnostics
+    assert "if e.status_code == 404:" in server
+    assert '"state": "DONE"' in server
+    assert "firmwareRecheckActive" in diagnostics
+    assert "firmware-recheck" in diagnostics
 
 
 def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes():

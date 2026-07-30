@@ -81,7 +81,7 @@ from sync_api import (
 )
 from system_messages import get_system_messages_service
 from unfurled import Remote
-from unfurled.helpers.exceptions import UnfurledError
+from unfurled.helpers.exceptions import HTTPError, UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -351,18 +351,26 @@ def _firmware_update_api_model(
     status = status or {}
     raw_progress = status.get("progress")
     progress: dict[str, Any] = (
-        cast(dict[str, Any], raw_progress) if isinstance(raw_progress, dict) else {}
+        cast(dict[str, Any], raw_progress) if isinstance(raw_progress, dict) else status
     )
     state = str(status.get("state") or "").upper()
     remote_progress = client.system.update_info if client else None
     active_states = {"START", "RUN", "PROGRESS", "DOWNLOAD", "UPDATING", "INSTALLING"}
-    in_progress = bool(
+    in_progress = state not in {"DONE", "SUCCESS", "ERROR", "FAILED"} and bool(
         state in active_states or (remote_progress and remote_progress.in_progress)
     )
-    update_percent = int(
+    current_percent = int(
         progress.get("current_percent", 0)
         or (remote_progress.update_percent if remote_progress else 0)
     )
+    total_steps = int(progress.get("total_steps", 0) or 0)
+    current_step = int(progress.get("current_step", 0) or 0)
+    # The Remote reports a percentage within the current update step. Convert
+    # it to overall installation progress so step 1 of 2 at 100% is 50%.
+    update_percent = float(current_percent)
+    if total_steps > 0:
+        completed_steps = max(0, min(current_step - 1, total_steps - 1))
+        update_percent = ((completed_steps + current_percent / 100) / total_steps) * 100
     download_percent = int(
         progress.get("download_percent", 0)
         or (remote_progress.download_percent if remote_progress else 0)
@@ -377,6 +385,9 @@ def _firmware_update_api_model(
         "state": state or ("UPDATING" if in_progress else "IDLE"),
         "updatePercent": max(0, min(100, update_percent)),
         "downloadPercent": max(0, min(100, download_percent)),
+        "currentStep": max(0, current_step),
+        "totalSteps": max(0, total_steps),
+        "currentStepPercent": max(0, min(100, current_percent)),
     }
 
 
@@ -1954,13 +1965,30 @@ async def update_integration_inplace(driver_id: str):
         await client.api.post_integration_install(archive_data, filename, update=True)  # ty:ignore[unresolved-attribute]
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
 
-        # Kick off version cache refresh in the background
+        # Do not leave the just-updated driver's stale release record in the
+        # cache while the fuller background refresh runs. Otherwise the SPA's
+        # immediate refetch can incorrectly keep showing an Update action.
+        _get_version_cache(remote_id).pop(integration.driver_id, None)
+
+        # Refresh remaining release metadata in the background. The immediate
+        # cache invalidation above lets the returned card reflect the update
+        # without making the user wait for every installed integration's
+        # GitHub lookup.
         asyncio.create_task(_refresh_version_cache(remote_id))
 
+        refreshed = next(
+            (
+                item
+                for item in await _get_installed_integrations(remote_id)
+                if item.driver_id == integration.driver_id
+                or item.instance_id == integration.instance_id
+            ),
+            integration,
+        )
         return jsonify(
             {
                 "data": {
-                    "integration": _integration_api_model(integration),
+                    "integration": _integration_api_model(refreshed),
                     "reconnecting": True,
                 }
             }
@@ -3493,6 +3521,21 @@ async def api_v1_system_update_status():
         if model["state"] in _FIRMWARE_UPDATE_TERMINAL_STATES:
             await _stop_firmware_update_websocket(remote_id, client)
         return jsonify({"data": model})
+    except HTTPError as e:
+        if e.status_code == 404:
+            # The Remote removes its update-status resource when the install
+            # has completed and it begins rebooting. Treat that as terminal
+            # progress rather than leaking an expected 404 to the SPA.
+            await _stop_firmware_update_websocket(remote_id, client)
+            return jsonify(
+                {
+                    "data": _firmware_update_api_model(
+                        update_info, client, {"state": "DONE"}
+                    )
+                }
+            )
+        await _stop_firmware_update_websocket(remote_id, client)
+        return _api_error("firmware_status_failed", str(e), 502)
     except UnfurledError as e:
         await _stop_firmware_update_websocket(remote_id, client)
         return _api_error("firmware_status_failed", str(e), 502)
