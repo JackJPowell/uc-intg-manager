@@ -1,6 +1,7 @@
 """Dependency-free smoke checks for the React SPA and JSON API boundary."""
 
 import ast
+import json
 import os
 from pathlib import Path
 import re
@@ -277,6 +278,29 @@ def test_prerelease_images_do_not_move_the_latest_tag():
     assert 'if [[ "$VERSION" == *-* ]]; then' in workflow
     assert "prerelease: ${{ needs.build.outputs.prerelease }}" in workflow
     assert "type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}" in workflow
+
+
+def test_self_update_keeps_the_stable_driver_identity_and_reconnects_the_spa():
+    driver = json.loads((ROOT / "driver.json").read_text(encoding="utf-8"))
+    driver_source = (ROOT / "intg-manager" / "driver.py").read_text(encoding="utf-8")
+    hook = (ROOT / "git-hooks" / "pre-push").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(
+        encoding="utf-8"
+    )
+    server = SERVER.read_text(encoding="utf-8")
+    api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    collection = (
+        ROOT / "ui" / "src" / "components" / "IntegrationCollection.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert driver["driver_id"] == "intg_manager_driver"
+    assert f'driver_id="{driver["driver_id"]}"' in driver_source
+    assert '"_dev"' in hook
+    assert '"_dev"' in workflow
+    assert '"selfUpdate": management == "self_managed"' in server
+    assert "'/self-update/inplace'" in api
+    assert "api.managerHealth() === 'OK'" in collection
+    assert "manager-update-overlay" in collection
 
 
 def test_manager_logs_are_part_of_the_mobile_navigation_list():

@@ -752,6 +752,7 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
         "capabilities": {
             "install": is_available and can_mutate and not driver_installed,
             "update": can_mutate and integration.can_update,
+            "selfUpdate": management == "self_managed" and integration.update_available,
             "backup": can_mutate and installed and integration.backup_available,
             "deleteConfiguration": can_mutate and installed,
             "deleteDriver": can_mutate and driver_installed,
