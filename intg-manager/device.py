@@ -7,32 +7,33 @@ It manages connections, polls power status, and controls the web server.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
+import asyncio
+import json
 import logging
 import os
-import json
 from asyncio import AbstractEventLoop
 from datetime import datetime
 from typing import Any
-import asyncio
 
 from const import (
-    RemoteConfig,
-    Settings,
+    MANAGER_DATA_FILE,
     POWER_POLL_INTERVAL,
     VERSION_CHECK_INTERVAL_POLLS,
     WEB_SERVER_PORT,
-    MANAGER_DATA_FILE,
+    RemoteConfig,
+    Settings,
     is_external_mode,
 )
-from remote_api import RemoteAPIClient, RemoteAPIError
+from notification_manager import get_notification_manager as _get_nm
+from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, PollingDevice
+from unfurled.api import CoreAPI
+from unfurled.helpers.exceptions import UnfurledError as RemoteAPIError
 from web_server import (
     WebServer,
     set_firmware_version,
-    set_system_update_info,
     set_remote_online,
+    set_system_update_info,
 )
-from ucapi_framework import BaseConfigManager, PollingDevice, BaseIntegrationDriver
-from notification_manager import get_notification_manager as _get_nm
 
 _LOG = logging.getLogger(__name__)
 
@@ -101,12 +102,9 @@ class IntegrationManagerDevice(PollingDevice):
 
         self._device_config: RemoteConfig = device_config
 
-        # Load user settings for this remote
-        self._settings = Settings.load(remote_id=device_config.identifier)
-
-        # Initialize the Remote API client
-        self._client = RemoteAPIClient(
-            address=device_config.address,
+        # Keep one unfurled client per configured Remote for polling.
+        self._client = CoreAPI(
+            f"http://{device_config.address}:80/api/",
             pin=device_config.pin if device_config.pin else None,
             api_key=device_config.api_key if device_config.api_key else None,
         )
@@ -263,20 +261,38 @@ class IntegrationManagerDevice(PollingDevice):
     # Connection Management
     # =========================================================================
 
+    async def _test_remote_connection(self) -> bool:
+        """Return whether the Remote responds to its public version endpoint."""
+        try:
+            await self._client.get_version()
+            return True
+        except RemoteAPIError:
+            return False
+
+    async def _get_dock_state(self) -> bool:
+        """Return whether the Remote is docked or wirelessly charging."""
+        charger = await self._client.get_charger()
+        return bool(
+            charger.get("power_supply", False)
+            or charger.get("wireless_charging", False)
+        )
+
     async def establish_connection(self) -> None:
         """Establish connection to the remote (required by PollingDevice)."""
         _LOG.debug("[%s] Connecting to remote at %s", self.log_id, self.address)
 
         try:
             # Test connection
-            if await self._client.test_connection():
+            if await self._test_remote_connection():
                 self._connected = True
                 set_remote_online(self.identifier, True)
                 _LOG.info("[%s] Connected to remote", self.log_id)
 
                 # Fetch and cache firmware version for inplace-update capability checks
                 try:
-                    fw_version = await self._client.get_firmware_version()
+                    fw_version = str(
+                        (await self._client.get_version()).get("os", "0.0.0")
+                    )
                     set_firmware_version(self.identifier, fw_version)
                     _LOG.info("[%s] Firmware version: %s", self.log_id, fw_version)
                 except Exception as e:
@@ -305,7 +321,7 @@ class IntegrationManagerDevice(PollingDevice):
                         config_home,
                     )
                     try:
-                        self._is_docked = await self._client.is_docked()
+                        self._is_docked = await self._get_dock_state()
                         if self._is_docked:
                             _LOG.info(
                                 "[%s] Remote is charging at startup (dock or wireless)",
@@ -317,7 +333,7 @@ class IntegrationManagerDevice(PollingDevice):
                                 "[%s] Remote is on battery at startup", self.log_id
                             )
                             # Check if web server should run even on battery
-                            if not self._settings.shutdown_on_battery:
+                            if not Settings.load(self.identifier).shutdown_on_battery:
                                 _LOG.info(
                                     "[%s] Starting web server on battery (shutdown_on_battery=False)",
                                     self.log_id,
@@ -393,7 +409,7 @@ class IntegrationManagerDevice(PollingDevice):
         _LOG.debug("[%s] Verifying connection to remote", self.log_id)
 
         try:
-            if await self._client.test_connection():
+            if await self._test_remote_connection():
                 self._connected = True
                 set_remote_online(self.identifier, True)
                 _LOG.debug("[%s] Connection verified", self.log_id)
@@ -467,7 +483,7 @@ class IntegrationManagerDevice(PollingDevice):
             # Skip dock polling in external/Docker mode - web server always runs
             if not self._is_external:
                 was_docked = self._is_docked
-                self._is_docked = await self._client.is_docked()
+                self._is_docked = await self._get_dock_state()
 
                 # Handle dock state changes
                 if self._is_docked and not was_docked:
@@ -511,11 +527,19 @@ class IntegrationManagerDevice(PollingDevice):
             if web_server and web_server.is_running:
                 if self._is_owner():
                     # Owner handles ALL remotes — some (added via setup) have no polling device
-                    await web_server.check_all_remote_connectivity()
-                    await web_server.check_all_error_states()
+                    await web_server.run_on_server_loop(
+                        web_server.check_all_remote_connectivity()
+                    )
+                    await web_server.run_on_server_loop(
+                        web_server.check_all_error_states()
+                    )
                 else:
-                    await web_server.check_connectivity(self.identifier)
-                    await web_server.check_error_states(self.identifier)
+                    await web_server.run_on_server_loop(
+                        web_server.check_connectivity(self.identifier)
+                    )
+                    await web_server.run_on_server_loop(
+                        web_server.check_error_states(self.identifier)
+                    )
 
             # On-remote mode: per-poll restart probe. External mode uses
             # the driver-level watchdog instead (see driver._web_server_watchdog).
@@ -629,11 +653,17 @@ class IntegrationManagerDevice(PollingDevice):
         _LOG.info("[%s] Triggering initial integration checks...", self.log_id)
         try:
             # Per-remote: Check for version updates
-            await self._web_server.refresh_integration_versions(self.identifier)
+            await self._web_server.run_on_server_loop(
+                self._web_server.refresh_integration_versions(self.identifier)
+            )
             # Per-remote: Check for new integrations in registry
-            await self._web_server.check_new_integrations(self.identifier)
+            await self._web_server.run_on_server_loop(
+                self._web_server.check_new_integrations(self.identifier)
+            )
             # Per-remote: Check for orphaned entities in activities
-            await self._web_server.check_orphaned_entities(self.identifier)
+            await self._web_server.run_on_server_loop(
+                self._web_server.check_orphaned_entities(self.identifier)
+            )
             # Shared (owner only): Check for new system messages from GitHub
             if self._is_owner():
                 self._web_server.check_system_messages()
@@ -691,13 +721,19 @@ class IntegrationManagerDevice(PollingDevice):
         try:
             # Per-remote: Trigger the web server to refresh version data
             # This updates the cached update availability info and sends update notifications
-            await web_server.refresh_integration_versions(self.identifier)
+            await web_server.run_on_server_loop(
+                web_server.refresh_integration_versions(self.identifier)
+            )
 
             # Per-remote: Check for new integrations in registry
-            await web_server.check_new_integrations(self.identifier)
+            await web_server.run_on_server_loop(
+                web_server.check_new_integrations(self.identifier)
+            )
 
             # Per-remote: Check for orphaned entities in activities
-            await web_server.check_orphaned_entities(self.identifier)
+            await web_server.run_on_server_loop(
+                web_server.check_orphaned_entities(self.identifier)
+            )
 
             # Shared (owner only): Check for new system messages from GitHub
             if self._is_owner():
@@ -877,7 +913,9 @@ class IntegrationManagerDevice(PollingDevice):
 
             # Perform the backup via web server
             # Per-remote task: backup for this remote only
-            backup_result = await web_server.perform_scheduled_backup(self.identifier)
+            backup_result = await web_server.run_on_server_loop(
+                web_server.perform_scheduled_backup(self.identifier)
+            )
 
             # Update last backup date on success
             if backup_result:
@@ -915,7 +953,7 @@ class IntegrationManagerDevice(PollingDevice):
         if self._is_docked:
             # Docked - always running
             should_be_running = True
-        elif not self._settings.shutdown_on_battery:
+        elif not Settings.load(self.identifier).shutdown_on_battery:
             # On battery but configured to keep running
             should_be_running = True
 

@@ -6,7 +6,7 @@
 import json
 import logging
 import os
-from dataclasses import dataclass, asdict, fields
+from dataclasses import asdict, dataclass, fields
 from typing import Any
 
 _LOG = logging.getLogger(__name__)
@@ -160,7 +160,7 @@ class Settings:
     and are persisted per-remote in manager.json.
     """
 
-    settings_version: int = 1
+    settings_version: int = 2
     """Version number for settings schema, used for migrations."""
 
     shutdown_on_battery: bool = False
@@ -174,9 +174,6 @@ class Settings:
 
     backup_time: str = "02:00"
     """Time of day to perform automatic backups (HH:MM format)."""
-
-    auto_register_entities: bool = True
-    """Automatically register new entities with the remote."""
 
     show_beta_releases: bool = False
     """Show pre-release (beta) versions in version selector."""
@@ -247,6 +244,12 @@ class Settings:
                 needs_save = True
 
             self.settings_version = 1
+            needs_save = True
+
+        # Version 2 removes the entity-registration preference. Firmware
+        # updates now preserve registrations unconditionally.
+        if self.settings_version < 2:
+            self.settings_version = 2
             needs_save = True
 
         # Save if any migrations were applied

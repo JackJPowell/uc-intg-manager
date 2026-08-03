@@ -55,7 +55,7 @@ class IntegrationManagerDriver(BaseIntegrationDriver):
         ws = _device_module._web_server_instance
         if ws is None or not ws.is_running:
             return
-        await ws.check_connectivity(device_id)
+        await ws.run_on_server_loop(ws.check_connectivity(device_id))
         device = self._device_instances.get(device_id)
         if device is None:
             return
@@ -153,7 +153,7 @@ class IntegrationManagerDriver(BaseIntegrationDriver):
             _LOG.debug(
                 "Rechecking connectivity for all remotes after connect/exit-standby"
             )
-            await ws.check_all_remote_connectivity()
+            await ws.run_on_server_loop(ws.check_all_remote_connectivity(force=True))
 
 
 _HEALTH_OK_BODIES = frozenset({"OK", "UPDATING"})
@@ -311,7 +311,7 @@ async def _web_server_watchdog(interval: float = 30) -> None:
                     continue
 
             try:
-                await ws.check_all_remote_connectivity()
+                await ws.run_on_server_loop(ws.check_all_remote_connectivity())
             except Exception as e:
                 _LOG.debug("Watchdog connectivity probe failed: %s", e)
         except asyncio.CancelledError:
@@ -337,7 +337,7 @@ async def main():
     logging.getLogger("device").setLevel(level)
     logging.getLogger("setup").setLevel(level)
     logging.getLogger("web_server").setLevel(level)
-    logging.getLogger("remote_api").setLevel(level)
+    logging.getLogger("unfurled").setLevel(level)
     logging.getLogger("github_api").setLevel(level)
     logging.getLogger("integration_service").setLevel(level)
     logging.getLogger("data_migration").setLevel(level)

@@ -1,12 +1,12 @@
 {
-  "driver_id": "intg_manager_driver",
-  "version": "2.0.6",
+  "driver_id": "intg_manager_driver_dev",
+  "version": "3.0.0-beta.1",
   "min_core_api": "0.20.0",
   "name": {
     "en": "Integration Manager",
     "de": "Integrations-Manager"
   },
-  "icon": "uc:integration",
+  "icon": "custom:intg-manager.png",
   "description": {
     "en": "Manage your custom integrations with a web interface. View installed integrations, check for updates, and discover new integrations.",
     "de": "Verwalten Sie Ihre benutzerdefinierten Integrationen über eine Weboberfläche. Zeigen Sie installierte Integrationen an, suchen Sie nach Updates und entdecken Sie neue Integrationen."
@@ -40,5 +40,5 @@
       }
     ]
   },
-  "release_date": "2026-07-17"
+  "release_date": "2026-07-30"
 }
