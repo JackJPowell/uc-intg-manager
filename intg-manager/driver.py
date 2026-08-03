@@ -25,7 +25,7 @@ from setup import RemoteSetupFlow
 from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, get_config_path
 from web_server import WebServer, is_remote_online
 
-_LOG = logging.getLogger(__name__)
+_LOG = logging.getLogger("driver")
 
 
 def _remote_id_from_ws(websocket) -> str | None:
