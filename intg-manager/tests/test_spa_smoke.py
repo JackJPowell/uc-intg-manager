@@ -30,7 +30,8 @@ def test_built_spa_has_a_react_mount_point():
 def test_v1_routes_are_json_only_and_template_free():
     source = SERVER.read_text(encoding="utf-8")
     assert '@app.route("/api/v1/status")' in source
-    assert 'return jsonify({"data": {"online": False, "docked": None}})' in source
+    assert '"batteryPercent": None' in source
+    assert "client.api.get_battery()" in source
     assert "render_template" not in source
     assert "TEMPLATE_DIR" not in source
     assert "htmx" not in source.lower()
@@ -346,6 +347,20 @@ def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
     assert '"state": "DONE"' in server
     assert "firmwareRecheckActive" in diagnostics
     assert "firmware-recheck" in diagnostics
+
+
+def test_dock_firmware_is_exposed_through_unfurled_and_the_spa():
+    server = SERVER.read_text(encoding="utf-8")
+    api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    diagnostics = (ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert '"/api/v1/diagnostics/dock-firmware"' in server
+    assert "client.api.get_docks()" in server
+    assert "client.api.get_dock_update(" in server
+    assert "client.api.post_dock_update(" in server
+    assert "dockFirmware" in api
+    assert "Dock firmware" in diagnostics
 
 
 def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes():

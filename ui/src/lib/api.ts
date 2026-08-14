@@ -3,6 +3,7 @@ import type { Bootstrap, Integration, SettingsPayload } from './models'
 type Envelope<T> = { data: T }
 type ErrorEnvelope = { error?: { code?: string; message?: string } }
 export type FirmwareStatus = { installedVersion: string; updateAvailable: boolean; availableVersion?: string; title?: string; releaseNotesUrl?: string; inProgress: boolean; state: string; updatePercent: number; downloadPercent: number; currentStep: number; totalSteps: number; currentStepPercent: number }
+export type DockFirmwareStatus = { id: string; name: string; model: string; installedVersion: string; updateAvailable: boolean; availableVersion?: string; error?: string }
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -23,7 +24,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   bootstrap: () => request<Bootstrap>('/bootstrap'),
-  status: () => request<{ online: boolean; docked: boolean | null }>('/status'),
+  status: () => request<{ online: boolean; docked: boolean | null; batteryPercent: number | null }>('/status'),
   integrations: () => request<Integration[]>('/integrations'),
   catalog: () => request<Integration[]>('/catalog/integrations'),
   refreshIntegrations: () => request<{ refreshed: boolean }>('/integrations/refresh', { method: 'POST' }),
@@ -68,6 +69,8 @@ export const api = {
   checkFirmware: () => request<FirmwareStatus>('/diagnostics/system-update', { method: 'POST' }),
   firmwareUpdateStatus: () => request<FirmwareStatus>('/diagnostics/system-update/status'),
   installFirmware: () => request<FirmwareStatus>('/diagnostics/system-update/install', { method: 'POST' }),
+  dockFirmware: () => request<DockFirmwareStatus[]>('/diagnostics/dock-firmware'),
+  installDockFirmware: (dockId: string) => request<{ dockId: string; started: boolean }>(`/diagnostics/dock-firmware/${encodeURIComponent(dockId)}/install`, { method: 'POST' }),
   orphanedEntities: () => request<DiagnosticActivityResult>('/diagnostics/orphaned-entities'),
   unusedActivityEntities: () => request<DiagnosticActivityResult>('/diagnostics/unused-activity-entities'),
   orphanedIrCodesets: () => request<IrCodeset[]>('/diagnostics/orphaned-ir-codesets'),

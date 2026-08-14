@@ -391,6 +391,64 @@ def _firmware_update_api_model(
     }
 
 
+def _dock_firmware_api_model(
+    dock: dict[str, Any], update_info: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Serialize one dock and its firmware availability for the SPA."""
+    update_info = update_info or {}
+    firmware_update = update_info.get("firmware_update")
+    firmware_update = firmware_update if isinstance(firmware_update, dict) else {}
+    dock_id = str(dock.get("dock_id") or dock.get("entity_id") or "")
+    installed_version = str(
+        update_info.get("version")
+        or dock.get("software_version")
+        or dock.get("firmware_version")
+        or "Unknown"
+    )
+    model = str(
+        firmware_update.get("model")
+        or dock.get("model_name")
+        or dock.get("model_number")
+        or "Dock"
+    )
+    return {
+        "id": dock_id,
+        "name": str(dock.get("name") or model),
+        "model": model,
+        "installedVersion": installed_version,
+        "updateAvailable": bool(update_info.get("update_available")),
+        "availableVersion": firmware_update.get("version"),
+    }
+
+
+async def _dock_firmware_api_models(client: Remote) -> list[dict[str, Any]]:
+    """Fetch firmware status for every dock currently returned by the Remote."""
+    docks = await client.api.get_docks()
+    valid_docks = [
+        dock
+        for dock in docks
+        if isinstance(dock, dict) and (dock.get("dock_id") or dock.get("entity_id"))
+    ]
+    update_results = await asyncio.gather(
+        *(
+            client.api.get_dock_update(
+                str(dock.get("dock_id") or dock.get("entity_id"))
+            )
+            for dock in valid_docks
+        ),
+        return_exceptions=True,
+    )
+    models: list[dict[str, Any]] = []
+    for dock, result in zip(valid_docks, update_results, strict=True):
+        if isinstance(result, Exception):
+            model = _dock_firmware_api_model(dock)
+            model["error"] = str(result)
+        else:
+            model = _dock_firmware_api_model(dock, result)
+        models.append(model)
+    return models
+
+
 # Firmware progress is the sole use of a Remote WebSocket.  Keeping this
 # separate from the normal HTTP heartbeat avoids persistent connections to
 # battery-powered remotes that are likely to be asleep.
@@ -1685,17 +1743,34 @@ async def api_v1_status():
     client = _get_active_remote_client()
     remote_id = get_active_remote_id()
     if not client or not is_remote_online(remote_id):
-        return jsonify({"data": {"online": False, "docked": None}})
+        return jsonify(
+            {"data": {"online": False, "docked": None, "batteryPercent": None}}
+        )
     try:
-        charger = await client.api.get_charger()
+        charger, battery = await asyncio.gather(
+            client.api.get_charger(), client.api.get_battery()
+        )
         docked = bool(
             charger.get("power_supply", False)
             or charger.get("wireless_charging", False)
         )
-        return jsonify({"data": {"online": True, "docked": docked}})
+        capacity = battery.get("capacity")
+        return jsonify(
+            {
+                "data": {
+                    "online": True,
+                    "docked": docked,
+                    "batteryPercent": (
+                        max(0, min(100, int(capacity)))
+                        if capacity is not None
+                        else None
+                    ),
+                }
+            }
+        )
     except Exception as e:
         _LOG.warning("Failed to get remote status: %s", e)
-        return jsonify({"data": {"online": False, "docked": None}})
+        return jsonify({"data": {"online": False, "docked": None, "batteryPercent": None}})
 
 
 @app.route("/api/v1/remotes/active", methods=["POST"])
@@ -3540,6 +3615,55 @@ async def api_v1_system_update_status():
     except UnfurledError as e:
         await _stop_firmware_update_websocket(remote_id, client)
         return _api_error("firmware_status_failed", str(e), 502)
+
+
+@app.route("/api/v1/diagnostics/dock-firmware")
+async def api_v1_dock_firmware():
+    """Return installed and available firmware for the active Remote's docks."""
+    remote_id = get_active_remote_id()
+    client = _get_active_remote_client()
+    if not remote_id or not client:
+        return _api_error("remote_unavailable", "No remote connected", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active remote is offline", 503)
+    try:
+        return jsonify({"data": await _dock_firmware_api_models(client)})
+    except UnfurledError as e:
+        return _api_error("dock_firmware_check_failed", str(e), 502)
+
+
+@app.route("/api/v1/diagnostics/dock-firmware/<dock_id>/install", methods=["POST"])
+async def api_v1_dock_firmware_install(dock_id: str):
+    """Start firmware installation on one dock associated with the active Remote."""
+    remote_id = get_active_remote_id()
+    client = _get_active_remote_client()
+    if not remote_id or not client:
+        return _api_error("remote_unavailable", "No remote connected", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active remote is offline", 503)
+    try:
+        docks = await client.api.get_docks()
+        dock = next(
+            (
+                item
+                for item in docks
+                if isinstance(item, dict)
+                and str(item.get("dock_id") or item.get("entity_id") or "") == dock_id
+            ),
+            None,
+        )
+        if not dock:
+            return _api_error("dock_not_found", "The dock is not connected", 404)
+        update_info = await client.api.get_dock_update(dock_id)
+        if not update_info.get("update_available"):
+            return _api_error(
+                "dock_firmware_up_to_date", "No firmware update is available for this dock", 409
+            )
+        await client.api.post_dock_update(dock_id)
+        _LOG.info("[%s] Dock firmware update requested: %s", remote_id, dock_id)
+        return jsonify({"data": {"dockId": dock_id, "started": True}})
+    except UnfurledError as e:
+        return _api_error("dock_firmware_update_failed", str(e), 502)
 
 
 @app.route("/api/v1/diagnostics/system-update/install", methods=["POST"])
