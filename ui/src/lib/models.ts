@@ -26,6 +26,7 @@ export interface Integration {
   capabilities: {
     install: boolean
     update: boolean
+    selfUpdate: boolean
     backup: boolean
     deleteConfiguration: boolean
     deleteDriver: boolean

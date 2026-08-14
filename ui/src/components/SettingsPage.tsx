@@ -29,7 +29,7 @@ export function SettingsPage() {
   const runtime = values.runtime ?? { remoteAddress: null, webServerPort: 9999, external: false }
   const update = (key: keyof SettingsPayload['settings'], value: boolean | string) => { setSaveConfirmed(false); setValues({ ...values, settings: { ...values.settings, [key]: value } }) }
   return <section className="settings-workspace">
-    <header className="settings-hero"><div><p className="eyebrow">Manager behavior</p><h1>Settings</h1><p>Set the maintenance policy, recovery schedule, and operational safeguards for Integration Manager.</p></div><button className="refresh-button settings-save-button" type="button" onClick={() => save.mutate(values)} disabled={save.isPending}><Save className={save.isPending ? 'spin' : ''} /> <span>{save.isPending ? 'Saving…' : 'Save settings'}</span></button></header>
+    <header className="page-heading settings-hero"><div><p className="eyebrow">Manager behavior</p><h1>Settings</h1><p>Set the maintenance policy, recovery schedule, and operational safeguards for Integration Manager.</p></div><button className="refresh-button settings-save-button" type="button" onClick={() => save.mutate(values)} disabled={save.isPending}><Save className={save.isPending ? 'spin' : ''} /> <span>{save.isPending ? 'Saving…' : 'Save settings'}</span></button></header>
     {(save.isError || restore.isError || release.isError) && <div className="notice error"><TriangleAlert /> {(save.error ?? restore.error ?? release.error)?.message}</div>}
     {saveConfirmed && <div className="notice success" role="status"><CircleCheck /> Settings saved</div>}
     {restore.data && <div className="notice success" role="status"><CircleCheck /><span><strong>Backup imported.</strong></span></div>}

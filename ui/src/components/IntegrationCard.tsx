@@ -10,7 +10,7 @@ function stateTone(item: Integration) { if (item.updateAvailable || item.connect
 function githubRepository(homepage: string | null) { const match = homepage?.match(/github\.com\/([^/]+)\/([^/#?]+)/i); return match ? { owner: match[1], repo: match[2].replace(/\.git$/, '') } : null }
 function supportLabel(platform: string) { return ({ github: 'GitHub Sponsors', buy_me_a_coffee: 'Buy Me a Coffee', paypal: 'PayPal', patreon: 'Patreon', ko_fi: 'Ko-fi', 'ko-fi': 'Ko-fi', venmo: 'Venmo', cashapp: 'Cash App' } as Record<string, string>)[platform] ?? 'Support' }
 
-export function IntegrationCard({ item, onInstall, onUpdate, onBackup, onDelete, operation, pending = false }: { item: Integration; onInstall?: (item: Integration, version?: string) => void; onUpdate?: (item: Integration, version?: string) => void; onBackup?: (item: Integration) => void; onDelete?: (item: Integration) => void; operation?: 'install' | 'update' | 'backup' | 'delete'; pending?: boolean }) {
+export function IntegrationCard({ item, onInstall, onUpdate, onSelfUpdate, onBackup, onDelete, operation, pending = false }: { item: Integration; onInstall?: (item: Integration, version?: string) => void; onUpdate?: (item: Integration, version?: string) => void; onSelfUpdate?: (item: Integration, version?: string) => void; onBackup?: (item: Integration) => void; onDelete?: (item: Integration) => void; operation?: 'install' | 'update' | 'backup' | 'delete'; pending?: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [supportOpen, setSupportOpen] = useState(false)
   const [versionModal, setVersionModal] = useState(false)
@@ -19,11 +19,12 @@ export function IntegrationCard({ item, onInstall, onUpdate, onBackup, onDelete,
   const menuRef = useRef<HTMLDivElement>(null)
   const supportRef = useRef<HTMLDivElement>(null)
   const repository = useMemo(() => githubRepository(item.homepage), [item.homepage])
-  const compactVersions = useQuery({ queryKey: ['versions', item.id, 'recent'], queryFn: () => api.integrationVersions(repository!.owner, repository!.repo, item.id), enabled: menuOpen && Boolean(repository), staleTime: 60_000 })
-  const allVersions = useQuery({ queryKey: ['versions', item.id, 'all'], queryFn: () => api.integrationVersions(repository!.owner, repository!.repo, item.id, true), enabled: versionModal && Boolean(repository), staleTime: 60_000 })
-  const primaryAction = item.capabilities.install ? 'Install' : item.capabilities.update ? 'Update' : null
+  const isSelfUpdate = item.capabilities.selfUpdate
+  const compactVersions = useQuery({ queryKey: ['versions', item.id, 'recent', isSelfUpdate], queryFn: () => api.integrationVersions(repository!.owner, repository!.repo, item.id, false, isSelfUpdate), enabled: menuOpen && Boolean(repository), staleTime: 60_000 })
+  const allVersions = useQuery({ queryKey: ['versions', item.id, 'all', isSelfUpdate], queryFn: () => api.integrationVersions(repository!.owner, repository!.repo, item.id, true, isSelfUpdate), enabled: versionModal && Boolean(repository), staleTime: 60_000 })
+  const primaryAction = item.capabilities.install ? 'Install' : item.capabilities.update || isSelfUpdate ? 'Update' : null
   const canCreateBackup = item.installed && item.capabilities.backup && item.connectionState !== 'not_configured'
-  const act = (version?: string) => primaryAction === 'Install' ? onInstall?.(item, version) : onUpdate?.(item, version)
+  const act = (version?: string) => primaryAction === 'Install' ? onInstall?.(item, version) : isSelfUpdate ? onSelfUpdate?.(item, version) : onUpdate?.(item, version)
   const selectVersion = (version: string) => { setMenuOpen(false); setVersionModal(false); act(version) }
   useEffect(() => {
     const dismiss = (event: PointerEvent) => { const target = event.target as Node; if (menuRef.current && !menuRef.current.contains(target)) setMenuOpen(false); if (supportRef.current && !supportRef.current.contains(target)) setSupportOpen(false) }

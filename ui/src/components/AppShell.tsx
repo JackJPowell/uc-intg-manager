@@ -52,8 +52,11 @@ export function AppShell({ children }: PropsWithChildren) {
         <span>Integration <em>Manager</em></span>
       </Link>
       <div className="topbar-actions">
-        <span className={`connection ${status.data?.online ? 'is-online' : 'is-offline'}`}>
-          <i />{status.data?.online ? (status.data.docked ? 'Docked' : 'On battery') : 'Remote offline'}
+        <span className="connection-status">
+          <span className={`connection ${status.data?.online ? 'is-online' : 'is-offline'}`}>
+            <i />{status.data?.online ? (status.data.docked ? 'Docked' : 'On battery') : 'Remote offline'}
+          </span>
+          {status.data?.online && typeof status.data.batteryPercent === 'number' && status.data.batteryPercent < 100 && <span className="battery-status" aria-label={`Remote battery ${status.data.batteryPercent}%`}>{status.data.batteryPercent}%</span>}
         </span>
         <div className="remote-picker" ref={remotePickerRef}>
           <button className="remote-picker-trigger" type="button" onClick={() => setRemoteMenuOpen(open => !open)} aria-haspopup="menu" aria-expanded={remoteMenuOpen} disabled={!bootstrap.data?.remotes.length}>

@@ -68,6 +68,18 @@ jobs:
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
           echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_OUTPUT
 
+      - name: Verify stable driver identity
+        run: |
+          driver_id="$(jq -r .driver_id driver.json)"
+          if [[ "$driver_id" == *"_dev"* ]]; then
+            echo "Release driver_id must not contain _dev: $driver_id"
+            exit 1
+          fi
+          if ! grep -Fq "driver_id=\"$driver_id\"" intg-manager/driver.py; then
+            echo "driver.json driver_id ($driver_id) does not match intg-manager/driver.py"
+            exit 1
+          fi
+
       - name: Verify driver.json version for tag release
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
