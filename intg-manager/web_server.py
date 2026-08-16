@@ -440,7 +440,7 @@ async def _dock_firmware_api_models(client: Remote) -> list[dict[str, Any]]:
     )
     models: list[dict[str, Any]] = []
     for dock, result in zip(valid_docks, update_results, strict=True):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             model = _dock_firmware_api_model(dock)
             model["error"] = str(result)
         else:
