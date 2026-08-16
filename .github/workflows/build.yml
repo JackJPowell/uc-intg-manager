@@ -38,7 +38,7 @@ jobs:
       prerelease: ${{ steps.get-version-and-id.outputs.IS_PRERELEASE }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # History of 200 should be more than enough to calculate commit count since last release tag
           fetch-depth: 200
@@ -68,6 +68,18 @@ jobs:
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
           echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_OUTPUT
 
+      - name: Verify stable driver identity
+        run: |
+          driver_id="$(jq -r .driver_id driver.json)"
+          if [[ "$driver_id" == *"_dev"* ]]; then
+            echo "Release driver_id must not contain _dev: $driver_id"
+            exit 1
+          fi
+          if ! grep -Fq "driver_id=\"$driver_id\"" intg-manager/driver.py; then
+            echo "driver.json driver_id ($driver_id) does not match intg-manager/driver.py"
+            exit 1
+          fi
+
       - name: Verify driver.json version for tag release
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -78,7 +90,7 @@ jobs:
           fi
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -154,15 +166,15 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -178,7 +190,7 @@ jobs:
             type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -195,7 +207,7 @@ jobs:
 
     steps:
       - name: Checkout (for CHANGELOG)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 

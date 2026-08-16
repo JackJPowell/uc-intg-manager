@@ -18,6 +18,14 @@ do
 
     driver_version=$(get_driver_version)
     pyproject_version=$(get_pyproject_version)
+    driver_id=$(jq -r '.driver_id' driver.json)
+
+    # In-place updates replace the existing driver by its exact ID. A
+    # development-only ID would make a release impossible to upgrade to.
+    if [[ "$driver_id" == *"_dev"* ]]; then
+      echo "❌ Refusing to create a release with development driver_id: $driver_id"
+      exit 1
+    fi
 
     # Check consistency between files
     if [[ "$driver_version" != "$pyproject_version" ]]; then

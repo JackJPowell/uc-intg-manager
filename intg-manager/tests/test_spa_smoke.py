@@ -1,6 +1,7 @@
 """Dependency-free smoke checks for the React SPA and JSON API boundary."""
 
 import ast
+import json
 import os
 from pathlib import Path
 import re
@@ -29,7 +30,8 @@ def test_built_spa_has_a_react_mount_point():
 def test_v1_routes_are_json_only_and_template_free():
     source = SERVER.read_text(encoding="utf-8")
     assert '@app.route("/api/v1/status")' in source
-    assert 'return jsonify({"data": {"online": False, "docked": None}})' in source
+    assert '"batteryPercent": None' in source
+    assert "client.api.get_battery()" in source
     assert "render_template" not in source
     assert "TEMPLATE_DIR" not in source
     assert "htmx" not in source.lower()
@@ -279,6 +281,29 @@ def test_prerelease_images_do_not_move_the_latest_tag():
     assert "type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}" in workflow
 
 
+def test_self_update_keeps_the_stable_driver_identity_and_reconnects_the_spa():
+    driver = json.loads((ROOT / "driver.json").read_text(encoding="utf-8"))
+    driver_source = (ROOT / "intg-manager" / "driver.py").read_text(encoding="utf-8")
+    hook = (ROOT / "git-hooks" / "pre-push").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(
+        encoding="utf-8"
+    )
+    server = SERVER.read_text(encoding="utf-8")
+    api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    collection = (
+        ROOT / "ui" / "src" / "components" / "IntegrationCollection.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert driver["driver_id"] == "intg_manager_driver"
+    assert f'driver_id="{driver["driver_id"]}"' in driver_source
+    assert '"_dev"' in hook
+    assert '"_dev"' in workflow
+    assert '"selfUpdate": management == "self_managed"' in server
+    assert "'/self-update/inplace'" in api
+    assert "api.managerHealth() === 'OK'" in collection
+    assert "manager-update-overlay" in collection
+
+
 def test_manager_logs_are_part_of_the_mobile_navigation_list():
     shell = (ROOT / "ui" / "src" / "components" / "AppShell.tsx").read_text(
         encoding="utf-8"
@@ -322,6 +347,20 @@ def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
     assert '"state": "DONE"' in server
     assert "firmwareRecheckActive" in diagnostics
     assert "firmware-recheck" in diagnostics
+
+
+def test_dock_firmware_is_exposed_through_unfurled_and_the_spa():
+    server = SERVER.read_text(encoding="utf-8")
+    api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
+    diagnostics = (ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert '"/api/v1/diagnostics/dock-firmware"' in server
+    assert "client.api.get_docks()" in server
+    assert "client.api.get_dock_update(" in server
+    assert "client.api.post_dock_update(" in server
+    assert "dockFirmware" in api
+    assert "Dock firmware" in diagnostics
 
 
 def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes():
