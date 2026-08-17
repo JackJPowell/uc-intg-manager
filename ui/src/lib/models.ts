@@ -90,5 +90,6 @@ export interface IntegrationSetupEntity {
 
 export interface IntegrationSetupEntities {
   integrationId: string
-  entities: IntegrationSetupEntity[]
+  availableEntities: IntegrationSetupEntity[]
+  configuredEntities: IntegrationSetupEntity[]
 }

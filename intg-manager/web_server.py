@@ -1002,9 +1002,6 @@ async def _resolve_setup_instance_id(
     if len(candidates) == 1:
         return str(candidates[0]["integration_id"])
 
-    # Integration Manager historically treats the conventional ".main" instance
-    # as the primary instance for a driver. Prefer it only when Core returns
-    # multiple candidates and the caller could not supply an exact instance id.
     main_instance_id = f"{driver_id}.main"
     if any(
         str(instance.get("integration_id") or "") == main_instance_id
@@ -1060,9 +1057,6 @@ async def _get_setup_available_entities(
     entities: list[dict[str, Any]] = []
     page = 1
 
-    # Core limits paginated lists to 100 items per request. Keep requesting
-    # pages until a partial/empty page is returned so large integrations such
-    # as Home Assistant are not silently truncated.
     while page <= 1000:
         reload_flag = "&reload=true" if page == 1 else ""
         batch = await _remote_core_json(
@@ -1094,6 +1088,46 @@ async def _get_setup_available_entities(
             502,
             "available_entities_too_large",
             "Available entity list exceeded the supported pagination limit",
+        )
+
+    return entities
+
+
+async def _get_setup_configured_entities(
+    integration_id: str, remote_id: str | None
+) -> list[dict[str, Any]]:
+    """Retrieve every configured entity belonging to an integration instance."""
+    encoded_instance_id = quote(integration_id, safe="")
+    entities: list[dict[str, Any]] = []
+    page = 1
+
+    while page <= 1000:
+        batch = await _remote_core_json(
+            "GET",
+            f"entities?intg_ids={encoded_instance_id}&limit=100&page={page}",
+            remote_id=remote_id,
+            timeout_seconds=75,
+        )
+        if not isinstance(batch, list):
+            raise _CoreProxyError(
+                502,
+                "invalid_configured_entities",
+                "Remote returned an invalid configured entity list",
+            )
+
+        for entity in batch:
+            normalized = _normalize_available_integration_entity(entity)
+            if normalized is not None:
+                entities.append(normalized)
+
+        if len(batch) < 100:
+            break
+        page += 1
+    else:
+        raise _CoreProxyError(
+            502,
+            "configured_entities_too_large",
+            "Configured entity list exceeded the supported pagination limit",
         )
 
     return entities
@@ -2364,10 +2398,10 @@ async def api_v1_integration_setup_status(driver_id: str):
 
 @app.route(
     "/api/v1/integrations/<driver_id>/setup/entities",
-    methods=["GET", "POST"],
+    methods=["GET", "POST", "DELETE"],
 )
 async def api_v1_integration_setup_entities(driver_id: str):
-    """List and configure entities after a successful integration setup."""
+    """List, configure, and remove entities after integration setup."""
     remote_id = get_active_remote_id()
     try:
         if request.method == "GET":
@@ -2375,12 +2409,18 @@ async def api_v1_integration_setup_entities(driver_id: str):
             integration_id = await _resolve_setup_instance_id(
                 driver_id, remote_id, preferred_instance_id
             )
-            entities = await _get_setup_available_entities(integration_id, remote_id)
+            available_entities = await _get_setup_available_entities(
+                integration_id, remote_id
+            )
+            configured_entities = await _get_setup_configured_entities(
+                integration_id, remote_id
+            )
             return jsonify(
                 {
                     "data": {
                         "integrationId": integration_id,
-                        "entities": entities,
+                        "availableEntities": available_entities,
+                        "configuredEntities": configured_entities,
                     }
                 }
             )
@@ -2409,12 +2449,44 @@ async def api_v1_integration_setup_entities(driver_id: str):
         if not entity_ids:
             return _api_error(
                 "entity_selection_required",
-                "Select at least one entity to add",
+                "Select at least one entity to remove"
+                if request.method == "DELETE"
+                else "Select at least one entity to add",
             )
 
         integration_id = await _resolve_setup_instance_id(
             driver_id, remote_id, preferred_instance_id
         )
+
+        if request.method == "DELETE":
+            configured_entities = await _get_setup_configured_entities(
+                integration_id, remote_id
+            )
+            configured_ids = {entity["id"] for entity in configured_entities}
+            removable_ids = [
+                entity_id for entity_id in entity_ids if entity_id in configured_ids
+            ]
+            if not removable_ids:
+                return _api_error(
+                    "configured_entity_selection_required",
+                    "Select at least one configured entity to remove",
+                )
+            await _remote_core_json(
+                "DELETE",
+                "entities",
+                remote_id=remote_id,
+                json_body={"entity_ids": removable_ids},
+                timeout_seconds=75,
+            )
+            return jsonify(
+                {
+                    "data": {
+                        "integrationId": integration_id,
+                        "removedEntityIds": removable_ids,
+                    }
+                }
+            )
+
         configured = await _remote_core_json(
             "POST",
             f"intg/instances/{quote(integration_id, safe='')}/entities",

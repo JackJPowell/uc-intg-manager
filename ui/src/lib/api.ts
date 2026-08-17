@@ -39,6 +39,7 @@ export const api = {
     return request<IntegrationSetupEntities>(`/integrations/${encodeURIComponent(id)}/setup/entities${query}`)
   },
   addIntegrationSetupEntities: (id: string, entityIds: string[], instanceId?: string | null) => request<{ integrationId: string; configuredEntityIds: string[] }>(`/integrations/${encodeURIComponent(id)}/setup/entities`, { method: 'POST', body: JSON.stringify({ entityIds, ...(instanceId ? { instanceId } : {}) }) }),
+  removeIntegrationSetupEntities: (id: string, entityIds: string[], instanceId?: string | null) => request<{ integrationId: string; removedEntityIds: string[] }>(`/integrations/${encodeURIComponent(id)}/setup/entities`, { method: 'DELETE', body: JSON.stringify({ entityIds, ...(instanceId ? { instanceId } : {}) }) }),
   installIntegration: (id: string, version?: string) => request<{ integration: Integration; message: string }>(`/integrations/${encodeURIComponent(id)}/install${version ? `?version=${encodeURIComponent(version)}` : ''}`, { method: 'POST' }),
   updateIntegration: (id: string, version?: string) => request<{ integration: Integration; reconnecting: boolean }>(`/integrations/${encodeURIComponent(id)}/update${version ? `?version=${encodeURIComponent(version)}` : ''}`, { method: 'POST' }),
   integrationVersions: (owner: string, repo: string, id: string, all = false, selfUpdate = false) => {
