@@ -1,4 +1,4 @@
-import type { Bootstrap, Integration, IntegrationSetupDefinition, IntegrationSetupInfo, SettingsPayload } from './models'
+import type { Bootstrap, Integration, IntegrationSetupDefinition, IntegrationSetupEntities, IntegrationSetupInfo, SettingsPayload } from './models'
 
 type Envelope<T> = { data: T }
 type ErrorEnvelope = { error?: { code?: string; message?: string } }
@@ -34,6 +34,11 @@ export const api = {
   submitIntegrationSetupInput: (id: string, inputValues: Record<string, string>) => request<IntegrationSetupInfo>(`/integrations/${encodeURIComponent(id)}/setup`, { method: 'PUT', body: JSON.stringify({ inputValues }) }),
   confirmIntegrationSetup: (id: string, confirm = true) => request<IntegrationSetupInfo>(`/integrations/${encodeURIComponent(id)}/setup`, { method: 'PUT', body: JSON.stringify({ confirm }) }),
   abortIntegrationSetup: (id: string) => request<{ aborted: boolean }>(`/integrations/${encodeURIComponent(id)}/setup`, { method: 'DELETE' }),
+  integrationSetupEntities: (id: string, instanceId?: string | null) => {
+    const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : ''
+    return request<IntegrationSetupEntities>(`/integrations/${encodeURIComponent(id)}/setup/entities${query}`)
+  },
+  addIntegrationSetupEntities: (id: string, entityIds: string[], instanceId?: string | null) => request<{ integrationId: string; configuredEntityIds: string[] }>(`/integrations/${encodeURIComponent(id)}/setup/entities`, { method: 'POST', body: JSON.stringify({ entityIds, ...(instanceId ? { instanceId } : {}) }) }),
   installIntegration: (id: string, version?: string) => request<{ integration: Integration; message: string }>(`/integrations/${encodeURIComponent(id)}/install${version ? `?version=${encodeURIComponent(version)}` : ''}`, { method: 'POST' }),
   updateIntegration: (id: string, version?: string) => request<{ integration: Integration; reconnecting: boolean }>(`/integrations/${encodeURIComponent(id)}/update${version ? `?version=${encodeURIComponent(version)}` : ''}`, { method: 'POST' }),
   integrationVersions: (owner: string, repo: string, id: string, all = false, selfUpdate = false) => {

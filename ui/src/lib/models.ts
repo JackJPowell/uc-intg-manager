@@ -75,3 +75,20 @@ export interface IntegrationSetupDefinition {
   setupDataSchema: IntegrationSetupPage | null
   activeSetup: IntegrationSetupInfo | null
 }
+
+
+export interface IntegrationSetupEntity {
+  id: string
+  type: string
+  name: string
+  description: string
+  area: string
+  deviceClass: string
+  icon: string
+  features: string[]
+}
+
+export interface IntegrationSetupEntities {
+  integrationId: string
+  entities: IntegrationSetupEntity[]
+}

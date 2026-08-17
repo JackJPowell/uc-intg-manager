@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, CircleX, ExternalLink, LoaderCircle, Settings2 } from 'lucide-react'
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
-import type { Integration, IntegrationSetupField, IntegrationSetupInfo, IntegrationSetupPage } from '../lib/models'
+import type { Integration, IntegrationSetupEntity, IntegrationSetupField, IntegrationSetupInfo, IntegrationSetupPage } from '../lib/models'
 import { Modal } from './Modal'
 
 function initialValues(page: IntegrationSetupPage | null): Record<string, string> {
@@ -142,17 +142,147 @@ function SetupForm({ page, submitLabel, busy, onSubmit }: { page: IntegrationSet
   </form>
 }
 
+
+function entityTypeLabel(value: string): string {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, character => character.toUpperCase())
+}
+
+function SetupEntityPicker({
+  entities,
+  busy,
+  addedCount,
+  onAdd,
+  onDone,
+}: {
+  entities: IntegrationSetupEntity[]
+  busy: boolean
+  addedCount: number | null
+  onAdd: (entityIds: string[]) => Promise<boolean>
+  onDone: () => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set<string>())
+  const [search, setSearch] = useState('')
+
+  const visibleEntities = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return entities
+    return entities.filter(entity => [
+      entity.name,
+      entity.id,
+      entity.type,
+      entity.area,
+      entity.deviceClass,
+      entity.description,
+    ].some(value => value.toLowerCase().includes(query)))
+  }, [entities, search])
+
+  useEffect(() => {
+    const availableIds = new Set(entities.map(entity => entity.id))
+    setSelected(current => {
+      const next = new Set([...current].filter(entityId => availableIds.has(entityId)))
+      return next.size === current.size ? current : next
+    })
+  }, [entities])
+
+  const toggle = (entityId: string) => {
+    setSelected(current => {
+      const next = new Set(current)
+      if (next.has(entityId)) next.delete(entityId)
+      else next.add(entityId)
+      return next
+    })
+  }
+
+  const addSelected = async () => {
+    if (!selected.size || busy) return
+    if (await onAdd([...selected])) setSelected(new Set<string>())
+  }
+
+  return <div className="setup-entity-picker">
+    {addedCount !== null && <div className="notice success"><CheckCircle2 /> Added {addedCount} {addedCount === 1 ? 'entity' : 'entities'} to the Remote.</div>}
+
+    <div className="setup-entity-heading">
+      <div><strong>Add entities</strong><span>Select which entities from this integration should be added to the Remote.</span></div>
+      <span className="setup-entity-count">{entities.length} available</span>
+    </div>
+
+    <div className="setup-entity-toolbar">
+      <input
+        type="search"
+        value={search}
+        onChange={event => setSearch(event.target.value)}
+        placeholder="Search entities…"
+        aria-label="Search available entities"
+      />
+      <button className="secondary-action" type="button" disabled={busy || selected.size === entities.length} onClick={() => setSelected(new Set(entities.map(entity => entity.id)))}>Select all</button>
+      <button className="secondary-action" type="button" disabled={busy || selected.size === 0} onClick={() => setSelected(new Set<string>())}>Clear</button>
+    </div>
+
+    <div className="setup-entity-list">
+      {visibleEntities.map(entity => {
+        const checked = selected.has(entity.id)
+        return <label className={`setup-entity-row${checked ? ' selected' : ''}`} key={entity.id}>
+          <input type="checkbox" checked={checked} disabled={busy} onChange={() => toggle(entity.id)} />
+          <span className="setup-entity-main">
+            <strong>{entity.name}</strong>
+            <span className="setup-entity-meta">
+              <em>{entityTypeLabel(entity.type)}</em>
+              {entity.area && <em>{entity.area}</em>}
+              {entity.deviceClass && <em>{entityTypeLabel(entity.deviceClass)}</em>}
+            </span>
+            <code>{entity.id}</code>
+            {entity.description && <small>{entity.description}</small>}
+          </span>
+        </label>
+      })}
+      {!visibleEntities.length && <div className="setup-entity-empty">No entities match your search.</div>}
+    </div>
+
+    <div className="setup-dialog-actions">
+      <button className="secondary-action" type="button" disabled={busy} onClick={onDone}>Done without adding more</button>
+      <button className="primary-action" type="button" disabled={busy || selected.size === 0} onClick={() => void addSelected()}>
+        {busy ? <LoaderCircle className="spin" /> : <CheckCircle2 />}
+        Add selected{selected.size ? ` (${selected.size})` : ''}
+      </button>
+    </div>
+  </div>
+}
+
 export function IntegrationSetupModal({ item, close }: { item: Integration; close: () => void }) {
   const queryClient = useQueryClient()
-  const definition = useQuery({ queryKey: ['integration-setup', item.id], queryFn: () => api.integrationSetup(item.id), staleTime: 0, retry: false })
+  const definition = useQuery({
+    queryKey: ['integration-setup', item.id],
+    queryFn: () => api.integrationSetup(item.id),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+  })
   const [setup, setSetup] = useState<IntegrationSetupInfo | null>(null)
   const [busy, setBusy] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
+  const [entityBusy, setEntityBusy] = useState(false)
+  const [entityError, setEntityError] = useState<string | null>(null)
+  const [addedEntityCount, setAddedEntityCount] = useState<number | null>(null)
+  const initializedFromDefinition = useRef(false)
   const isReconfigure = item.connectionState !== 'not_configured' && (item.installState === 'configured' || Boolean(item.instanceId))
+  const entitiesQuery = useQuery({
+    queryKey: ['integration-setup-entities', item.id, item.instanceId ?? 'new'],
+    queryFn: () => api.integrationSetupEntities(item.id, item.instanceId),
+    enabled: setup?.state === 'OK',
+    staleTime: 0,
+    gcTime: 0,
+    retry: (failureCount, error) => failureCount < 5 && error instanceof ApiError && (error.status === 404 || error.status === 503),
+    retryDelay: attempt => Math.min(500 * 2 ** attempt, 3_000),
+    refetchOnWindowFocus: false,
+  })
 
   useEffect(() => {
-    if (definition.data?.activeSetup) setSetup(definition.data.activeSetup)
-  }, [definition.data?.activeSetup])
+    if (initializedFromDefinition.current || !definition.isFetchedAfterMount || !definition.data) return
+    initializedFromDefinition.current = true
+    setSetup(definition.data.activeSetup ?? null)
+  }, [definition.data, definition.isFetchedAfterMount])
 
   useEffect(() => {
     if (setup?.state !== 'SETUP') return
@@ -227,9 +357,38 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
     finally { setBusy(false) }
   }
 
+  const clearSetupCacheAndClose = () => {
+    queryClient.removeQueries({ queryKey: ['integration-setup', item.id], exact: true })
+    queryClient.removeQueries({ queryKey: ['integration-setup-entities', item.id], exact: false })
+    close()
+  }
+
+  const addSelectedEntities = async (entityIds: string[]): Promise<boolean> => {
+    if (!entityIds.length || entityBusy) return false
+    setEntityBusy(true)
+    setEntityError(null)
+    try {
+      const result = await api.addIntegrationSetupEntities(
+        item.id,
+        entityIds,
+        entitiesQuery.data?.integrationId ?? item.instanceId,
+      )
+      setAddedEntityCount(result.configuredEntityIds.length)
+      await entitiesQuery.refetch()
+      void queryClient.invalidateQueries({ queryKey: ['installed', 'integrations'] })
+      void queryClient.invalidateQueries({ queryKey: ['catalog', 'integrations'] })
+      return true
+    } catch (error) {
+      setEntityError(error instanceof Error ? error.message : 'Unable to add selected entities')
+      return false
+    } finally {
+      setEntityBusy(false)
+    }
+  }
+
   const abortAndClose = () => {
     if (setup && (setup.state === 'SETUP' || setup.state === 'WAIT_USER_ACTION')) void api.abortIntegrationSetup(item.id).catch(() => undefined)
-    close()
+    clearSetupCacheAndClose()
   }
 
   const title = `${isReconfigure ? 'Reconfigure' : 'Configure'} — ${item.name}`
@@ -263,7 +422,32 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
 
     {setup?.state === 'WAIT_USER_ACTION' && !setup.action && <div className="notice warning"><AlertTriangle /> The integration is waiting for user action but did not provide an action definition.</div>}
 
-    {setup?.state === 'OK' && <div className="setup-success"><CheckCircle2 /><div><strong>Integration configured</strong><span>{item.name} completed its setup successfully and is ready to use.</span></div><button className="primary-action" type="button" onClick={close}>Done</button></div>}
+    {setup?.state === 'OK' && <>
+      <div className="setup-success"><CheckCircle2 /><div><strong>Integration configured</strong><span>{item.name} completed its setup successfully. You can now add the entities it provides.</span></div></div>
+
+      {entityError && <div className="notice error"><CircleX /> {entityError}</div>}
+
+      {entitiesQuery.isLoading && <div className="setup-progress"><LoaderCircle className="spin" /><div><strong>Loading available entities</strong><span>Reading the entities provided by the configured integration…</span></div></div>}
+
+      {entitiesQuery.isError && <div className="setup-entity-fallback">
+        <div className="notice warning"><AlertTriangle /> {entitiesQuery.error instanceof Error ? entitiesQuery.error.message : 'Unable to load available entities'}</div>
+        <div className="setup-dialog-actions"><button className="secondary-action" type="button" onClick={clearSetupCacheAndClose}>Done</button><button className="primary-action" type="button" onClick={() => void entitiesQuery.refetch()}>Try again</button></div>
+      </div>}
+
+      {!entitiesQuery.isLoading && !entitiesQuery.isError && entitiesQuery.data && entitiesQuery.data.entities.length > 0 && <SetupEntityPicker
+        entities={entitiesQuery.data.entities}
+        busy={entityBusy}
+        addedCount={addedEntityCount}
+        onAdd={addSelectedEntities}
+        onDone={clearSetupCacheAndClose}
+      />}
+
+      {!entitiesQuery.isLoading && !entitiesQuery.isError && entitiesQuery.data && entitiesQuery.data.entities.length === 0 && <div className="setup-entity-fallback">
+        {addedEntityCount !== null && <div className="notice success"><CheckCircle2 /> Added {addedEntityCount} {addedEntityCount === 1 ? 'entity' : 'entities'} to the Remote.</div>}
+        <div className="setup-info-field"><p>No new entities are available to add from this integration.</p></div>
+        <div className="setup-dialog-actions"><button className="primary-action" type="button" onClick={clearSetupCacheAndClose}>Done</button></div>
+      </div>}
+    </>}
 
     {setup?.state !== 'OK' && <div className="setup-footer"><button className="secondary-action" type="button" disabled={busy} onClick={abortAndClose}>Cancel</button></div>}
   </div></Modal>

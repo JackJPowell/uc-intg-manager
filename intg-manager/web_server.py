@@ -719,7 +719,7 @@ async def _remote_core_json(
     path: str,
     *,
     remote_id: str | None = None,
-    json_body: dict[str, Any] | None = None,
+    json_body: Any | None = None,
     timeout_seconds: float = 75,
 ) -> Any:
     """Call a Core REST endpoint using the active Remote's stored credentials.
@@ -968,6 +968,135 @@ async def _recover_completed_setup(
             }
 
     return None
+
+
+async def _resolve_setup_instance_id(
+    driver_id: str,
+    remote_id: str | None,
+    preferred_instance_id: str | None = None,
+) -> str:
+    """Resolve the configured integration instance created or reconfigured by setup."""
+    instances = await _remote_core_json(
+        "GET", "intg/instances?limit=100", remote_id=remote_id
+    )
+    if not isinstance(instances, list):
+        raise _CoreProxyError(
+            502,
+            "invalid_integration_instances",
+            "Remote returned an invalid integration instance list",
+        )
+
+    candidates = [
+        instance
+        for instance in instances
+        if isinstance(instance, dict)
+        and str(instance.get("driver_id") or "") == driver_id
+        and bool(instance.get("integration_id"))
+    ]
+
+    if preferred_instance_id:
+        for instance in candidates:
+            if str(instance.get("integration_id") or "") == preferred_instance_id:
+                return preferred_instance_id
+
+    if len(candidates) == 1:
+        return str(candidates[0]["integration_id"])
+
+    # Integration Manager historically treats the conventional ".main" instance
+    # as the primary instance for a driver. Prefer it only when Core returns
+    # multiple candidates and the caller could not supply an exact instance id.
+    main_instance_id = f"{driver_id}.main"
+    if any(
+        str(instance.get("integration_id") or "") == main_instance_id
+        for instance in candidates
+    ):
+        return main_instance_id
+
+    if not candidates:
+        raise _CoreProxyError(
+            404,
+            "integration_instance_not_found",
+            "The configured integration instance is not available yet",
+        )
+
+    raise _CoreProxyError(
+        409,
+        "integration_instance_ambiguous",
+        "Multiple integration instances use this driver; select a specific instance",
+    )
+
+
+def _normalize_available_integration_entity(entity: Any) -> dict[str, Any] | None:
+    """Convert a Core AvailableEntity into the compact setup-picker model."""
+    if not isinstance(entity, dict):
+        return None
+    entity_id = str(entity.get("entity_id") or "")
+    entity_type = str(entity.get("entity_type") or "")
+    if not entity_id or not entity_type:
+        return None
+    return {
+        "id": entity_id,
+        "type": entity_type,
+        "name": _get_localized_name(entity.get("name"), entity_id),
+        "description": _get_localized_name(entity.get("description"), "")
+        if entity.get("description")
+        else "",
+        "area": str(entity.get("area") or ""),
+        "deviceClass": str(entity.get("device_class") or ""),
+        "icon": str(entity.get("icon") or ""),
+        "features": [
+            str(feature)
+            for feature in entity.get("features", [])
+            if isinstance(feature, str)
+        ],
+    }
+
+
+async def _get_setup_available_entities(
+    integration_id: str, remote_id: str | None
+) -> list[dict[str, Any]]:
+    """Retrieve every NEW available entity from an integration instance."""
+    encoded_instance_id = quote(integration_id, safe="")
+    entities: list[dict[str, Any]] = []
+    page = 1
+
+    # Core limits paginated lists to 100 items per request. Keep requesting
+    # pages until a partial/empty page is returned so large integrations such
+    # as Home Assistant are not silently truncated.
+    while page <= 1000:
+        reload_flag = "&reload=true" if page == 1 else ""
+        batch = await _remote_core_json(
+            "GET",
+            (
+                f"intg/instances/{encoded_instance_id}/entities"
+                f"?filter=NEW&limit=100&page={page}{reload_flag}"
+            ),
+            remote_id=remote_id,
+            timeout_seconds=75,
+        )
+        if not isinstance(batch, list):
+            raise _CoreProxyError(
+                502,
+                "invalid_available_entities",
+                "Remote returned an invalid available entity list",
+            )
+
+        for entity in batch:
+            normalized = _normalize_available_integration_entity(entity)
+            if normalized is not None:
+                entities.append(normalized)
+
+        if len(batch) < 100:
+            break
+        page += 1
+    else:
+        raise _CoreProxyError(
+            502,
+            "available_entities_too_large",
+            "Available entity list exceeded the supported pagination limit",
+        )
+
+    return entities
 
 
 def _developer_api_model(developer: str) -> dict[str, Any] | None:
@@ -2231,6 +2360,89 @@ async def api_v1_integration_setup_status(driver_id: str):
             if completed is not None:
                 return jsonify({"data": completed})
         return _api_error(error.code, str(error), error.status)
+
+
+@app.route(
+    "/api/v1/integrations/<driver_id>/setup/entities",
+    methods=["GET", "POST"],
+)
+async def api_v1_integration_setup_entities(driver_id: str):
+    """List and configure entities after a successful integration setup."""
+    remote_id = get_active_remote_id()
+    try:
+        if request.method == "GET":
+            preferred_instance_id = request.args.get("instanceId") or None
+            integration_id = await _resolve_setup_instance_id(
+                driver_id, remote_id, preferred_instance_id
+            )
+            entities = await _get_setup_available_entities(integration_id, remote_id)
+            return jsonify(
+                {
+                    "data": {
+                        "integrationId": integration_id,
+                        "entities": entities,
+                    }
+                }
+            )
+
+        payload = await request.get_json(silent=True) or {}
+        preferred_instance_id = (
+            str(payload.get("instanceId"))
+            if payload.get("instanceId")
+            else None
+        )
+        raw_entity_ids = payload.get("entityIds")
+        if not isinstance(raw_entity_ids, list):
+            return _api_error(
+                "entity_ids_required",
+                "entityIds must be an array of available entity identifiers",
+            )
+
+        # Core intentionally treats an empty array as "configure every entity".
+        # The manager's picker uses explicit selection, so reject an empty list
+        # rather than accidentally adding everything.
+        entity_ids = [
+            str(entity_id)
+            for entity_id in raw_entity_ids
+            if isinstance(entity_id, str) and entity_id
+        ]
+        if not entity_ids:
+            return _api_error(
+                "entity_selection_required",
+                "Select at least one entity to add",
+            )
+
+        integration_id = await _resolve_setup_instance_id(
+            driver_id, remote_id, preferred_instance_id
+        )
+        configured = await _remote_core_json(
+            "POST",
+            f"intg/instances/{quote(integration_id, safe='')}/entities",
+            remote_id=remote_id,
+            json_body=entity_ids,
+            timeout_seconds=75,
+        )
+        configured_ids = (
+            [str(entity_id) for entity_id in configured if isinstance(entity_id, str)]
+            if isinstance(configured, list)
+            else []
+        )
+        return jsonify(
+            {
+                "data": {
+                    "integrationId": integration_id,
+                    "configuredEntityIds": configured_ids,
+                }
+            }
+        )
+    except _CoreProxyError as error:
+        _LOG.warning(
+            "Post-setup entity request failed for %s: %s", driver_id, error
+        )
+        return _api_error(error.code, str(error), error.status)
+    except Exception as error:
+        _LOG.exception("Unexpected post-setup entity error for %s", driver_id)
+        return _api_error("setup_entities_failed", str(error), 500)
 
 
 # =============================================================================
