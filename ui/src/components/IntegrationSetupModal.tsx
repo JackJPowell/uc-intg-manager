@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowLeft, Box, CheckCircle2, CircleDot, CircleX, ExternalLink, Gamepad2, Gauge, Lightbulb, ListFilter, LoaderCircle, Minus, MonitorPlay, Plus, Search, Settings2, SlidersHorizontal, Thermometer, ToggleLeft } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, ApiError } from '../lib/api'
 import type { Integration, IntegrationSetupEntity, IntegrationSetupField, IntegrationSetupInfo, IntegrationSetupPage } from '../lib/models'
 import { Modal } from './Modal'
@@ -185,20 +186,64 @@ function SetupEntityRow({
   onAction: (entityId: string) => void
 }) {
   const tooltip = `${entityTypeLabel(entity.type)} · ${entityReference(entity.id)}`
-  return <div className="setup-entity-transfer-row" data-entity-tooltip={tooltip} title={tooltip} tabIndex={0}>
-    <span className="setup-entity-type-icon"><EntityTypeIcon type={entity.type} /></span>
-    <strong>{entity.name}</strong>
-    <button
-      className={`setup-entity-transfer-action ${action}`}
-      type="button"
-      disabled={busy}
-      aria-label={`${action === 'add' ? 'Add' : 'Remove'} ${entity.name}`}
-      title={`${action === 'add' ? 'Add' : 'Remove'} ${entity.name}`}
-      onClick={() => onAction(entity.id)}
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [tooltipPosition, setTooltipPosition] = useState<{ top: number; left: number; maxWidth: number } | null>(null)
+
+  const showTooltip = () => {
+    const row = rowRef.current
+    if (!row) return
+    const rect = row.getBoundingClientRect()
+    const maxWidth = Math.min(420, Math.max(220, window.innerWidth - 24))
+    const halfWidth = maxWidth / 2
+    const left = Math.min(window.innerWidth - 12 - halfWidth, Math.max(12 + halfWidth, rect.left + rect.width / 2))
+    setTooltipPosition({ top: Math.max(12, rect.top - 8), left, maxWidth })
+  }
+
+  useEffect(() => {
+    if (!tooltipPosition) return
+    const hideTooltip = () => setTooltipPosition(null)
+    window.addEventListener('resize', hideTooltip)
+    window.addEventListener('scroll', hideTooltip, true)
+    return () => {
+      window.removeEventListener('resize', hideTooltip)
+      window.removeEventListener('scroll', hideTooltip, true)
+    }
+  }, [tooltipPosition])
+
+  return <>
+    <div
+      ref={rowRef}
+      className="setup-entity-transfer-row"
+      tabIndex={0}
+      onMouseEnter={showTooltip}
+      onMouseLeave={() => setTooltipPosition(null)}
+      onFocus={showTooltip}
+      onBlur={() => setTooltipPosition(null)}
     >
-      {action === 'add' ? <Plus /> : <Minus />}
-    </button>
-  </div>
+      <span className="setup-entity-type-icon"><EntityTypeIcon type={entity.type} /></span>
+      <strong>{entity.name}</strong>
+      <button
+        className={`setup-entity-transfer-action ${action}`}
+        type="button"
+        disabled={busy}
+        aria-label={`${action === 'add' ? 'Add' : 'Remove'} ${entity.name}`}
+        title={`${action === 'add' ? 'Add' : 'Remove'} ${entity.name}`}
+        onClick={() => onAction(entity.id)}
+      >
+        {action === 'add' ? <Plus /> : <Minus />}
+      </button>
+    </div>
+    {tooltipPosition && createPortal(
+      <div
+        className="setup-entity-tooltip"
+        role="tooltip"
+        style={{ top: tooltipPosition.top, left: tooltipPosition.left, maxWidth: tooltipPosition.maxWidth }}
+      >
+        {tooltip}
+      </div>,
+      document.body,
+    )}
+  </>
 }
 
 function SetupEntityPicker({
@@ -272,8 +317,9 @@ function SetupEntityPicker({
 
 export function IntegrationSetupModal({ item, close }: { item: Integration; close: () => void }) {
   const queryClient = useQueryClient()
+  const [setupQuerySession] = useState(() => `${Date.now()}-${Math.random()}`)
   const definition = useQuery({
-    queryKey: ['integration-setup', item.id],
+    queryKey: ['integration-setup', item.id, setupQuerySession],
     queryFn: () => api.integrationSetup(item.id),
     staleTime: 0,
     gcTime: 0,
@@ -303,7 +349,8 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
   useEffect(() => {
     if (initializedFromDefinition.current || !definition.isFetchedAfterMount || !definition.data) return
     initializedFromDefinition.current = true
-    setSetup(definition.data.activeSetup ?? null)
+    const activeSetup = definition.data.activeSetup
+    setSetup(activeSetup && (activeSetup.state === 'SETUP' || activeSetup.state === 'WAIT_USER_ACTION') ? activeSetup : null)
   }, [definition.data, definition.isFetchedAfterMount])
 
   useEffect(() => {
@@ -380,7 +427,7 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
   }
 
   const clearSetupCacheAndClose = () => {
-    queryClient.removeQueries({ queryKey: ['integration-setup', item.id], exact: true })
+    queryClient.removeQueries({ queryKey: ['integration-setup', item.id], exact: false })
     queryClient.removeQueries({ queryKey: ['integration-setup-entities', item.id], exact: false })
     close()
   }

@@ -2312,6 +2312,13 @@ async def api_v1_integration_setup(driver_id: str):
             except _CoreProxyError as error:
                 if error.status != 404:
                     raise
+            normalized_active_setup = _normalize_setup_info(active_setup)
+            if normalized_active_setup and normalized_active_setup.get("state") not in (
+                "SETUP",
+                "WAIT_USER_ACTION",
+            ):
+                normalized_active_setup = None
+
             return jsonify(
                 {
                     "data": {
@@ -2323,7 +2330,7 @@ async def api_v1_integration_setup(driver_id: str):
                         "setupDataSchema": _normalize_setup_page(
                             driver.get("setup_data_schema") if isinstance(driver, dict) else None
                         ),
-                        "activeSetup": _normalize_setup_info(active_setup),
+                        "activeSetup": normalized_active_setup,
                     }
                 }
             )
