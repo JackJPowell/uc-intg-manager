@@ -119,7 +119,7 @@ function MarkdownText({ text }: { text: string }) {
   return <div className="setup-rich-text">{blocks}</div>
 }
 
-function SetupForm({ page, submitLabel, busy, onSubmit }: { page: IntegrationSetupPage | null; submitLabel: string; busy: boolean; onSubmit: (values: Record<string, string>) => void }) {
+function SetupForm({ page, submitLabel, busy, onSubmit, secondaryAction }: { page: IntegrationSetupPage | null; submitLabel: string; busy: boolean; onSubmit: (values: Record<string, string>) => void; secondaryAction?: ReactNode }) {
   const defaults = useMemo(() => initialValues(page), [page])
   const [values, setValues] = useState<Record<string, string>>(defaults)
 
@@ -139,7 +139,7 @@ function SetupForm({ page, submitLabel, busy, onSubmit }: { page: IntegrationSet
   return <form className="integration-setup-form" onSubmit={event => { event.preventDefault(); onSubmit(values) }}>
     {page?.fields.map(renderField)}
     {!page?.fields.length && <div className="setup-info-field"><p>No initial settings are required. Continue to start the integration setup.</p></div>}
-    <div className="setup-dialog-actions"><button className="primary-action" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Settings2 />}{submitLabel}</button></div>
+    <div className="setup-dialog-actions">{secondaryAction}<button className="primary-action" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" /> : <Settings2 />}{submitLabel}</button></div>
   </form>
 }
 
@@ -333,12 +333,13 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
   const [entityBusy, setEntityBusy] = useState(false)
   const [entityError, setEntityError] = useState<string | null>(null)
   const [postSetupStep, setPostSetupStep] = useState<'complete' | 'entities'>('complete')
+  const [manageEntitiesDirectly, setManageEntitiesDirectly] = useState(false)
   const initializedFromDefinition = useRef(false)
   const isReconfigure = item.connectionState !== 'not_configured' && (item.installState === 'configured' || Boolean(item.instanceId))
   const entitiesQuery = useQuery({
     queryKey: ['integration-setup-entities', item.id, item.instanceId ?? 'new'],
     queryFn: () => api.integrationSetupEntities(item.id, item.instanceId),
-    enabled: setup?.state === 'OK' && postSetupStep === 'entities',
+    enabled: manageEntitiesDirectly || (setup?.state === 'OK' && postSetupStep === 'entities'),
     staleTime: 0,
     gcTime: 0,
     retry: (failureCount, error) => failureCount < 5 && error instanceof ApiError && (error.status === 404 || error.status === 503),
@@ -482,6 +483,12 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
   }
 
   const title = `${isReconfigure ? 'Reconfigure' : 'Configure'} — ${item.name}`
+  const showEntityStep = manageEntitiesDirectly || (setup?.state === 'OK' && postSetupStep === 'entities')
+  const backFromEntityStep = () => {
+    setEntityError(null)
+    if (manageEntitiesDirectly) setManageEntitiesDirectly(false)
+    else setPostSetupStep('complete')
+  }
   const error = localError || (setup?.state === 'ERROR' ? `Setup failed: ${setup.error === 'NONE' ? 'Unknown error' : setup.error.replaceAll('_', ' ').toLowerCase()}` : null)
 
   return <Modal title={title} close={abortAndClose} className="integration-setup-modal"><div className="integration-setup-dialog">
@@ -489,10 +496,16 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
     {definition.isError && <div className="notice error"><CircleX /> {definition.error.message}</div>}
     {error && <div className="notice error"><CircleX /> {error}</div>}
 
-    {!definition.isLoading && definition.data && !setup && <>
-      <div className="setup-intro"><p>{isReconfigure ? 'This starts the integration’s reconfiguration flow on the Remote.' : 'Complete the integration setup here. The following fields are provided dynamically by the integration driver.'}</p></div>
+    {!definition.isLoading && definition.data && !setup && !manageEntitiesDirectly && <>
+      <div className="setup-intro"><p>{isReconfigure ? 'This starts the integration’s reconfiguration flow on the Remote. You can also manage entities that are already available without reconfiguring the integration.' : 'Complete the integration setup here. The following fields are provided dynamically by the integration driver.'}</p></div>
       {definition.data.setupDataSchema?.title && <h3>{definition.data.setupDataSchema.title}</h3>}
-      <SetupForm page={definition.data.setupDataSchema} submitLabel={isReconfigure ? 'Start reconfiguration' : 'Start setup'} busy={busy} onSubmit={values => void run(() => api.startIntegrationSetup(item.id, values, isReconfigure))} />
+      <SetupForm
+        page={definition.data.setupDataSchema}
+        submitLabel={isReconfigure ? 'Start reconfiguration' : 'Start setup'}
+        busy={busy}
+        onSubmit={values => void run(() => api.startIntegrationSetup(item.id, values, isReconfigure))}
+        secondaryAction={isReconfigure ? <button className="secondary-action" type="button" disabled={busy} onClick={() => { setEntityError(null); setManageEntitiesDirectly(true) }}><ListFilter />Add available entities</button> : undefined}
+      />
     </>}
 
     {setup?.state === 'SETUP' && <div className="setup-progress"><LoaderCircle className="spin" /><div><strong>Integration setup is running</strong><span>The driver is configuring the integration. This can take a moment.</span></div></div>}
@@ -520,14 +533,14 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
       </div>
     </>}
 
-    {setup?.state === 'OK' && postSetupStep === 'entities' && <>
+    {showEntityStep && <>
       {entityError && <div className="notice error"><CircleX /> {entityError}</div>}
 
       {entitiesQuery.isLoading && <div className="setup-progress"><LoaderCircle className="spin" /><div><strong>Loading entities</strong><span>Reading available and already added entities from the Remote…</span></div></div>}
 
       {entitiesQuery.isError && <div className="setup-entity-fallback">
         <div className="notice warning"><AlertTriangle /> {entitiesQuery.error instanceof Error ? entitiesQuery.error.message : 'Unable to load entities'}</div>
-        <div className="setup-entity-navigation"><button className="secondary-action" type="button" onClick={() => setPostSetupStep('complete')}><ArrowLeft />Back</button><button className="primary-action" type="button" onClick={() => void entitiesQuery.refetch()}>Try again</button></div>
+        <div className="setup-entity-navigation"><button className="secondary-action" type="button" onClick={backFromEntityStep}><ArrowLeft />Back</button><button className="primary-action" type="button" onClick={() => void entitiesQuery.refetch()}>Try again</button></div>
       </div>}
 
       {!entitiesQuery.isLoading && !entitiesQuery.isError && entitiesQuery.data && <SetupEntityPicker
@@ -536,11 +549,11 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
         busy={entityBusy}
         onAdd={addSelectedEntities}
         onRemove={removeSelectedEntities}
-        onBack={() => setPostSetupStep('complete')}
+        onBack={backFromEntityStep}
         onDone={clearSetupCacheAndClose}
       />}
     </>}
 
-    {setup?.state !== 'OK' && <div className="setup-footer"><button className="secondary-action" type="button" disabled={busy} onClick={abortAndClose}>Cancel</button></div>}
+    {setup?.state !== 'OK' && !showEntityStep && <div className="setup-footer"><button className="secondary-action" type="button" disabled={busy} onClick={abortAndClose}>Cancel</button></div>}
   </div></Modal>
 }
