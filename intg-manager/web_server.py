@@ -635,6 +635,7 @@ class AvailableIntegration:
 
     driver_id: str
     name: str
+    catalog_id: str = ""  # Stable registry identity; may differ from installed driver ID
     description: str = ""
     icon: str = ""
     home_page: str = ""
@@ -680,6 +681,47 @@ class AvailableIntegration:
     def __post_init__(self):
         if self.categories is None:
             self.categories = []
+
+
+def _canonical_integration_id(value: str) -> str:
+    """Normalize registry and Remote identifiers for safe equality checks."""
+    return re.sub(r"[-_]", "", value).lower()
+
+
+def _registry_item_for_driver(
+    registry: list[dict[str, Any]], driver_id: str, driver_name: str
+) -> dict[str, Any]:
+    """Find one registry item for a Remote driver without partial-name matching.
+
+    Registry IDs are sometimes hyphenated while the Remote reports underscores,
+    so canonical ID equality is accepted.  Name matching is only an exact,
+    unambiguous fallback; treating one name as a substring of another makes
+    distinct integrations (for example Apple TV and Apple TV Siri Voice) alias.
+    """
+    canonical_driver_id = _canonical_integration_id(driver_id)
+    id_matches = [
+        item
+        for item in registry
+        if canonical_driver_id
+        and any(
+            _canonical_integration_id(candidate) == canonical_driver_id
+            for candidate in (item.get("driver_id", ""), item.get("id", ""))
+            if isinstance(candidate, str)
+        )
+    ]
+    if len(id_matches) == 1:
+        return id_matches[0]
+
+    normalized_name = driver_name.strip().casefold()
+    if not normalized_name:
+        return {}
+    name_matches = [
+        item
+        for item in registry
+        if isinstance(item.get("name"), str)
+        and item["name"].strip().casefold() == normalized_name
+    ]
+    return name_matches[0] if len(name_matches) == 1 else {}
 
 
 def _api_error(code: str, message: str, status: int = 400):
@@ -1213,6 +1255,7 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
             "updatedAt": integration.pushed_at or None,
         }
         original_index = integration.original_index
+        catalog_id = integration.catalog_id or integration.driver_id
     else:
         install_state = "configured" if integration.instance_id else "installed"
         connection_state = integration.state.lower()
@@ -1229,11 +1272,13 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
             "updatedAt": None,
         }
         original_index = 0
+        catalog_id = integration.driver_id
 
     can_mutate = management == "custom"
     developer = _developer_api_model(integration.developer)
     return {
         "id": integration.driver_id,
+        "catalogId": catalog_id,
         "instanceId": integration.instance_id or None,
         "source": "catalog" if is_available else "installed",
         "name": integration.name,
@@ -1630,37 +1675,8 @@ async def _get_installed_integrations(
     if not client:
         return []
 
-    # Load registry to check for supports_backup flag and driver_id mapping
+    # Load registry to check for supports_backup and metadata mappings.
     registry = load_registry()
-    # Primary lookup: by driver_id field (matches what remote reports)
-    registry_by_driver_id = {
-        item.get("driver_id", ""): item for item in registry if item.get("driver_id")
-    }
-    # Secondary lookup: by registry id (fallback)
-    registry_by_id = {item.get("id", ""): item for item in registry}
-    # Tertiary lookup: by name for fuzzy matching (last resort)
-    registry_by_name = {item.get("name", "").lower(): item for item in registry}
-
-    def find_registry_item(driver_id: str, driver_name: str) -> dict:
-        """Find registry item by driver_id, registry id, or fuzzy name match."""
-        # Primary: match by driver_id field (what the remote reports)
-        if driver_id in registry_by_driver_id:
-            return registry_by_driver_id[driver_id]
-
-        # Secondary: match by registry id
-        if driver_id in registry_by_id:
-            return registry_by_id[driver_id]
-
-        # Tertiary: fuzzy name matching (fallback for integrations not yet updated)
-        driver_name_lower = driver_name.lower()
-        for reg_name, item in registry_by_name.items():
-            if (
-                reg_name == driver_name_lower
-                or driver_name_lower in reg_name
-                or reg_name in driver_name_lower
-            ):
-                return item
-        return {}
 
     integrations = []
     configured_driver_ids = set()
@@ -1705,9 +1721,8 @@ async def _get_installed_integrations(
         is_external = driver_type == "EXTERNAL"
         is_custom = driver_type == "CUSTOM"
 
-        # Check registry for supports_backup flag, self_managed flag, and repository URL fallback
-        # Use fuzzy matching since driver_id may not match registry id exactly
-        registry_item = find_registry_item(driver_id, driver_name)
+        # Resolve registry metadata through a stable ID, with exact-name fallback.
+        registry_item = _registry_item_for_driver(registry, driver_id, driver_name)
         supports_backup = registry_item.get("supports_backup", False)
         self_managed = registry_item.get("self_managed", False)
 
@@ -1823,9 +1838,8 @@ async def _get_installed_integrations(
         is_external = driver_type == "EXTERNAL"
         is_custom = driver_type == "CUSTOM"
 
-        # Check registry for supports_backup flag and repository URL fallback
-        # Use fuzzy matching since driver_id may not match registry id exactly
-        registry_item = find_registry_item(driver_id, driver_name)
+        # Resolve registry metadata through a stable ID, with exact-name fallback.
+        registry_item = _registry_item_for_driver(registry, driver_id, driver_name)
         supports_backup = registry_item.get("supports_backup", False)
 
         # Prefer registry author so sponsor lookup (keyed by developers[].name) matches.
@@ -1913,7 +1927,7 @@ async def _get_available_integrations(
     # Get installed driver info for comparison
     installed_drivers = {}  # driver_id -> (driver_type, version)
     configured_driver_ids = {}  # driver_id -> instance_id
-    driver_names = {}  # Map name -> (driver_id, driver_type, version) for fuzzy matching
+    driver_names: dict[str, list[tuple[str, str, str]]] = {}
 
     if client:
         try:
@@ -1924,10 +1938,12 @@ async def _get_available_integrations(
                 driver_type = driver.get("driver_type", "CUSTOM")
                 version = driver.get("version", "")
                 installed_drivers[driver_id] = (driver_type, version)
-                # Also store driver name for fuzzy matching
-                name = driver.get("name", {}).get("en", "").lower()
+                # Keep exact names only as a legacy fallback when IDs differ.
+                name = driver.get("name", {}).get("en", "").strip().casefold()
                 if name:
-                    driver_names[name] = (driver_id, driver_type, version)
+                    driver_names.setdefault(name, []).append(
+                        (driver_id, driver_type, version)
+                    )
         except UnfurledError:
             pass
 
@@ -1940,41 +1956,43 @@ async def _get_available_integrations(
         except UnfurledError:
             pass
 
-    def is_match(
-        registry_id: str, registry_name: str
-    ) -> tuple[bool, bool, bool, str, str, str]:
+    def is_match(item: dict[str, Any]) -> tuple[bool, bool, bool, str, str, str]:
         """Check if a registry item matches an installed driver.
 
         Returns: (is_installed, is_configured, is_external, version, instance_id, actual_driver_id)
         """
-        # Direct ID match
-        if registry_id in installed_drivers:
-            driver_type, version = installed_drivers[registry_id]
+        registry_ids = {
+            _canonical_integration_id(value)
+            for value in (item.get("driver_id", ""), item.get("id", ""))
+            if isinstance(value, str) and value
+        }
+        id_matches = [
+            driver_id
+            for driver_id in installed_drivers
+            if _canonical_integration_id(driver_id) in registry_ids
+        ]
+        if len(id_matches) == 1:
+            driver_id = id_matches[0]
+            driver_type, version = installed_drivers[driver_id]
             is_external = driver_type == "EXTERNAL"
-            is_configured = registry_id in configured_driver_ids
-            instance_id = configured_driver_ids.get(registry_id, "")
-            return (True, is_configured, is_external, version, instance_id, registry_id)
+            is_configured = driver_id in configured_driver_ids
+            instance_id = configured_driver_ids.get(driver_id, "")
+            return (True, is_configured, is_external, version, instance_id, driver_id)
 
-        # Try fuzzy match by name
-        registry_name_lower = registry_name.lower()
-        for name, (driver_id, driver_type, version) in driver_names.items():
-            # Check if names match closely
-            if (
-                name == registry_name_lower
-                or registry_name_lower in name
-                or name in registry_name_lower
-            ):
-                is_external = driver_type == "EXTERNAL"
-                is_configured = driver_id in configured_driver_ids
-                instance_id = configured_driver_ids.get(driver_id, "")
-                return (
-                    True,
-                    is_configured,
-                    is_external,
-                    version,
-                    instance_id,
-                    driver_id,
-                )
+        # Name fallbacks must be exact and unambiguous; partial matching aliases
+        # integrations such as "Apple TV" and "Apple TV Siri Voice".
+        registry_name = item.get("name", "")
+        name_matches = (
+            driver_names.get(registry_name.strip().casefold(), [])
+            if isinstance(registry_name, str)
+            else []
+        )
+        if len(name_matches) == 1:
+            driver_id, driver_type, version = name_matches[0]
+            is_external = driver_type == "EXTERNAL"
+            is_configured = driver_id in configured_driver_ids
+            instance_id = configured_driver_ids.get(driver_id, "")
+            return (True, is_configured, is_external, version, instance_id, driver_id)
 
         return (False, False, False, "", "", "")
 
@@ -1987,7 +2005,7 @@ async def _get_available_integrations(
         name = item.get("name", "")
         home_page = item.get("repository", "")
 
-        # Check installation status with fuzzy matching
+        # Check installation status through stable IDs or exact-name fallback.
         (
             is_installed,
             is_configured,
@@ -1995,7 +2013,7 @@ async def _get_available_integrations(
             version,
             instance_id,
             actual_driver_id,
-        ) = is_match(driver_id, name)
+        ) = is_match(item)
 
         # Check for updates for installed custom integrations using cached data
         update_available = False
@@ -2044,6 +2062,7 @@ async def _get_available_integrations(
         avail = AvailableIntegration(
             driver_id=actual_driver_id if actual_driver_id else driver_id,
             name=name,
+            catalog_id=driver_id,
             description=item.get("description", ""),
             icon=item.get("icon", "code"),  # FontAwesome icon base name
             home_page=home_page,
