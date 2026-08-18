@@ -3,6 +3,12 @@
 * { box-sizing: border-box; }
 html,body,#root { max-width:100%; overflow-x:clip; } body { margin: 0; min-width: 320px; min-height: 100vh; background-color:#101a2d; background-image:radial-gradient(circle at 88% -8%, #284574 0, transparent 29rem); background-attachment:fixed; }
 button, input, select { font: inherit; } button { cursor: pointer; } button:disabled { cursor: not-allowed; opacity: .55; }
+/* Windows renders the expanded native select menu separately from the styled
+   control. Give its light fallback an explicit, high-contrast option palette. */
+select option { color: #172743; background-color: #f7fbff; }
+select option:checked { color: #fff; background-color: #3f77c7; }
+select option:disabled { color: #52647c; background-color: #e6edf7; }
+select:focus-visible { outline: 2px solid #8abaff; outline-offset: 2px; }
 a { color: inherit; text-decoration: none; }.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .app-shell { min-width:0; min-height: 100vh; }.topbar { min-width:0; height: 68px; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(1rem, 3vw, 2.4rem); border-bottom: 1px solid color-mix(in oklch, #738cb7 24%, transparent); background: color-mix(in oklch, #13213a 94%, transparent); }
 .brand { display: inline-flex; gap: .7rem; align-items: center; font-size: 1.1rem; font-weight: 700; letter-spacing: -.03em; }.brand img { width: 56px; height: 56px; }.brand em { color: #8db9ff; font-style: normal; }.topbar-actions { display: flex; gap: .75rem; align-items: center; }.connection { display: inline-flex; align-items: center; gap: .45rem; font-size: .78rem; color: #b5c4dc; }.connection i { width: .5rem; height: .5rem; border-radius: 99px; background: #e7a65d; }.connection.is-online i { background: #70c19f; box-shadow: 0 0 0 4px #70c19f1c; }.remote-picker select { max-width: 15rem; color: #edf2f8; background: #1b2b48; border: 1px solid #3c5277; border-radius: .55rem; padding: .52rem 2rem .52rem .7rem; }

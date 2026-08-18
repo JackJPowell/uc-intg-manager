@@ -3,6 +3,7 @@ export type ManagementMode = 'custom' | 'official' | 'external' | 'self_managed'
 
 export interface Integration {
   id: string
+  catalogId: string
   instanceId: string | null
   source: 'installed' | 'catalog'
   name: string
