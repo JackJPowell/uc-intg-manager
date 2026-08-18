@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **Catalog identity matching** — Apple TV and Apple TV Siri Voice now remain distinct in the integration catalog. This prevents duplicate cards during searches and preserves Unfolded Circle as the Apple TV integration author.
+- **Windows dropdown readability** — Native select menus now provide a high-contrast fallback palette for options, selected values, disabled values, and keyboard focus.
+
+---
+
 ## v2.0.6 - 2026-07-17
 
 ### Added
