@@ -491,7 +491,7 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
   }
   const error = localError || (setup?.state === 'ERROR' ? `Setup failed: ${setup.error === 'NONE' ? 'Unknown error' : setup.error.replaceAll('_', ' ').toLowerCase()}` : null)
 
-  return <Modal title={title} close={abortAndClose} className="integration-setup-modal"><div className="integration-setup-dialog">
+  return <Modal title={title} close={abortAndClose} className={`integration-setup-modal${showEntityStep ? ' entity-step-open' : ''}`}><div className={`integration-setup-dialog${showEntityStep ? ' entity-step-open' : ''}`}> 
     {definition.isLoading && <div className="setup-progress"><LoaderCircle className="spin" /><div><strong>Loading setup</strong><span>Reading the integration's configuration schema from the Remote…</span></div></div>}
     {definition.isError && <div className="notice error"><CircleX /> {definition.error.message}</div>}
     {error && <div className="notice error"><CircleX /> {error}</div>}
