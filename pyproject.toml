@@ -28,7 +28,7 @@ dependencies = [
     "markdown>=3.5.0",
     "quart>=0.20.0",
     "hypercorn>=0.18.0",
-    "unfurled>=0.3.0",
+    "unfurled>=0.4.0",
 ]
 
 [dependency-groups]
