@@ -37,6 +37,22 @@ def test_v1_routes_are_json_only_and_template_free():
     assert "htmx" not in source.lower()
 
 
+def test_bootstrap_exposes_the_driver_manifest_version():
+    source = SERVER.read_text(encoding="utf-8")
+    settings = (ROOT / "ui" / "src" / "components" / "SettingsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'Path("driver.json")' in source
+    assert '"managerVersion": _manager_version()' in source
+    assert "managerVersion: string | null" in (
+        ROOT / "ui" / "src" / "lib" / "models.ts"
+    ).read_text(encoding="utf-8")
+    assert "Integration Manager" in settings
+    assert "bootstrap.data?.managerVersion" in settings
+    styles = (ROOT / "ui" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".settings-aside header>svg { width:20px; height:20px; flex:0 0 20px;" in styles
+
+
 def test_legacy_ui_and_json_aliases_are_removed():
     source = SERVER.read_text(encoding="utf-8")
     for route in (

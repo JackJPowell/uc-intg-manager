@@ -100,6 +100,7 @@ else:
 
 STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "static"))
 _SESSION_SECRET_FILE = os.path.join(os.path.dirname(MANAGER_DATA_FILE), ".session-key")
+_DRIVER_MANIFEST_PATHS = (Path("driver.json"), Path(BASE_DIR).parent / "driver.json")
 
 
 def _load_session_secret() -> str:
@@ -134,6 +135,19 @@ def _load_session_secret() -> str:
             "Unable to persist session key; sessions will reset on restart: %s", error
         )
     return secret
+
+
+def _manager_version() -> str | None:
+    """Read the package version from the manifest used to start this driver."""
+    for manifest_path in _DRIVER_MANIFEST_PATHS:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        version = manifest.get("version") if isinstance(manifest, dict) else None
+        if isinstance(version, str) and version:
+            return version
+    return None
 
 
 # Create the API/static application with cache disabled for read-only filesystems.
@@ -1771,6 +1785,7 @@ async def api_v1_bootstrap():
                 "activeRemoteId": active_id,
                 "remotes": remotes,
                 "remoteConfiguratorUrl": remote_configurator_url,
+                "managerVersion": _manager_version(),
             }
         }
     )

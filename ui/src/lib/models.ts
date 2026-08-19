@@ -40,6 +40,7 @@ export interface Bootstrap {
   activeRemoteId: string | null
   remotes: Array<{ id: string; name: string; address: string; active: boolean; online: boolean }>
   remoteConfiguratorUrl: string | null
+  managerVersion: string | null
 }
 
 export interface SettingsPayload {
