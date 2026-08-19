@@ -2,6 +2,7 @@
 ucapi==0.7.0
 ucapi-framework==1.9.5
 pyee>=9.0
+unfurled>=0.4.0
 
 # Web framework
 flask>=3.0.0
@@ -12,7 +13,7 @@ hypercorn>=0.18.0
 # HTTP clients
 aiohttp>=3.9.0
 requests>=2.31.0
-unfurled>=0.3.0
+
 
 #Other dependencies
 packaging>=25.0
