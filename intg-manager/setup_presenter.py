@@ -11,6 +11,7 @@ from unfurled.helpers.exceptions import (
     IntegrationNotFound,
     InvalidEntitySelection,
     SetupNotFound,
+    SetupTimeout,
     UnfurledError,
 )
 from unfurled.setup import (
@@ -125,6 +126,8 @@ def setup_api_error(error: Exception) -> SetupApiError:
         )
     if isinstance(error, SetupNotFound):
         return SetupApiError("setup_not_found", str(error), 404)
+    if isinstance(error, SetupTimeout):
+        return SetupApiError("setup_timeout", str(error), 504)
     if isinstance(error, IntegrationNotFound):
         return SetupApiError("integration_instance_not_found", str(error), 404)
     if isinstance(error, IntegrationInstanceAmbiguous):

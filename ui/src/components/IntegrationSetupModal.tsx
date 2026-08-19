@@ -502,7 +502,7 @@ export function IntegrationSetupModal({ item, close }: { item: Integration; clos
     {error && <div className="notice error"><CircleX /> {error}</div>}
 
     {!definition.isLoading && definition.data && !setup && !manageEntitiesDirectly && <>
-      <div className="setup-intro"><p>{isReconfigure ? 'This starts the integration’s reconfiguration flow on the Remote. You can also manage entities that are already available without reconfiguring the integration.' : 'Complete the integration setup here. The following fields are provided dynamically by the integration driver.'}</p></div>
+      <div className="setup-intro"><p>{isReconfigure ? 'Update this integration’s settings on the Remote. You can also manage entities that are already available without reconfiguring the integration.' : 'Set up this integration on the Remote.'}</p></div>
       {definition.data.setupDataSchema?.title && <h3>{definition.data.setupDataSchema.title}</h3>}
       <SetupForm
         page={definition.data.setupDataSchema}

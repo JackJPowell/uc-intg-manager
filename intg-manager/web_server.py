@@ -1965,9 +1965,7 @@ async def api_v1_integration_setup_status(driver_id: str):
         return _api_error("remote_offline", "The active Remote is offline", 503)
     presenter = SetupPresenter(_active_remote_locale())
     try:
-        result = await client.integrations.setup(driver_id).wait_for_completion(
-            attempts=4, interval=0.15
-        )
+        result = await client.integrations.setup(driver_id).wait_for_update()
         return jsonify({"data": presenter.result(result)})
     except Exception as error:
         api_error = setup_api_error(error)
