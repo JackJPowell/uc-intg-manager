@@ -153,6 +153,8 @@ def test_setup_routes_delegate_protocol_handling_to_unfurled():
         source.index("# Integration setup routes") : source.index("# API summary routes")
     ]
     assert "client.integrations.setup(" in setup_routes
+    assert ".wait_for_update()" in setup_routes
+    assert "wait_for_completion" not in source
     assert "_remote_core_json" not in setup_routes
     assert "_CoreProxyError" not in source
     assert "_resolve_setup_instance_id" not in source

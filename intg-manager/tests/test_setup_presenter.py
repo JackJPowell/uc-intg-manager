@@ -18,6 +18,7 @@ from unfurled import (  # noqa: E402
     SetupPage,
     SetupResult,
     SetupState,
+    SetupTimeout,
 )
 
 
@@ -90,3 +91,7 @@ def test_presenter_maps_library_errors_to_the_manager_error_contract():
     entity_error = setup_api_error(InvalidEntitySelection("Select an entity"))
     assert entity_error.code == "entity_selection_required"
     assert entity_error.status == 400
+
+    timeout_error = setup_api_error(SetupTimeout("No update"))
+    assert timeout_error.code == "setup_timeout"
+    assert timeout_error.status == 504
