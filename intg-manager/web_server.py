@@ -24,7 +24,6 @@ from datetime import datetime
 from html import unescape
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import quote
 
 import aiohttp
 from backup_capabilities import backup_support_status
@@ -81,8 +80,9 @@ from sync_api import (
     save_repo_cache,
 )
 from system_messages import get_system_messages_service
+from setup_presenter import SetupPresenter, setup_api_error
 from unfurled import Remote
-from unfurled.helpers.exceptions import HTTPError, UnfurledError
+from unfurled.helpers.exceptions import SetupNotFound, UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -157,23 +157,29 @@ _github_client: GitHubClient | None = None
 # Sync-only GitHub client for fetch_repository_batch (runs in thread, no event loop)
 _sync_github_client: _SyncGitHubClient | None = None
 
-# User's language preference from remote localization settings
-_user_language_code: str = "en_GB"  # Default to remote's default
-
-
 @app.before_serving
-async def _startup_fetch_localization() -> None:
-    """Fetch user language preference from the first configured remote at startup."""
-    global _user_language_code
-    if _remote_clients:
-        first_client = next(iter(_remote_clients.values()))
-        try:
-            localization = await first_client.api.get_localization_settings()
-            if localization and localization.get("language_code"):
-                _user_language_code = localization["language_code"]
-                _LOG.info("User language set to: %s", _user_language_code)
-        except Exception as e:
-            _LOG.warning("Failed to fetch localization settings at startup: %s", e)
+async def _startup_refresh_localizations() -> None:
+    """Populate each Remote's locale without requiring a full Remote init."""
+    await _refresh_remote_localizations()
+
+
+async def _refresh_remote_localizations() -> None:
+    """Refresh the cached localization state owned by each unfurled Remote."""
+    await asyncio.gather(
+        *(
+            _refresh_remote_localization(remote_id, client)
+            for remote_id, client in _remote_clients.items()
+        )
+    )
+
+
+async def _refresh_remote_localization(remote_id: str, client: Remote) -> None:
+    """Refresh one Remote's locale without failing the rest of the fleet."""
+    try:
+        localization = await client.settings.refresh_localization()
+        _LOG.info("[%s] User language set to: %s", remote_id, localization.language_code)
+    except Exception as error:
+        _LOG.warning("[%s] Failed to fetch localization settings: %s", remote_id, error)
 
 
 @app.before_request
@@ -212,6 +218,14 @@ def _get_active_remote_client() -> Remote | None:
     if remote_id:
         return _remote_clients.get(remote_id)
     return None
+
+
+def _active_remote_locale() -> str:
+    """Return the active Remote's cached display locale."""
+    client = _get_active_remote_client()
+    if client and client.settings.localization.language_code:
+        return client.settings.localization.language_code
+    return "en_GB"
 
 
 # ---------------------------------------------------------------------------
@@ -289,13 +303,15 @@ def _get_localized_name(
     if not name_dict or not isinstance(name_dict, dict):
         return fallback
 
+    locale = _active_remote_locale()
+
     # Try user's preferred language first (e.g., "en_US")
-    if _user_language_code and _user_language_code in name_dict:
-        return name_dict[_user_language_code]
+    if locale in name_dict:
+        return name_dict[locale]
 
     # Try just the language part without country code (e.g., "en" from "en_US")
-    if _user_language_code and "_" in _user_language_code:
-        base_language = _user_language_code.split("_")[0]
+    if "_" in locale:
+        base_language = locale.split("_")[0]
         if base_language in name_dict:
             return name_dict[base_language]
 
@@ -727,452 +743,6 @@ def _registry_item_for_driver(
 def _api_error(code: str, message: str, status: int = 400):
     """Return the single JSON error shape used by the React client."""
     return jsonify({"error": {"code": code, "message": message}}), status
-
-
-class _CoreProxyError(Exception):
-    """HTTP error returned by a Remote Core API request."""
-
-    def __init__(self, status: int, code: str, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
-
-
-def _core_error_details(payload: Any, status: int) -> tuple[str, str]:
-    """Extract a stable error code/message from the Core API's error payload."""
-    code = f"core_http_{status}"
-    message = f"Remote Core API request failed with HTTP {status}"
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            code = str(error.get("code") or code)
-            message = str(error.get("message") or error.get("description") or message)
-        elif isinstance(error, str) and error:
-            message = error
-        code = str(payload.get("code") or code)
-        message = str(payload.get("message") or payload.get("description") or message)
-    elif isinstance(payload, str) and payload.strip():
-        message = payload.strip()
-    return code, message
-
-
-async def _remote_core_json(
-    method: str,
-    path: str,
-    *,
-    remote_id: str | None = None,
-    json_body: Any | None = None,
-    timeout_seconds: float = 75,
-) -> Any:
-    """Call a Core REST endpoint using the active Remote's stored credentials.
-
-    The public ``unfurled`` wrapper intentionally covers common manager actions,
-    while the integration setup endpoints are still evolving with the Core API.
-    Keeping this small proxy at the HTTP boundary lets the SPA use the published
-    setup contract without depending on private ``unfurled`` internals.
-    """
-    rid = remote_id or get_active_remote_id()
-    if not rid or rid not in _remote_configs:
-        raise _CoreProxyError(503, "remote_unavailable", "No active Remote is configured")
-    if not is_remote_online(rid):
-        raise _CoreProxyError(503, "remote_offline", "The active Remote is offline")
-
-    config = _remote_configs[rid]
-    url = f"http://{config.address}:80/api/{path.lstrip('/')}"
-    headers = {"Accept": "application/json"}
-    auth: aiohttp.BasicAuth | None = None
-    if config.api_key:
-        headers["Authorization"] = f"Bearer {config.api_key}"
-    elif config.pin:
-        auth = aiohttp.BasicAuth("web-configurator", config.pin)
-
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds, connect=5)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout, auth=auth) as http_session:
-            async with http_session.request(
-                method, url, headers=headers, json=json_body
-            ) as response:
-                raw = await response.text()
-                try:
-                    payload: Any = json.loads(raw) if raw else {}
-                except json.JSONDecodeError:
-                    payload = raw
-                if response.status >= 400:
-                    code, message = _core_error_details(payload, response.status)
-                    raise _CoreProxyError(response.status, code, message)
-                return payload
-    except _CoreProxyError:
-        raise
-    except (aiohttp.ClientError, TimeoutError) as error:
-        raise _CoreProxyError(
-            503, "remote_connection_failed", f"Unable to contact the Remote: {error}"
-        ) from error
-
-
-def _setup_value_map(values: Any) -> dict[str, str]:
-    """Normalize setup values to the Core API SettingsValues string contract."""
-    if not isinstance(values, dict):
-        return {}
-    result: dict[str, str] = {}
-    for key, value in values.items():
-        if not isinstance(key, str):
-            continue
-        if isinstance(value, bool):
-            result[key] = "true" if value else "false"
-        elif value is None:
-            result[key] = ""
-        elif isinstance(value, (str, int, float)):
-            result[key] = str(value)
-    return result
-
-
-def _setup_default_string(value: Any) -> str:
-    """Serialize an optional setup-field default without turning null into "None"."""
-    return "" if value is None else str(value)
-
-
-def _normalize_setup_page(page: Any) -> dict[str, Any] | None:
-    """Convert a Core SettingsPage into localized, UI-friendly field data."""
-    if not isinstance(page, dict):
-        return None
-    fields: list[dict[str, Any]] = []
-    for setting in page.get("settings", []):
-        if not isinstance(setting, dict):
-            continue
-        setting_id = str(setting.get("id") or "")
-        label = _get_localized_name(setting.get("label"), setting_id)
-        field = setting.get("field")
-        if not isinstance(field, dict):
-            continue
-
-        normalized: dict[str, Any] = {"id": setting_id, "label": label}
-        if isinstance(field.get("number"), dict):
-            spec = field["number"]
-            normalized.update(
-                {
-                    "type": "number",
-                    "value": _setup_default_string(spec.get("value")),
-                    "min": spec.get("min"),
-                    "max": spec.get("max"),
-                    "step": spec.get("steps"),
-                    "decimals": spec.get("decimals", 0),
-                    "unit": _get_localized_name(spec.get("unit"), "")
-                    if spec.get("unit")
-                    else "",
-                }
-            )
-        elif isinstance(field.get("text"), dict):
-            spec = field["text"]
-            normalized.update(
-                {
-                    "type": "text",
-                    "value": _setup_default_string(spec.get("value")),
-                    "regex": spec.get("regex"),
-                }
-            )
-        elif isinstance(field.get("textarea"), dict):
-            spec = field["textarea"]
-            normalized.update(
-                {"type": "textarea", "value": _setup_default_string(spec.get("value"))}
-            )
-        elif isinstance(field.get("password"), dict):
-            spec = field["password"]
-            normalized.update(
-                {
-                    "type": "password",
-                    "value": _setup_default_string(spec.get("value")),
-                    "regex": spec.get("regex"),
-                }
-            )
-        elif isinstance(field.get("checkbox"), dict):
-            spec = field["checkbox"]
-            normalized.update({"type": "checkbox", "value": bool(spec.get("value", False))})
-        elif isinstance(field.get("dropdown"), dict):
-            spec = field["dropdown"]
-            items = []
-            for option in spec.get("items", []):
-                if isinstance(option, dict):
-                    items.append(
-                        {
-                            "id": str(option.get("id") or ""),
-                            "label": _get_localized_name(
-                                option.get("label"), str(option.get("id") or "")
-                            ),
-                        }
-                    )
-            normalized.update(
-                {
-                    "type": "dropdown",
-                    "value": _setup_default_string(spec.get("value")),
-                    "items": items,
-                }
-            )
-        elif isinstance(field.get("label"), dict):
-            spec = field["label"]
-            normalized.update(
-                {
-                    "type": "label",
-                    "text": _get_localized_name(spec.get("value"), ""),
-                }
-            )
-        else:
-            normalized.update({"type": "unknown"})
-        fields.append(normalized)
-
-    return {
-        "title": _get_localized_name(page.get("title"), "Integration setup"),
-        "fields": fields,
-    }
-
-
-def _normalize_setup_info(info: Any) -> dict[str, Any] | None:
-    """Normalize IntegrationSetupInfo including dynamic user actions."""
-    if not isinstance(info, dict):
-        return None
-    result: dict[str, Any] = {
-        "id": str(info.get("id") or ""),
-        "state": str(info.get("state") or "SETUP"),
-        "error": str(info.get("error") or "NONE"),
-        "action": None,
-    }
-    action = info.get("require_user_action")
-    if isinstance(action, dict) and isinstance(action.get("input"), dict):
-        result["action"] = {"type": "input", "page": _normalize_setup_page(action["input"])}
-    elif isinstance(action, dict) and isinstance(action.get("confirmation"), dict):
-        confirmation = action["confirmation"]
-        result["action"] = {
-            "type": "confirmation",
-            "title": _get_localized_name(confirmation.get("title"), "Confirmation required"),
-            "message1": _get_localized_name(confirmation.get("message1"), ""),
-            "message2": _get_localized_name(confirmation.get("message2"), ""),
-            "image": confirmation.get("image") or None,
-        }
-    return result
-
-
-async def _recover_completed_setup(
-    driver_id: str, remote_id: str | None
-) -> dict[str, Any] | None:
-    """Recover the terminal OK state after Core removes a setup session.
-
-    Core creates the integration instance, emits the final setup events and then
-    removes the setup session. REST polling can therefore race with session
-    removal and receive a 404 before it ever observes ``state=OK``. Verify that
-    the setup is no longer active and that an instance for the driver exists
-    before synthesizing the terminal state for the SPA.
-    """
-    # Give the instance list a short opportunity to reflect the just-created
-    # integration. The Core setup sequence creates it before removing the setup
-    # session, but separate REST requests can still observe a tiny visibility
-    # gap.
-    for delay in (0.0, 0.15, 0.35, 0.75):
-        if delay:
-            await asyncio.sleep(delay)
-
-        try:
-            active_setups = await _remote_core_json(
-                "GET", "intg/setup", remote_id=remote_id
-            )
-        except _CoreProxyError as error:
-            if error.status >= 500:
-                raise
-            active_setups = []
-
-        if isinstance(active_setups, list) and driver_id in active_setups:
-            # The process still exists. A transient per-process 404 should not
-            # be converted into success; let the caller retry normal polling.
-            continue
-
-        try:
-            instances = await _remote_core_json(
-                "GET", "intg/instances?limit=100", remote_id=remote_id
-            )
-        except _CoreProxyError as error:
-            if error.status >= 500:
-                raise
-            instances = []
-
-        if isinstance(instances, list) and any(
-            isinstance(instance, dict)
-            and str(instance.get("driver_id") or "") == driver_id
-            and bool(instance.get("integration_id"))
-            for instance in instances
-        ):
-            _LOG.info(
-                "Recovered completed integration setup for %s after Core removed the setup session",
-                driver_id,
-            )
-            return {
-                "id": driver_id,
-                "state": "OK",
-                "error": "NONE",
-                "action": None,
-            }
-
-    return None
-
-
-async def _resolve_setup_instance_id(
-    driver_id: str,
-    remote_id: str | None,
-    preferred_instance_id: str | None = None,
-) -> str:
-    """Resolve the configured integration instance created or reconfigured by setup."""
-    instances = await _remote_core_json(
-        "GET", "intg/instances?limit=100", remote_id=remote_id
-    )
-    if not isinstance(instances, list):
-        raise _CoreProxyError(
-            502,
-            "invalid_integration_instances",
-            "Remote returned an invalid integration instance list",
-        )
-
-    candidates = [
-        instance
-        for instance in instances
-        if isinstance(instance, dict)
-        and str(instance.get("driver_id") or "") == driver_id
-        and bool(instance.get("integration_id"))
-    ]
-
-    if preferred_instance_id:
-        for instance in candidates:
-            if str(instance.get("integration_id") or "") == preferred_instance_id:
-                return preferred_instance_id
-
-    if len(candidates) == 1:
-        return str(candidates[0]["integration_id"])
-
-    main_instance_id = f"{driver_id}.main"
-    if any(
-        str(instance.get("integration_id") or "") == main_instance_id
-        for instance in candidates
-    ):
-        return main_instance_id
-
-    if not candidates:
-        raise _CoreProxyError(
-            404,
-            "integration_instance_not_found",
-            "The configured integration instance is not available yet",
-        )
-
-    raise _CoreProxyError(
-        409,
-        "integration_instance_ambiguous",
-        "Multiple integration instances use this driver; select a specific instance",
-    )
-
-
-def _normalize_available_integration_entity(entity: Any) -> dict[str, Any] | None:
-    """Convert a Core AvailableEntity into the compact setup-picker model."""
-    if not isinstance(entity, dict):
-        return None
-    entity_id = str(entity.get("entity_id") or "")
-    entity_type = str(entity.get("entity_type") or "")
-    if not entity_id or not entity_type:
-        return None
-    return {
-        "id": entity_id,
-        "type": entity_type,
-        "name": _get_localized_name(entity.get("name"), entity_id),
-        "description": _get_localized_name(entity.get("description"), "")
-        if entity.get("description")
-        else "",
-        "area": str(entity.get("area") or ""),
-        "deviceClass": str(entity.get("device_class") or ""),
-        "icon": str(entity.get("icon") or ""),
-        "features": [
-            str(feature)
-            for feature in entity.get("features", [])
-            if isinstance(feature, str)
-        ],
-    }
-
-
-async def _get_setup_available_entities(
-    integration_id: str, remote_id: str | None
-) -> list[dict[str, Any]]:
-    """Retrieve every NEW available entity from an integration instance."""
-    encoded_instance_id = quote(integration_id, safe="")
-    entities: list[dict[str, Any]] = []
-    page = 1
-
-    while page <= 1000:
-        reload_flag = "&reload=true" if page == 1 else ""
-        batch = await _remote_core_json(
-            "GET",
-            (
-                f"intg/instances/{encoded_instance_id}/entities"
-                f"?filter=NEW&limit=100&page={page}{reload_flag}"
-            ),
-            remote_id=remote_id,
-            timeout_seconds=75,
-        )
-        if not isinstance(batch, list):
-            raise _CoreProxyError(
-                502,
-                "invalid_available_entities",
-                "Remote returned an invalid available entity list",
-            )
-
-        for entity in batch:
-            normalized = _normalize_available_integration_entity(entity)
-            if normalized is not None:
-                entities.append(normalized)
-
-        if len(batch) < 100:
-            break
-        page += 1
-    else:
-        raise _CoreProxyError(
-            502,
-            "available_entities_too_large",
-            "Available entity list exceeded the supported pagination limit",
-        )
-
-    return entities
-
-
-async def _get_setup_configured_entities(
-    integration_id: str, remote_id: str | None
-) -> list[dict[str, Any]]:
-    """Retrieve every configured entity belonging to an integration instance."""
-    encoded_instance_id = quote(integration_id, safe="")
-    entities: list[dict[str, Any]] = []
-    page = 1
-
-    while page <= 1000:
-        batch = await _remote_core_json(
-            "GET",
-            f"entities?intg_ids={encoded_instance_id}&limit=100&page={page}",
-            remote_id=remote_id,
-            timeout_seconds=75,
-        )
-        if not isinstance(batch, list):
-            raise _CoreProxyError(
-                502,
-                "invalid_configured_entities",
-                "Remote returned an invalid configured entity list",
-            )
-
-        for entity in batch:
-            normalized = _normalize_available_integration_entity(entity)
-            if normalized is not None:
-                entities.append(normalized)
-
-        if len(batch) < 100:
-            break
-        page += 1
-    else:
-        raise _CoreProxyError(
-            502,
-            "configured_entities_too_large",
-            "Configured entity list exceeded the supported pagination limit",
-        )
-
-    return entities
 
 
 def _developer_api_model(developer: str) -> dict[str, Any] | None:
@@ -2315,111 +1885,93 @@ async def api_v1_refresh_integrations():
 
 @app.route("/api/v1/integrations/<driver_id>/setup", methods=["GET", "POST", "PUT", "DELETE"])
 async def api_v1_integration_setup(driver_id: str):
-    """Expose the complete Core integration setup lifecycle to the SPA."""
+    """Expose unfurled's integration setup lifecycle to the SPA."""
+    client = _get_active_remote_client()
     remote_id = get_active_remote_id()
-    encoded_driver_id = quote(driver_id, safe="")
+    if not client:
+        return _api_error("remote_unavailable", "No active Remote is configured", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    setup = client.integrations.setup(driver_id)
+    presenter = SetupPresenter(_active_remote_locale())
     try:
         if request.method == "GET":
-            driver = await _remote_core_json(
-                "GET", f"intg/drivers/{encoded_driver_id}", remote_id=remote_id
-            )
-            active_setup = None
+            definition = await client.integrations.get_setup_definition(driver_id)
             try:
-                active_setup = await _remote_core_json(
-                    "GET", f"intg/setup/{encoded_driver_id}", remote_id=remote_id
-                )
-            except _CoreProxyError as error:
-                if error.status != 404:
-                    raise
-            normalized_active_setup = _normalize_setup_info(active_setup)
-            if normalized_active_setup and normalized_active_setup.get("state") not in (
-                "SETUP",
-                "WAIT_USER_ACTION",
-            ):
-                normalized_active_setup = None
-
+                active_setup = await setup.status()
+            except SetupNotFound:
+                active_setup = None
+            if active_setup and str(active_setup.state) not in ("SETUP", "WAIT_USER_ACTION"):
+                active_setup = None
             return jsonify(
                 {
                     "data": {
                         "driverId": driver_id,
-                        "driverName": _get_localized_name(
-                            driver.get("name") if isinstance(driver, dict) else None,
-                            driver_id,
-                        ),
-                        "setupDataSchema": _normalize_setup_page(
-                            driver.get("setup_data_schema") if isinstance(driver, dict) else None
-                        ),
-                        "activeSetup": normalized_active_setup,
+                        "driverName": presenter.text(definition.name, driver_id),
+                        "setupDataSchema": presenter.page(definition.setup_data_schema),
+                        "activeSetup": presenter.result(active_setup)
+                        if active_setup
+                        else None,
                     }
                 }
             )
 
         if request.method == "POST":
             payload = await request.get_json(silent=True) or {}
-            core_payload: dict[str, Any] = {"driver_id": driver_id}
-            if payload.get("name"):
-                # Core expects LanguageText; an English value is safe for a
-                # manager-supplied optional display name.
-                core_payload["name"] = {"en": str(payload["name"])}
-            if "setupData" in payload:
-                core_payload["setup_data"] = _setup_value_map(payload.get("setupData"))
-            if payload.get("reconfigure") is True:
-                core_payload["reconfigure"] = True
-            setup_info = await _remote_core_json(
-                "POST", "intg/setup", remote_id=remote_id, json_body=core_payload
+            return jsonify(
+                {
+                    "data": presenter.result(
+                        await setup.start(
+                            setup_data=payload.get("setupData"),
+                            reconfigure=payload.get("reconfigure") is True,
+                            name=str(payload["name"]) if payload.get("name") else None,
+                        )
+                    )
+                }
             )
-            return jsonify({"data": _normalize_setup_info(setup_info)})
 
         if request.method == "PUT":
             payload = await request.get_json(silent=True) or {}
             if "inputValues" in payload:
-                core_payload = {"input_values": _setup_value_map(payload.get("inputValues"))}
+                input_values = payload.get("inputValues")
+                result = await setup.submit(
+                    input_values if isinstance(input_values, dict) else {}
+                )
             elif "confirm" in payload:
-                core_payload = {"confirm": bool(payload.get("confirm"))}
+                result = await setup.confirm(bool(payload.get("confirm")))
             else:
                 return _api_error(
                     "setup_action_required",
                     "Provide inputValues or confirm to continue setup",
                 )
-            setup_info = await _remote_core_json(
-                "PUT",
-                f"intg/setup/{encoded_driver_id}",
-                remote_id=remote_id,
-                json_body=core_payload,
-            )
-            return jsonify({"data": _normalize_setup_info(setup_info)})
+            return jsonify({"data": presenter.result(result)})
 
-        await _remote_core_json(
-            "DELETE", f"intg/setup/{encoded_driver_id}", remote_id=remote_id
-        )
+        await setup.cancel()
         return jsonify({"data": {"aborted": True}})
-    except _CoreProxyError as error:
-        _LOG.warning(
-            "Integration setup request failed for %s: %s", driver_id, error
-        )
-        return _api_error(error.code, str(error), error.status)
     except Exception as error:
-        _LOG.exception("Unexpected integration setup error for %s", driver_id)
-        return _api_error("setup_failed", str(error), 500)
+        _LOG.warning("Integration setup request failed for %s: %s", driver_id, error)
+        api_error = setup_api_error(error)
+        return _api_error(api_error.code, api_error.message, api_error.status)
 
 
 @app.route("/api/v1/integrations/<driver_id>/setup/status")
 async def api_v1_integration_setup_status(driver_id: str):
-    """Poll a running Core integration setup process."""
+    """Poll setup status through the active unfurled Remote."""
+    client = _get_active_remote_client()
     remote_id = get_active_remote_id()
+    if not client:
+        return _api_error("remote_unavailable", "No active Remote is configured", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    presenter = SetupPresenter(_active_remote_locale())
     try:
-        setup_info = await _remote_core_json(
-            "GET",
-            f"intg/setup/{quote(driver_id, safe='')}",
-            remote_id=remote_id,
+        result = await client.integrations.setup(driver_id).wait_for_completion(
+            attempts=4, interval=0.15
         )
-        return jsonify({"data": _normalize_setup_info(setup_info)})
-    except _CoreProxyError as error:
-        if error.status == 404:
-            completed = await _recover_completed_setup(driver_id, remote_id)
-            if completed is not None:
-                return jsonify({"data": completed})
-        return _api_error(error.code, str(error), error.status)
+        return jsonify({"data": presenter.result(result)})
+    except Exception as error:
+        api_error = setup_api_error(error)
+        return _api_error(api_error.code, api_error.message, api_error.status)
 
 
 @app.route(
@@ -2427,104 +1979,63 @@ async def api_v1_integration_setup_status(driver_id: str):
     methods=["GET", "POST", "DELETE"],
 )
 async def api_v1_integration_setup_entities(driver_id: str):
-    """List, configure, and remove entities after integration setup."""
+    """List, configure, and remove entities through unfurled's setup session."""
+    client = _get_active_remote_client()
     remote_id = get_active_remote_id()
+    if not client:
+        return _api_error("remote_unavailable", "No active Remote is configured", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    presenter = SetupPresenter(_active_remote_locale())
     try:
         if request.method == "GET":
-            preferred_instance_id = request.args.get("instanceId") or None
-            integration_id = await _resolve_setup_instance_id(
-                driver_id, remote_id, preferred_instance_id
+            setup = client.integrations.setup(
+                driver_id, request.args.get("instanceId") or None
             )
-            available_entities = await _get_setup_available_entities(
-                integration_id, remote_id
-            )
-            configured_entities = await _get_setup_configured_entities(
-                integration_id, remote_id
-            )
+            integration_id = await setup.resolve_instance()
             return jsonify(
                 {
                     "data": {
                         "integrationId": integration_id,
-                        "availableEntities": available_entities,
-                        "configuredEntities": configured_entities,
+                        "availableEntities": [
+                            presenter.entity(entity)
+                            for entity in await setup.available_entities()
+                        ],
+                        "configuredEntities": [
+                            presenter.entity(entity)
+                            for entity in await setup.configured_entities()
+                        ],
                     }
                 }
             )
 
         payload = await request.get_json(silent=True) or {}
-        preferred_instance_id = (
-            str(payload.get("instanceId"))
-            if payload.get("instanceId")
-            else None
-        )
         raw_entity_ids = payload.get("entityIds")
         if not isinstance(raw_entity_ids, list):
             return _api_error(
                 "entity_ids_required",
                 "entityIds must be an array of available entity identifiers",
             )
-
-        # Core intentionally treats an empty array as "configure every entity".
-        # The manager's picker uses explicit selection, so reject an empty list
-        # rather than accidentally adding everything.
         entity_ids = [
-            str(entity_id)
+            entity_id
             for entity_id in raw_entity_ids
             if isinstance(entity_id, str) and entity_id
         ]
-        if not entity_ids:
-            return _api_error(
-                "entity_selection_required",
-                "Select at least one entity to remove"
-                if request.method == "DELETE"
-                else "Select at least one entity to add",
-            )
-
-        integration_id = await _resolve_setup_instance_id(
-            driver_id, remote_id, preferred_instance_id
+        setup = client.integrations.setup(
+            driver_id, str(payload["instanceId"]) if payload.get("instanceId") else None
         )
-
+        integration_id = await setup.resolve_instance()
         if request.method == "DELETE":
-            configured_entities = await _get_setup_configured_entities(
-                integration_id, remote_id
-            )
-            configured_ids = {entity["id"] for entity in configured_entities}
-            removable_ids = [
-                entity_id for entity_id in entity_ids if entity_id in configured_ids
-            ]
-            if not removable_ids:
-                return _api_error(
-                    "configured_entity_selection_required",
-                    "Select at least one configured entity to remove",
-                )
-            await _remote_core_json(
-                "DELETE",
-                "entities",
-                remote_id=remote_id,
-                json_body={"entity_ids": removable_ids},
-                timeout_seconds=75,
-            )
+            removed_ids = await setup.remove_entities(entity_ids)
             return jsonify(
                 {
                     "data": {
                         "integrationId": integration_id,
-                        "removedEntityIds": removable_ids,
+                        "removedEntityIds": removed_ids,
                     }
                 }
             )
-
-        configured = await _remote_core_json(
-            "POST",
-            f"intg/instances/{quote(integration_id, safe='')}/entities",
-            remote_id=remote_id,
-            json_body=entity_ids,
-            timeout_seconds=75,
-        )
-        configured_ids = (
-            [str(entity_id) for entity_id in configured if isinstance(entity_id, str)]
-            if isinstance(configured, list)
-            else []
-        )
+        configured_ids = await setup.add_entities(entity_ids)
         return jsonify(
             {
                 "data": {
@@ -2533,14 +2044,10 @@ async def api_v1_integration_setup_entities(driver_id: str):
                 }
             }
         )
-    except _CoreProxyError as error:
-        _LOG.warning(
-            "Post-setup entity request failed for %s: %s", driver_id, error
-        )
-        return _api_error(error.code, str(error), error.status)
     except Exception as error:
-        _LOG.exception("Unexpected post-setup entity error for %s", driver_id)
-        return _api_error("setup_entities_failed", str(error), 500)
+        _LOG.warning("Post-setup entity request failed for %s: %s", driver_id, error)
+        api_error = setup_api_error(error)
+        return _api_error(api_error.code, api_error.message, api_error.status)
 
 
 # =============================================================================
@@ -4862,8 +4369,7 @@ class WebServer:
             _remote_clients, \
             _remote_configs, \
             _github_client, \
-            _sync_github_client, \
-            _user_language_code
+            _sync_github_client
 
         self._host = host
         self._port = port
@@ -4916,6 +4422,7 @@ class WebServer:
     ) -> None:
         """Atomically replace Remote clients and close prior aiohttp sessions."""
         previous_clients = self._replace_remote_references(remote_configs)
+        await _refresh_remote_localizations()
         if previous_clients:
             results = await asyncio.gather(
                 *(client.close() for client in previous_clients),

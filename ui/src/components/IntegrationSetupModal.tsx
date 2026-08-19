@@ -130,7 +130,12 @@ function SetupForm({ page, submitLabel, busy, onSubmit, secondaryAction }: { pag
     if (field.type === 'label') return <div className="setup-info-field" key={field.id}>{field.label && field.label !== field.text && <strong className="setup-info-title">{field.label}</strong>}<MarkdownText text={field.text || field.label} /></div>
     if (field.type === 'unknown') return <div className="notice warning setup-field-warning" key={field.id}><AlertTriangle /> Unsupported setup field: {field.label || field.id}</div>
     if (field.type === 'checkbox') return <label className="setup-checkbox" key={field.id}><input type="checkbox" checked={values[field.id] === 'true'} onChange={event => setValue(field.id, event.target.checked ? 'true' : 'false')} /><span>{field.label}</span></label>
-    if (field.type === 'dropdown') return <label className="setup-field" key={field.id}><span>{field.label}</span><select value={values[field.id] ?? ''} onChange={event => setValue(field.id, event.target.value)} required>{field.items.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+    if (field.type === 'dropdown') {
+      // BaseSetupFlow uses an empty choice placeholder when there are no
+      // configured devices. Its "add" action does not consume that choice.
+      const required = field.id !== 'choice' || values.action !== 'add'
+      return <label className="setup-field" key={field.id}><span>{field.label}</span><select value={values[field.id] ?? ''} onChange={event => setValue(field.id, event.target.value)} required={required}>{field.items.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+    }
     if (field.type === 'textarea') return <label className="setup-field" key={field.id}><span>{field.label}</span><textarea value={values[field.id] ?? ''} onChange={event => setValue(field.id, event.target.value)} rows={5} /></label>
     if (field.type === 'number') return <label className="setup-field" key={field.id}><span>{field.label}</span><div className="setup-number"><input type="number" value={values[field.id] ?? ''} min={field.min ?? undefined} max={field.max ?? undefined} step={field.step ?? (field.decimals ? Math.pow(10, -field.decimals) : 1)} onChange={event => setValue(field.id, event.target.value)} required />{field.unit && <em>{field.unit}</em>}</div></label>
     return <label className="setup-field" key={field.id}><span>{field.label}</span><input type={field.type === 'password' ? 'password' : 'text'} value={values[field.id] ?? ''} pattern={field.regex ?? undefined} onChange={event => setValue(field.id, event.target.value)} /></label>
