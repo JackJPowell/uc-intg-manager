@@ -32,6 +32,7 @@ export interface Integration {
     deleteConfiguration: boolean
     deleteDriver: boolean
     selectVersion: boolean
+    configure: boolean
   }
 }
 
@@ -51,4 +52,45 @@ export interface SettingsPayload {
   }
   preferences: { sort_by: string; sort_reverse: boolean }
   runtime: { remoteAddress: string | null; webServerPort: number; external: boolean }
+}
+
+export type IntegrationSetupField =
+  | { id: string; label: string; type: 'text' | 'password'; value: string; regex?: string | null }
+  | { id: string; label: string; type: 'textarea'; value: string }
+  | { id: string; label: string; type: 'number'; value: string; min?: number | null; max?: number | null; step?: number | null; decimals?: number; unit?: string }
+  | { id: string; label: string; type: 'checkbox'; value: boolean }
+  | { id: string; label: string; type: 'dropdown'; value: string; items: Array<{ id: string; label: string }> }
+  | { id: string; label: string; type: 'label'; text: string }
+  | { id: string; label: string; type: 'unknown' }
+
+export interface IntegrationSetupPage { title: string; fields: IntegrationSetupField[] }
+export interface IntegrationSetupInfo {
+  id: string
+  state: 'SETUP' | 'WAIT_USER_ACTION' | 'OK' | 'ERROR'
+  error: string
+  action: null | { type: 'input'; page: IntegrationSetupPage | null } | { type: 'confirmation'; title: string; message1: string; message2: string; image: string | null }
+}
+export interface IntegrationSetupDefinition {
+  driverId: string
+  driverName: string
+  setupDataSchema: IntegrationSetupPage | null
+  activeSetup: IntegrationSetupInfo | null
+}
+
+
+export interface IntegrationSetupEntity {
+  id: string
+  type: string
+  name: string
+  description: string
+  area: string
+  deviceClass: string
+  icon: string
+  features: string[]
+}
+
+export interface IntegrationSetupEntities {
+  integrationId: string
+  availableEntities: IntegrationSetupEntity[]
+  configuredEntities: IntegrationSetupEntity[]
 }

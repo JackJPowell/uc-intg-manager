@@ -80,8 +80,9 @@ from sync_api import (
     save_repo_cache,
 )
 from system_messages import get_system_messages_service
+from setup_presenter import SetupPresenter, setup_api_error
 from unfurled import Remote
-from unfurled.helpers.exceptions import HTTPError, UnfurledError
+from unfurled.helpers.exceptions import SetupNotFound, UnfurledError
 
 _LOG = logging.getLogger(__name__)
 
@@ -156,23 +157,29 @@ _github_client: GitHubClient | None = None
 # Sync-only GitHub client for fetch_repository_batch (runs in thread, no event loop)
 _sync_github_client: _SyncGitHubClient | None = None
 
-# User's language preference from remote localization settings
-_user_language_code: str = "en_GB"  # Default to remote's default
-
-
 @app.before_serving
-async def _startup_fetch_localization() -> None:
-    """Fetch user language preference from the first configured remote at startup."""
-    global _user_language_code
-    if _remote_clients:
-        first_client = next(iter(_remote_clients.values()))
-        try:
-            localization = await first_client.api.get_localization_settings()
-            if localization and localization.get("language_code"):
-                _user_language_code = localization["language_code"]
-                _LOG.info("User language set to: %s", _user_language_code)
-        except Exception as e:
-            _LOG.warning("Failed to fetch localization settings at startup: %s", e)
+async def _startup_refresh_localizations() -> None:
+    """Populate each Remote's locale without requiring a full Remote init."""
+    await _refresh_remote_localizations()
+
+
+async def _refresh_remote_localizations() -> None:
+    """Refresh the cached localization state owned by each unfurled Remote."""
+    await asyncio.gather(
+        *(
+            _refresh_remote_localization(remote_id, client)
+            for remote_id, client in _remote_clients.items()
+        )
+    )
+
+
+async def _refresh_remote_localization(remote_id: str, client: Remote) -> None:
+    """Refresh one Remote's locale without failing the rest of the fleet."""
+    try:
+        localization = await client.settings.refresh_localization()
+        _LOG.info("[%s] User language set to: %s", remote_id, localization.language_code)
+    except Exception as error:
+        _LOG.warning("[%s] Failed to fetch localization settings: %s", remote_id, error)
 
 
 @app.before_request
@@ -211,6 +218,14 @@ def _get_active_remote_client() -> Remote | None:
     if remote_id:
         return _remote_clients.get(remote_id)
     return None
+
+
+def _active_remote_locale() -> str:
+    """Return the active Remote's cached display locale."""
+    client = _get_active_remote_client()
+    if client and client.settings.localization.language_code:
+        return client.settings.localization.language_code
+    return "en_GB"
 
 
 # ---------------------------------------------------------------------------
@@ -288,13 +303,15 @@ def _get_localized_name(
     if not name_dict or not isinstance(name_dict, dict):
         return fallback
 
+    locale = _active_remote_locale()
+
     # Try user's preferred language first (e.g., "en_US")
-    if _user_language_code and _user_language_code in name_dict:
-        return name_dict[_user_language_code]
+    if locale in name_dict:
+        return name_dict[locale]
 
     # Try just the language part without country code (e.g., "en" from "en_US")
-    if _user_language_code and "_" in _user_language_code:
-        base_language = _user_language_code.split("_")[0]
+    if "_" in locale:
+        base_language = locale.split("_")[0]
         if base_language in name_dict:
             return name_dict[base_language]
 
@@ -860,6 +877,9 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
             "deleteConfiguration": can_mutate and installed,
             "deleteDriver": can_mutate and driver_installed,
             "selectVersion": can_mutate and bool(integration.home_page),
+            # Driver setup is a Core API capability and is independent from
+            # whether this manager owns the driver's installation lifecycle.
+            "configure": driver_installed and management != "self_managed",
         },
     }
 
@@ -1856,6 +1876,176 @@ async def api_v1_refresh_integrations():
     except Exception as e:
         _LOG.exception("Failed to refresh integration versions")
         return _api_error("refresh_failed", str(e), 502)
+
+
+# =============================================================================
+# Integration setup routes
+# =============================================================================
+
+
+@app.route("/api/v1/integrations/<driver_id>/setup", methods=["GET", "POST", "PUT", "DELETE"])
+async def api_v1_integration_setup(driver_id: str):
+    """Expose unfurled's integration setup lifecycle to the SPA."""
+    client = _get_active_remote_client()
+    remote_id = get_active_remote_id()
+    if not client:
+        return _api_error("remote_unavailable", "No active Remote is configured", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    setup = client.integrations.setup(driver_id)
+    presenter = SetupPresenter(_active_remote_locale())
+    try:
+        if request.method == "GET":
+            definition = await client.integrations.get_setup_definition(driver_id)
+            try:
+                active_setup = await setup.status()
+            except SetupNotFound:
+                active_setup = None
+            if active_setup and str(active_setup.state) not in ("SETUP", "WAIT_USER_ACTION"):
+                active_setup = None
+            return jsonify(
+                {
+                    "data": {
+                        "driverId": driver_id,
+                        "driverName": presenter.text(definition.name, driver_id),
+                        "setupDataSchema": presenter.page(definition.setup_data_schema),
+                        "activeSetup": presenter.result(active_setup)
+                        if active_setup
+                        else None,
+                    }
+                }
+            )
+
+        if request.method == "POST":
+            payload = await request.get_json(silent=True) or {}
+            return jsonify(
+                {
+                    "data": presenter.result(
+                        await setup.start(
+                            setup_data=payload.get("setupData"),
+                            reconfigure=payload.get("reconfigure") is True,
+                            name=str(payload["name"]) if payload.get("name") else None,
+                        )
+                    )
+                }
+            )
+
+        if request.method == "PUT":
+            payload = await request.get_json(silent=True) or {}
+            if "inputValues" in payload:
+                input_values = payload.get("inputValues")
+                result = await setup.submit(
+                    input_values if isinstance(input_values, dict) else {}
+                )
+            elif "confirm" in payload:
+                result = await setup.confirm(bool(payload.get("confirm")))
+            else:
+                return _api_error(
+                    "setup_action_required",
+                    "Provide inputValues or confirm to continue setup",
+                )
+            return jsonify({"data": presenter.result(result)})
+
+        await setup.cancel()
+        return jsonify({"data": {"aborted": True}})
+    except Exception as error:
+        _LOG.warning("Integration setup request failed for %s: %s", driver_id, error)
+        api_error = setup_api_error(error)
+        return _api_error(api_error.code, api_error.message, api_error.status)
+
+
+@app.route("/api/v1/integrations/<driver_id>/setup/status")
+async def api_v1_integration_setup_status(driver_id: str):
+    """Poll setup status through the active unfurled Remote."""
+    client = _get_active_remote_client()
+    remote_id = get_active_remote_id()
+    if not client:
+        return _api_error("remote_unavailable", "No active Remote is configured", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    presenter = SetupPresenter(_active_remote_locale())
+    try:
+        result = await client.integrations.setup(driver_id).wait_for_update()
+        return jsonify({"data": presenter.result(result)})
+    except Exception as error:
+        api_error = setup_api_error(error)
+        return _api_error(api_error.code, api_error.message, api_error.status)
+
+
+@app.route(
+    "/api/v1/integrations/<driver_id>/setup/entities",
+    methods=["GET", "POST", "DELETE"],
+)
+async def api_v1_integration_setup_entities(driver_id: str):
+    """List, configure, and remove entities through unfurled's setup session."""
+    client = _get_active_remote_client()
+    remote_id = get_active_remote_id()
+    if not client:
+        return _api_error("remote_unavailable", "No active Remote is configured", 503)
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    presenter = SetupPresenter(_active_remote_locale())
+    try:
+        if request.method == "GET":
+            setup = client.integrations.setup(
+                driver_id, request.args.get("instanceId") or None
+            )
+            integration_id = await setup.resolve_instance()
+            return jsonify(
+                {
+                    "data": {
+                        "integrationId": integration_id,
+                        "availableEntities": [
+                            presenter.entity(entity)
+                            for entity in await setup.available_entities()
+                        ],
+                        "configuredEntities": [
+                            presenter.entity(entity)
+                            for entity in await setup.configured_entities()
+                        ],
+                    }
+                }
+            )
+
+        payload = await request.get_json(silent=True) or {}
+        raw_entity_ids = payload.get("entityIds")
+        if not isinstance(raw_entity_ids, list):
+            return _api_error(
+                "entity_ids_required",
+                "entityIds must be an array of available entity identifiers",
+            )
+        entity_ids = [
+            entity_id
+            for entity_id in raw_entity_ids
+            if isinstance(entity_id, str) and entity_id
+        ]
+        setup = client.integrations.setup(
+            driver_id, str(payload["instanceId"]) if payload.get("instanceId") else None
+        )
+        integration_id = await setup.resolve_instance()
+        if request.method == "DELETE":
+            removed_ids = await setup.remove_entities(entity_ids)
+            return jsonify(
+                {
+                    "data": {
+                        "integrationId": integration_id,
+                        "removedEntityIds": removed_ids,
+                    }
+                }
+            )
+        configured_ids = await setup.add_entities(entity_ids)
+        return jsonify(
+            {
+                "data": {
+                    "integrationId": integration_id,
+                    "configuredEntityIds": configured_ids,
+                }
+            }
+        )
+    except Exception as error:
+        _LOG.warning("Post-setup entity request failed for %s: %s", driver_id, error)
+        api_error = setup_api_error(error)
+        return _api_error(api_error.code, api_error.message, api_error.status)
 
 
 # =============================================================================
@@ -4177,8 +4367,7 @@ class WebServer:
             _remote_clients, \
             _remote_configs, \
             _github_client, \
-            _sync_github_client, \
-            _user_language_code
+            _sync_github_client
 
         self._host = host
         self._port = port
@@ -4231,6 +4420,7 @@ class WebServer:
     ) -> None:
         """Atomically replace Remote clients and close prior aiohttp sessions."""
         previous_clients = self._replace_remote_references(remote_configs)
+        await _refresh_remote_localizations()
         if previous_clients:
             results = await asyncio.gather(
                 *(client.close() for client in previous_clients),

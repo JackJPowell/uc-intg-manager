@@ -3,9 +3,18 @@
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import web_server as ws  # noqa: E402
+from unfurled import (  # noqa: E402
+    IntegrationSetupDefinition,
+    LocalizedText,
+    SetupField,
+    SetupNotFound,
+    SetupPage,
+    SetupTimeout,
+)
 
 
 APPLE_TV_REGISTRY = [
@@ -84,3 +93,132 @@ def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
         assert installed[0].developer == "Unfolded Circle"
     finally:
         ws._remote_clients.pop("test-remote", None)
+
+
+def test_setup_route_uses_the_existing_remote_setup_api(monkeypatch):
+    """The Manager serializes typed setup data; it does not proxy Core itself."""
+
+    class _SetupSession:
+        async def status(self):
+            raise SetupNotFound("No setup is active")
+
+    class _Integrations:
+        def __init__(self):
+            self.setup_calls = []
+
+        def setup(self, driver_id, instance_id=None):
+            self.setup_calls.append((driver_id, instance_id))
+            return _SetupSession()
+
+        @staticmethod
+        async def get_setup_definition(driver_id):
+            return IntegrationSetupDefinition(
+                driver_id,
+                LocalizedText({"en": "Demo"}),
+                SetupPage(
+                    LocalizedText({"en": "Initial setup"}),
+                    (
+                        SetupField(
+                            "host",
+                            LocalizedText({"en": "Host"}),
+                            "text",
+                            "remote.local",
+                        ),
+                    ),
+                ),
+            )
+
+    class _Remote:
+        def __init__(self):
+            self.integrations = _Integrations()
+            self.settings = SimpleNamespace(
+                localization=SimpleNamespace(language_code="en_GB")
+            )
+
+    remote = _Remote()
+    monkeypatch.setattr(ws, "_get_active_remote_client", lambda: remote)
+    monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
+    monkeypatch.setattr(ws, "is_remote_online", lambda _remote_id: True)
+
+    async def request_setup():
+        async with ws.app.test_request_context(
+            "/api/v1/integrations/demo/setup", method="GET"
+        ):
+            response = await ws.api_v1_integration_setup("demo")
+            return await response.get_json()
+
+    result = asyncio.run(request_setup())
+
+    assert result == {
+        "data": {
+            "driverId": "demo",
+            "driverName": "Demo",
+            "setupDataSchema": {
+                "title": "Initial setup",
+                "fields": [
+                    {
+                        "id": "host",
+                        "label": "Host",
+                        "type": "text",
+                        "value": "remote.local",
+                        "regex": None,
+                    }
+                ],
+            },
+            "activeSetup": None,
+        }
+    }
+    assert remote.integrations.setup_calls == [("demo", None)]
+
+
+def test_active_remote_locale_comes_from_unfurled_settings(monkeypatch):
+    remote = SimpleNamespace(
+        settings=SimpleNamespace(
+            localization=SimpleNamespace(language_code="de_DE")
+        )
+    )
+    monkeypatch.setattr(ws, "_get_active_remote_client", lambda: remote)
+
+    assert ws._active_remote_locale() == "de_DE"
+
+
+def test_setup_status_uses_unfurled_long_polling_and_surfaces_timeout(monkeypatch):
+    class _SetupSession:
+        def __init__(self):
+            self.calls = []
+
+        async def wait_for_update(self):
+            self.calls.append(True)
+            raise SetupTimeout("No setup update yet")
+
+    class _Integrations:
+        def __init__(self):
+            self.session = _SetupSession()
+
+        def setup(self, driver_id, instance_id=None):
+            assert (driver_id, instance_id) == ("demo", None)
+            return self.session
+
+    remote = SimpleNamespace(
+        integrations=_Integrations(),
+        settings=SimpleNamespace(
+            localization=SimpleNamespace(language_code="en_GB")
+        ),
+    )
+    monkeypatch.setattr(ws, "_get_active_remote_client", lambda: remote)
+    monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
+    monkeypatch.setattr(ws, "is_remote_online", lambda _remote_id: True)
+
+    async def request_status():
+        async with ws.app.test_request_context(
+            "/api/v1/integrations/demo/setup/status", method="GET"
+        ):
+            response, status = await ws.api_v1_integration_setup_status("demo")
+            return status, await response.get_json()
+
+    status, payload = asyncio.run(request_status())
+    assert status == 504
+    assert payload == {
+        "error": {"code": "setup_timeout", "message": "No setup update yet"}
+    }
+    assert remote.integrations.session.calls == [True]
