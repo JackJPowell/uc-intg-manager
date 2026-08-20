@@ -37,6 +37,22 @@ def test_v1_routes_are_json_only_and_template_free():
     assert "htmx" not in source.lower()
 
 
+def test_bootstrap_exposes_the_driver_manifest_version():
+    source = SERVER.read_text(encoding="utf-8")
+    settings = (ROOT / "ui" / "src" / "components" / "SettingsPage.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'Path("driver.json")' in source
+    assert '"managerVersion": _manager_version()' in source
+    assert "managerVersion: string | null" in (
+        ROOT / "ui" / "src" / "lib" / "models.ts"
+    ).read_text(encoding="utf-8")
+    assert "Integration Manager" in settings
+    assert "bootstrap.data?.managerVersion" in settings
+    styles = (ROOT / "ui" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".settings-aside header>svg { width:20px; height:20px; flex:0 0 20px;" in styles
+
+
 def test_legacy_ui_and_json_aliases_are_removed():
     source = SERVER.read_text(encoding="utf-8")
     for route in (
@@ -145,6 +161,48 @@ def test_integration_lifecycle_uses_coreapi_operations():
         "delete_driver",
     ):
         assert operation in lifecycle
+
+
+def test_setup_routes_delegate_protocol_handling_to_unfurled():
+    source = SERVER.read_text(encoding="utf-8")
+    setup_routes = source[
+        source.index("# Integration setup routes") : source.index("# API summary routes")
+    ]
+    assert "client.integrations.setup(" in setup_routes
+    assert ".wait_for_update()" in setup_routes
+    assert "wait_for_completion" not in source
+    assert "_remote_core_json" not in setup_routes
+    assert "_CoreProxyError" not in source
+    assert "_resolve_setup_instance_id" not in source
+    assert "from setup_presenter import SetupPresenter, setup_api_error" in source
+    for helper in (
+        "_setup_text",
+        "_setup_page_api_model",
+        "_setup_result_api_model",
+        "_setup_entity_api_model",
+        "_setup_error_response",
+    ):
+        assert f"def {helper}" not in source
+
+
+def test_setup_add_action_does_not_require_an_empty_device_choice():
+    modal = (
+        ROOT / "ui" / "src" / "components" / "IntegrationSetupModal.tsx"
+    ).read_text(encoding="utf-8")
+    assert "field.id !== 'choice' || values.action !== 'add'" in modal
+
+
+def test_configure_action_is_next_to_the_primary_card_action():
+    card = (ROOT / "ui" / "src" / "components" / "IntegrationCard.tsx").read_text(
+        encoding="utf-8"
+    )
+    delete_action = 'data-tooltip="Delete integration"'
+    configure_action = 'className="compact-action solo setup-action"'
+    primary_action = 'className={`compact-action ${primaryAction'
+
+    assert card.index(delete_action) < card.index(configure_action) < card.index(
+        primary_action
+    )
 
 
 def test_integration_service_uses_current_unfurled_collection_method():
@@ -367,7 +425,7 @@ def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes()
     server = SERVER.read_text(encoding="utf-8")
     driver = (ROOT / "intg-manager" / "driver.py").read_text(encoding="utf-8")
     startup = server[
-        server.index("async def _startup_fetch_localization") : server.index(
+        server.index("async def _startup_refresh_localizations") : server.index(
             "@app.before_request"
         )
     ]
@@ -381,6 +439,8 @@ def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes()
     assert '"GET", "pub/version", timeout=_CONNECTIVITY_TIMEOUT' in server
     assert "next_probe_at" in server
     assert "asyncio.gather(" in server
+    assert "settings.refresh_localization()" in startup
+    assert "get_localization_settings" not in server
     assert "connect_websocket" not in startup
     assert "connect_websocket" not in replacement
     assert "check_all_remote_connectivity(force=True)" in driver
