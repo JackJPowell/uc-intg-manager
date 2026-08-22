@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+---
+
+## v3.0.2 - 2026-08-18
+
 ### Fixed
 
 - **Catalog identity matching** — Apple TV and Apple TV Siri Voice now remain distinct in the integration catalog. This prevents duplicate cards during searches and preserves Unfolded Circle as the Apple TV integration author.
