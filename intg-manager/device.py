@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import socket
 from asyncio import AbstractEventLoop
 from datetime import datetime
 from typing import Any
@@ -23,6 +22,7 @@ from const import (
     WEB_SERVER_PORT,
     RemoteConfig,
     Settings,
+    is_external_mode,
 )
 from notification_manager import get_notification_manager as _get_nm
 from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, PollingDevice
@@ -46,6 +46,26 @@ def register_remote_config(config: RemoteConfig) -> None:
     """Register a remote config for multi-remote support."""
     if config not in _all_remote_configs:
         _all_remote_configs.append(config)
+
+
+async def _async_port_in_use(port: int, timeout: float = 0.5) -> bool:
+    """Return True if a TCP connect to 127.0.0.1:port succeeds within timeout.
+
+    Non-blocking: uses asyncio.open_connection so the event loop stays
+    responsive while waiting for the connect attempt.
+    """
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=timeout
+        )
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass
+    return True
 
 
 class IntegrationManagerDevice(PollingDevice):
@@ -281,12 +301,8 @@ class IntegrationManagerDevice(PollingDevice):
                     )
 
                 # Check if we're running in external mode
-                # UC_CONFIG_HOME is set by the UC Remote when running as an integration
-                # - Not set: Running externally on Mac/PC for development
-                # - Set to /config: Running in Docker
-                # - Set to something else: Running ON the remote itself
+                self._is_external = is_external_mode()
                 config_home = os.getenv("UC_CONFIG_HOME", "")
-                self._is_external = not config_home or config_home.startswith("/config")
 
                 if self._is_external:
                     # Running externally (Docker, PC, Mac, etc.) - always start web server
@@ -371,7 +387,8 @@ class IntegrationManagerDevice(PollingDevice):
             and self._web_server
             and self._web_server.is_running
         ):
-            self._web_server.stop()
+            # stop() joins the Hypercorn thread (up to 5s); run off-loop.
+            await asyncio.to_thread(self._web_server.stop)
             self._web_server = None
             _web_server_instance = None
             _LOG.info("[%s] Web server stopped", self.log_id)
@@ -449,7 +466,7 @@ class IntegrationManagerDevice(PollingDevice):
             poll_tasks.append("repo-batch")
         poll_tasks.append("backup-check")
         poll_tasks.append("error-states")
-        if self._is_owner():
+        if self._is_owner() and not self._is_external:
             poll_tasks.append("health-check")
 
         tasks_str = ", ".join(poll_tasks) if poll_tasks else "dock-status-only"
@@ -524,8 +541,10 @@ class IntegrationManagerDevice(PollingDevice):
                         web_server.check_error_states(self.identifier)
                     )
 
-            # Web server health check - verify server is actually accessible when it should be running
-            await self._check_web_server_health()
+            # On-remote mode: per-poll restart probe. External mode uses
+            # the driver-level watchdog instead (see driver._web_server_watchdog).
+            if not self._is_external:
+                await self._check_web_server_health()
 
         except RemoteAPIError as e:
             _LOG.warning("[%s] Failed to poll power status: %s", self.log_id, e)
@@ -544,11 +563,12 @@ class IntegrationManagerDevice(PollingDevice):
                 and _web_server_instance.is_running
             ):
                 _LOG.info(
-                    "[%s] Web server already running in external mode - skipping start",
+                    "[%s] Web server already running in external mode - reusing",
                     self.log_id,
                 )
                 # Set local reference to global instance
                 self._web_server = _web_server_instance
+                await self._run_initial_integration_checks()
                 return
 
             # In remote mode, only the owner (first in config) starts the web server
@@ -575,8 +595,6 @@ class IntegrationManagerDevice(PollingDevice):
                 self._web_server = WebServer(
                     remote_configs=_all_remote_configs,
                 )
-                # Set global reference
-                _web_server_instance = self._web_server
             else:
                 # Web server already exists - reload with updated remote configs
                 # This happens when a new remote is added through setup
@@ -588,57 +606,72 @@ class IntegrationManagerDevice(PollingDevice):
             if not self._web_server.is_running:
                 self._web_server.start()
 
-                # Give the server thread a moment to start and verify it didn't fail
-                # The server sets _running = True immediately, but actual startup happens in background
-                await asyncio.sleep(0.5)
+                # Poll for actual port bind. WebServer.start() flips is_running
+                # True before Hypercorn binds the listening socket, so a plain
+                # flag check can publish a not-yet-listening instance.
+                bound = False
+                for _ in range(25):
+                    await asyncio.sleep(0.2)
+                    if not self._web_server.is_running:
+                        break
+                    if await _async_port_in_use(self._web_server.port):
+                        bound = True
+                        break
 
-                if self._web_server.is_running:
+                if bound:
                     _LOG.info("[%s] Web server started successfully", self.log_id)
-
-                    # Trigger initial checks on startup
-                    _LOG.info(
-                        "[%s] Triggering initial integration checks...", self.log_id
-                    )
-                    try:
-                        # Per-remote: Check for version updates
-                        await self._web_server.run_on_server_loop(
-                            self._web_server.refresh_integration_versions(
-                                self.identifier
-                            )
-                        )
-
-                        # Per-remote: Check for new integrations in registry
-                        await self._web_server.run_on_server_loop(
-                            self._web_server.check_new_integrations(self.identifier)
-                        )
-
-                        # Per-remote: Check for orphaned entities in activities
-                        await self._web_server.run_on_server_loop(
-                            self._web_server.check_orphaned_entities(self.identifier)
-                        )
-
-                        # Shared (owner only): Check for new system messages from GitHub
-                        if self._is_owner():
-                            self._web_server.check_system_messages()
-
-                        _LOG.info(
-                            "[%s] Initial integration checks complete", self.log_id
-                        )
-                    except Exception as e:
-                        _LOG.warning(
-                            "[%s] Initial integration checks failed: %s", self.log_id, e
-                        )
+                    # Publish global reference once the bind is confirmed.
+                    _web_server_instance = self._web_server
+                    await self._run_initial_integration_checks()
                 else:
                     _LOG.error(
                         "[%s] Web server failed to start (check logs for port conflicts)",
                         self.log_id,
                     )
+                    try:
+                        # stop() joins the Hypercorn thread; run off-loop.
+                        await asyncio.to_thread(self._web_server.stop)
+                    except Exception as e:
+                        _LOG.warning(
+                            "[%s] Stop of failed web server raised: %s", self.log_id, e
+                        )
                     self._web_server = None
+            else:
+                # Already running (e.g., reloaded). Ensure global points to it.
+                _web_server_instance = self._web_server
         except Exception as e:
             _LOG.error(
                 "[%s] Failed to start web server: %s", self.log_id, e, exc_info=True
             )
             self._web_server = None
+
+    async def _run_initial_integration_checks(self) -> None:
+        """Trigger per-remote startup checks once the web server is available."""
+        if not self._web_server:
+            return
+
+        _LOG.info("[%s] Triggering initial integration checks...", self.log_id)
+        try:
+            # Per-remote: Check for version updates
+            await self._web_server.run_on_server_loop(
+                self._web_server.refresh_integration_versions(self.identifier)
+            )
+            # Per-remote: Check for new integrations in registry
+            await self._web_server.run_on_server_loop(
+                self._web_server.check_new_integrations(self.identifier)
+            )
+            # Per-remote: Check for orphaned entities in activities
+            await self._web_server.run_on_server_loop(
+                self._web_server.check_orphaned_entities(self.identifier)
+            )
+            # Shared (owner only): Check for new system messages from GitHub
+            if self._is_owner():
+                self._web_server.check_system_messages()
+            _LOG.info("[%s] Initial integration checks complete", self.log_id)
+        except Exception as e:
+            _LOG.warning(
+                "[%s] Initial integration checks failed: %s", self.log_id, e
+            )
 
     async def _on_undocked(self) -> None:
         """Handle remote being undocked/unplugged - conditionally stop web server."""
@@ -666,7 +699,8 @@ class IntegrationManagerDevice(PollingDevice):
 
         # Only stop web server if we're the owner
         if self._is_owner() and self._web_server and self._web_server.is_running:
-            self._web_server.stop()
+            # stop() joins the Hypercorn thread (up to 5s); run off-loop.
+            await asyncio.to_thread(self._web_server.stop)
             _LOG.info("[%s] Web server stopped", self.log_id)
             # Clear references so _on_docked() creates a fresh server on reconnect
             self._web_server = None
@@ -902,6 +936,7 @@ class IntegrationManagerDevice(PollingDevice):
         and restarts the server.
 
         Called during each poll cycle when the web server should be active.
+        On-remote mode only — external mode uses the driver-level watchdog.
         """
         global _web_server_instance
 
@@ -915,10 +950,7 @@ class IntegrationManagerDevice(PollingDevice):
         # Determine if web server should actually be running based on current conditions
         should_be_running = False
 
-        if self._is_external:
-            # External/Docker mode - always running
-            should_be_running = True
-        elif self._is_docked:
+        if self._is_docked:
             # Docked - always running
             should_be_running = True
         elif not Settings.load(self.identifier).shutdown_on_battery:
@@ -929,36 +961,23 @@ class IntegrationManagerDevice(PollingDevice):
             return  # Server should not be running, skip health check
 
         # Test if server is actually accessible
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)  # 2 second timeout
-            result = sock.connect_ex(("127.0.0.1", WEB_SERVER_PORT))
-            sock.close()
+        if await _async_port_in_use(WEB_SERVER_PORT, timeout=2.0):
+            return
 
-            if result == 0:
-                # Server is accessible
-                return
-
-            # Server is not accessible but should be running
-            _LOG.warning(
-                "[%s] Web server should be running but is not accessible on port %d - attempting restart",
-                self.log_id,
-                WEB_SERVER_PORT,
-            )
-
-        except Exception as e:
-            _LOG.warning(
-                "[%s] Failed to check web server health: %s - attempting restart",
-                self.log_id,
-                e,
-            )
+        # Server is not accessible but should be running
+        _LOG.warning(
+            "[%s] Web server should be running but is not accessible on port %d - attempting restart",
+            self.log_id,
+            WEB_SERVER_PORT,
+        )
 
         # Server is not healthy - perform cleanup and restart
         try:
             # Stop the current server instance (cleanup)
             if web_server:
                 try:
-                    web_server.stop()
+                    # stop() joins the Hypercorn thread (up to 5s); run off-loop.
+                    await asyncio.to_thread(web_server.stop)
                 except Exception as e:
                     _LOG.warning(
                         "[%s] Error stopping unhealthy web server: %s", self.log_id, e
@@ -974,10 +993,18 @@ class IntegrationManagerDevice(PollingDevice):
             # Start the server
             new_server.start()
 
-            # Give it a moment to start
-            await asyncio.sleep(0.5)
+            # Poll for actual port bind. _running flips True before Hypercorn
+            # binds, so trust only a successful TCP connect.
+            bound = False
+            for _ in range(25):
+                await asyncio.sleep(0.2)
+                if not new_server.is_running:
+                    break
+                if await _async_port_in_use(new_server.port):
+                    bound = True
+                    break
 
-            if new_server.is_running:
+            if bound:
                 _LOG.info(
                     "[%s] Web server successfully restarted after health check failure",
                     self.log_id,
@@ -990,6 +1017,12 @@ class IntegrationManagerDevice(PollingDevice):
                     "[%s] Web server failed to restart after health check failure",
                     self.log_id,
                 )
+                try:
+                    await asyncio.to_thread(new_server.stop)
+                except Exception as e:
+                    _LOG.warning(
+                        "[%s] Stop of failed web server raised: %s", self.log_id, e
+                    )
                 _web_server_instance = None
                 self._web_server = None
 

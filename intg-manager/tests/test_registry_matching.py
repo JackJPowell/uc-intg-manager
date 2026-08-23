@@ -79,6 +79,7 @@ def test_registry_metadata_prefers_canonical_ids_over_partial_name_matches():
 def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
     monkeypatch.setattr(ws, "load_registry", lambda: APPLE_TV_REGISTRY)
     monkeypatch.setitem(ws._remote_clients, "test-remote", _RemoteClient())
+    ws.set_remote_online("test-remote", True)
 
     try:
         catalog = asyncio.run(ws._get_available_integrations("test-remote"))
@@ -93,6 +94,7 @@ def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
         assert installed[0].developer == "Unfolded Circle"
     finally:
         ws._remote_clients.pop("test-remote", None)
+        ws._remote_online.pop("test-remote", None)
 
 
 def test_setup_route_uses_the_existing_remote_setup_api(monkeypatch):

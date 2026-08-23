@@ -32,6 +32,33 @@ def _get_data_dir():
 
 DATA_DIR = _get_data_dir()
 
+
+def is_external_mode() -> bool:
+    """
+    Detect whether the integration is running on a remote or is hosted externally.
+
+    External mode means the web server should always run and never be shut down
+    on standby/undock/disconnect, because the host is independent of any remote.
+
+    Detection order:
+      1. UC_INTG_MANAGER_EXTERNAL env var (explicit override, truthy/falsy)
+      2. UC_CONFIG_HOME unset (local dev)
+      3. UC_CONFIG_HOME starts with "/config" (documented Docker convention)
+      4. Otherwise: assume running on the remote itself
+    """
+    override = os.environ.get("UC_INTG_MANAGER_EXTERNAL")
+    if override is not None:
+        return override.strip().lower() in ("1", "true", "yes", "on")
+
+    config_home = os.environ.get("UC_CONFIG_HOME", "")
+    if not config_home:
+        return True
+    if config_home.startswith("/config"):
+        return True
+
+    return False
+
+
 # Manager data file - stores settings, integration backups, and other persistent data
 MANAGER_DATA_FILE = os.path.join(DATA_DIR, "manager.json")
 

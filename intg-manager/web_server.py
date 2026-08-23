@@ -45,6 +45,7 @@ from const import (
     RemoteConfig,
     Settings,
     UIPreferences,
+    is_external_mode,
 )
 from data_migration import migrate as migrate_v1_to_v2
 from log_handler import get_log_entries, get_log_handler
@@ -942,8 +943,12 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
     if remote_id is None:
         remote_id = get_active_remote_id()
 
-    client = _remote_clients.get(remote_id) if remote_id else None
-    if not client or not _github_client or not remote_id:
+    # Skip when the remote is known offline to not lock up the UI
+    if not remote_id or not is_remote_online(remote_id):
+        return
+
+    client = _remote_clients.get(remote_id)
+    if not client or not _github_client:
         return
 
     try:
@@ -1255,7 +1260,11 @@ async def _get_installed_integrations(
     if remote_id is None:
         remote_id = get_active_remote_id()
 
-    client = _remote_clients.get(remote_id) if remote_id else None
+    # Skip when the remote is known offline to not lock up the UI
+    if not remote_id or not is_remote_online(remote_id):
+        return []
+
+    client = _remote_clients.get(remote_id)
     if not client:
         return []
 
@@ -1266,22 +1275,31 @@ async def _get_installed_integrations(
     configured_driver_ids = set()
 
     # First, get all configured instances
-    try:
-        instances = await client.api.get_integrations()
-    except UnfurledError as e:
-        _LOG.error("Failed to get integrations: %s", e)
+    instances_result: list[Any] | BaseException
+    drivers_result: list[Any] | BaseException
+    instances_result, drivers_result = await asyncio.gather(
+        client.api.get_integrations(),
+        client.api.get_drivers(),
+        return_exceptions=True,
+    )
+    if isinstance(instances_result, BaseException):
+        if isinstance(instances_result, asyncio.CancelledError):
+            raise instances_result
+        _LOG.error("Failed to get integrations: %s", instances_result)
         instances = []
+    else:
+        instances = instances_result
+    if isinstance(drivers_result, BaseException):
+        if isinstance(drivers_result, asyncio.CancelledError):
+            raise drivers_result
+        _LOG.error("Failed to get drivers: %s", drivers_result)
+        drivers = []
+    else:
+        drivers = drivers_result
 
     # Build set of configured driver IDs
     for instance in instances:
         configured_driver_ids.add(instance.get("driver_id", ""))
-
-    # Get all drivers
-    try:
-        drivers = await client.api.get_drivers()
-    except UnfurledError as e:
-        _LOG.error("Failed to get drivers: %s", e)
-        drivers = []
 
     # Build driver lookup
     driver_lookup = {d.get("driver_id", ""): d for d in drivers}
@@ -1503,6 +1521,12 @@ async def _get_available_integrations(
     """
     if remote_id is None:
         remote_id = get_active_remote_id()
+
+    # Short-circuit when the remote is known offline. Otherwise every entry
+    # would be marked uninstalled, misrepresenting the real remote state to
+    # callers that don't separately gate on is_remote_online().
+    if remote_id and not is_remote_online(remote_id):
+        return []
 
     client = _remote_clients.get(remote_id) if remote_id else None
 
@@ -2124,9 +2148,13 @@ async def get_integration_detail(instance_id: str):
             "service_unavailable", "Integration service is not initialized", 503
         )
 
+    remote_id = get_active_remote_id()
+    if not is_remote_online(remote_id):
+        return _api_error("remote_offline", "Remote is offline", 503)
+
     try:
         # Find the integration in the list
-        integrations = await _get_installed_integrations(get_active_remote_id())
+        integrations = await _get_installed_integrations(remote_id)
         integration = next(
             (i for i in integrations if i.instance_id == instance_id), None
         )
@@ -2970,6 +2998,10 @@ async def self_update_inplace():
     if not _get_active_remote_client() or not _github_client:
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
+    remote_id = get_active_remote_id()
+    if not is_remote_online(remote_id):
+        return jsonify({"status": "error", "message": "Remote is offline"}), 503
+
     payload = await request.get_json(silent=True) or {}
     version = payload.get("version") or request.args.get("version")
     if not version:
@@ -2980,7 +3012,6 @@ async def self_update_inplace():
     if not version.startswith("v"):
         version = f"v{version}"
 
-    remote_id = get_active_remote_id()
     if conflict := await _try_acquire_operation_lock("self-update", remote_id):
         return conflict
 
@@ -3165,10 +3196,6 @@ async def get_versions():
 # =============================================================================
 
 
-def _is_external_runtime() -> bool:
-    """Match the device's distinction between an external host and a Remote bundle."""
-    config_home = os.getenv("UC_CONFIG_HOME", "")
-    return not config_home or config_home.startswith("/config")
 
 
 @app.route("/api/v1/settings", methods=["GET"])
@@ -3184,7 +3211,7 @@ async def api_v1_get_settings():
                     if get_active_remote_id() in _remote_configs
                     else None,
                     "webServerPort": WEB_SERVER_PORT,
-                    "external": _is_external_runtime(),
+                    "external": is_external_mode(),
                 },
             }
         }
@@ -3232,7 +3259,7 @@ async def api_v1_save_settings():
                     if get_active_remote_id() in _remote_configs
                     else None,
                     "webServerPort": WEB_SERVER_PORT,
-                    "external": _is_external_runtime(),
+                    "external": is_external_mode(),
                 },
             }
         }
@@ -3639,15 +3666,27 @@ async def api_v1_integration_logs():
     except ValueError:
         priority = 7
     try:
+        per_service_limit = max(200, 1000 // len(services))
+        results = await asyncio.gather(
+            *(
+                client.api.get_logs(
+                    priority=priority,
+                    service=service,
+                    limit=per_service_limit,
+                    as_text=True,
+                )
+                for service in services
+            ),
+            return_exceptions=True,
+        )
         entries = []
-        for service in services:
-            logs = await client.api.get_logs(
-                priority=priority,
-                service=service,
-                limit=max(200, 1000 // len(services)),
-                as_text=True,
-            )
-            entries.extend(_normalize_integration_log_payload(logs))
+        for service, result in zip(services, results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                _LOG.warning("Failed to fetch logs for %s: %r", service, result)
+                continue
+            entries.extend(_normalize_integration_log_payload(result))
         entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         return jsonify({"data": entries[:1000]})
     except UnfurledError as e:
@@ -3660,6 +3699,8 @@ async def download_integration_logs():
     client = _get_active_remote_client()
     if not client:
         return "Not connected to remote", 500
+    if not is_remote_online(get_active_remote_id()):
+        return "Remote is offline", 503
 
     service_param = request.args.get("service", "")
     if not service_param:
@@ -3690,7 +3731,7 @@ async def download_integration_logs():
 
     try:
         if len(services) == 1:
-            log_text = await _get_active_remote_client().api.get_logs(  # ty:ignore[unresolved-attribute]
+            log_text = await client.api.get_logs(
                 priority=priority,
                 service=services[0],
                 limit=10000,
@@ -3701,17 +3742,28 @@ async def download_integration_logs():
             base_name = services[0].replace("custom-intg-", "").replace("intg-", "")
             filename = f"{base_name}_logs_{priority_label}+.txt"
         else:
-            # Fetch each service as text and concatenate
+            # Fetch each service as text concurrently and concatenate
+            results = await asyncio.gather(
+                *(
+                    client.api.get_logs(
+                        priority=priority,
+                        service=svc,
+                        limit=10000,
+                        as_text=True,
+                    )
+                    for svc in services
+                ),
+                return_exceptions=True,
+            )
             parts = []
-            for svc in services:
-                svc_text = await _get_active_remote_client().api.get_logs(  # ty:ignore[unresolved-attribute]
-                    priority=priority,
-                    service=svc,
-                    limit=10000,
-                    as_text=True,
-                )
-                if isinstance(svc_text, str) and svc_text.strip():
-                    parts.append(f"=== {svc} ===\n{svc_text}")
+            for svc, result in zip(services, results):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, BaseException):
+                    _LOG.warning("Failed to fetch logs for %s: %r", svc, result)
+                    continue
+                if isinstance(result, str) and result.strip():
+                    parts.append(f"=== {svc} ===\n{result}")
             log_text = "\n\n".join(parts)
             filename = f"integration_logs_{priority_label}+.txt"
 
@@ -4596,6 +4648,11 @@ class WebServer:
         """Check if the web server is running."""
         return self._running
 
+    @property
+    def port(self) -> int:
+        """Port the web server is configured to bind to."""
+        return self._port
+
     async def run_on_server_loop(self, operation: Coroutine[Any, Any, Any]) -> Any:
         """Run a web-server operation on Hypercorn's event loop.
 
@@ -4683,13 +4740,17 @@ class WebServer:
     async def check_all_remote_connectivity(self, *, force: bool = False) -> None:
         """Test connectivity for every configured remote and update online status."""
         remote_ids = list(_remote_clients.keys())
-        if remote_ids:
-            await asyncio.gather(
-                *(
-                    self.check_connectivity(remote_id, force=force)
-                    for remote_id in remote_ids
-                )
-            )
+        if not remote_ids:
+            return
+        results = await asyncio.gather(
+            *(self.check_connectivity(rid, force=force) for rid in remote_ids),
+            return_exceptions=True,
+        )
+        for rid, result in zip(remote_ids, results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                _LOG.warning("[%s] Connectivity probe raised: %r", rid, result)
 
     async def check_error_states(self, remote_id: str) -> None:
         """
@@ -4716,9 +4777,19 @@ class WebServer:
             )
 
     async def check_all_error_states(self) -> None:
-        """Check integration error states for every configured remote."""
-        for remote_id in list(_remote_clients.keys()):
-            await self.check_error_states(remote_id)
+        """Check integration error states for every configured remote concurrently."""
+        remote_ids = list(_remote_clients.keys())
+        if not remote_ids:
+            return
+        results = await asyncio.gather(
+            *(self.check_error_states(rid) for rid in remote_ids),
+            return_exceptions=True,
+        )
+        for rid, result in zip(remote_ids, results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                _LOG.warning("[%s] Error-state check raised: %r", rid, result)
 
     async def check_new_integrations(self, remote_id: str) -> None:
         """
