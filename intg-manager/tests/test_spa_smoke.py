@@ -2,7 +2,6 @@
 
 import ast
 import json
-import os
 from pathlib import Path
 import re
 
@@ -50,7 +49,9 @@ def test_bootstrap_exposes_the_driver_manifest_version():
     assert "Integration Manager" in settings
     assert "bootstrap.data?.managerVersion" in settings
     styles = (ROOT / "ui" / "src" / "styles.css").read_text(encoding="utf-8")
-    assert ".settings-aside header>svg { width:20px; height:20px; flex:0 0 20px;" in styles
+    assert (
+        ".settings-aside header>svg { width:20px; height:20px; flex:0 0 20px;" in styles
+    )
 
 
 def test_legacy_ui_and_json_aliases_are_removed():
@@ -166,7 +167,9 @@ def test_integration_lifecycle_uses_coreapi_operations():
 def test_setup_routes_delegate_protocol_handling_to_unfurled():
     source = SERVER.read_text(encoding="utf-8")
     setup_routes = source[
-        source.index("# Integration setup routes") : source.index("# API summary routes")
+        source.index("# Integration setup routes") : source.index(
+            "# API summary routes"
+        )
     ]
     assert "client.integrations.setup(" in setup_routes
     assert ".wait_for_update()" in setup_routes
@@ -197,12 +200,17 @@ def test_configure_action_is_next_to_the_primary_card_action():
         encoding="utf-8"
     )
     delete_action = 'data-tooltip="Delete integration"'
-    configure_action = 'className="compact-action solo setup-action"'
-    primary_action = 'className={`compact-action ${primaryAction'
+    configure_action = 'className="card-menu action-split setup-split"'
+    primary_action = "className={`compact-action ${primaryAction"
 
-    assert card.index(delete_action) < card.index(configure_action) < card.index(
-        primary_action
+    assert (
+        card.index(delete_action)
+        < card.index(configure_action)
+        < card.index(primary_action)
     )
+    assert "Select Version" in card
+    assert "Backup Config" in card
+    assert "Release Notes" in card
 
 
 def test_integration_service_uses_current_unfurled_collection_method():
@@ -327,7 +335,10 @@ def test_inplace_update_clears_stale_release_data_before_the_spa_refetches():
         ROOT / "ui" / "src" / "components" / "IntegrationCollection.tsx"
     ).read_text(encoding="utf-8")
     assert "_get_version_cache(remote_id).pop(integration.driver_id, None)" in server
-    assert "queryClient.refetchQueries({ queryKey: [mode, 'integrations'], type: 'active' })" in collection
+    assert (
+        "queryClient.refetchQueries({ queryKey: [mode, 'integrations'], type: 'active' })"
+        in collection
+    )
 
 
 def test_prerelease_images_do_not_move_the_latest_tag():
@@ -336,7 +347,10 @@ def test_prerelease_images_do_not_move_the_latest_tag():
     )
     assert 'if [[ "$VERSION" == *-* ]]; then' in workflow
     assert "prerelease: ${{ needs.build.outputs.prerelease }}" in workflow
-    assert "type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}" in workflow
+    assert (
+        "type=raw,value=latest,enable=${{ needs.build.outputs.prerelease != 'true' }}"
+        in workflow
+    )
 
 
 def test_self_update_keeps_the_stable_driver_identity_and_reconnects_the_spa():
@@ -410,9 +424,9 @@ def test_firmware_updates_use_unfurled_and_expose_progress_to_the_spa():
 def test_dock_firmware_is_exposed_through_unfurled_and_the_spa():
     server = SERVER.read_text(encoding="utf-8")
     api = (ROOT / "ui" / "src" / "lib" / "api.ts").read_text(encoding="utf-8")
-    diagnostics = (ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx").read_text(
-        encoding="utf-8"
-    )
+    diagnostics = (
+        ROOT / "ui" / "src" / "components" / "DiagnosticsPage.tsx"
+    ).read_text(encoding="utf-8")
     assert '"/api/v1/diagnostics/dock-firmware"' in server
     assert "client.api.get_docks()" in server
     assert "client.api.get_dock_update(" in server
@@ -425,7 +439,7 @@ def test_remote_heartbeats_are_bounded_concurrent_and_back_off_offline_remotes()
     server = SERVER.read_text(encoding="utf-8")
     driver = (ROOT / "intg-manager" / "driver.py").read_text(encoding="utf-8")
     startup = server[
-        server.index("async def _startup_refresh_localizations") : server.index(
+        server.index("async def _startup_initialize_remotes") : server.index(
             "@app.before_request"
         )
     ]

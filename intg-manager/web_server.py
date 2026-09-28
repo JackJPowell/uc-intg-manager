@@ -165,33 +165,66 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 7776000  # 90 days
 # Multi-remote support: unfurled owns each Remote and its CoreAPI session.
 _remote_clients: dict[str, Remote] = {}
 _remote_configs: dict[str, RemoteConfig] = {}
+_remote_capabilities_ready: set[str] = set()
 
 # GitHub client (shared across all remotes)
 _github_client: GitHubClient | None = None
 # Sync-only GitHub client for fetch_repository_batch (runs in thread, no event loop)
 _sync_github_client: _SyncGitHubClient | None = None
 
+
 @app.before_serving
-async def _startup_refresh_localizations() -> None:
-    """Populate each Remote's locale without requiring a full Remote init."""
-    await _refresh_remote_localizations()
+async def _startup_initialize_remotes() -> None:
+    """Initialize Remote state and firmware capabilities before serving requests."""
+    await _initialize_remotes()
 
 
-async def _refresh_remote_localizations() -> None:
-    """Refresh the cached localization state owned by each unfurled Remote."""
+async def _initialize_remotes() -> None:
     await asyncio.gather(
         *(
-            _refresh_remote_localization(remote_id, client)
+            _initialize_remote(remote_id, client)
             for remote_id, client in _remote_clients.items()
         )
     )
+
+
+async def _initialize_remote(remote_id: str, client: Remote) -> None:
+    """Load unfurled's feature flags and locale for one configured Remote."""
+    _remote_capabilities_ready.discard(remote_id)
+    try:
+        # A missing Remote otherwise makes init wait for several sequential
+        # requests before the manager can serve its first page.
+        await client.api.request("GET", "pub/version", timeout=_CONNECTIVITY_TIMEOUT)
+        await client.init()
+        _remote_capabilities_ready.add(remote_id)
+    except Exception as error:
+        _LOG.warning(
+            "[%s] Failed to initialize Remote capabilities: %s", remote_id, error
+        )
+    version = _remote_firmware_version(remote_id)
+    if _inplace_upgrade_available(remote_id) is False:
+        _LOG.warning(
+            "[%s] Remote firmware %s cannot upgrade integrations in place. "
+            "Upgrade the Remote to 2.9.3 or newer (enable beta updates), "
+            "or install Integration Manager v2.0.6.",
+            remote_id,
+            version,
+        )
+    elif _inplace_upgrade_available(remote_id) is None:
+        _LOG.warning(
+            "[%s] Remote firmware capability is unknown; in-place upgrades are disabled until it can be checked",
+            remote_id,
+        )
+    await _refresh_remote_localization(remote_id, client)
 
 
 async def _refresh_remote_localization(remote_id: str, client: Remote) -> None:
     """Refresh one Remote's locale without failing the rest of the fleet."""
     try:
         localization = await client.settings.refresh_localization()
-        _LOG.info("[%s] User language set to: %s", remote_id, localization.language_code)
+        _LOG.info(
+            "[%s] User language set to: %s", remote_id, localization.language_code
+        )
     except Exception as error:
         _LOG.warning("[%s] Failed to fetch localization settings: %s", remote_id, error)
 
@@ -517,30 +550,32 @@ async def _stop_firmware_update_websocket(remote_id: str, client: Remote) -> Non
         )
 
 
-# Firmware version cache keyed by remote_id (populated at connect time)
-_remote_firmware_versions: dict[str, str] = {}
+def _remote_firmware_version(remote_id: str | None) -> str | None:
+    client = _remote_clients.get(remote_id) if remote_id else None
+    version = getattr(getattr(client, "device", None), "sw_version", None)
+    return version if isinstance(version, str) and version != "N/A" else None
 
 
-def set_firmware_version(remote_id: str, version: str) -> None:
-    """Store the installed firmware version for a remote (called from device.py)."""
-    _remote_firmware_versions[remote_id] = version
-    _LOG.info("[%s] Firmware version set to %s", remote_id, version)
+def _inplace_upgrade_available(remote_id: str | None) -> bool | None:
+    """Read unfurled's initialized capability; None means it is unknown."""
+    if (
+        not remote_id
+        or remote_id not in _remote_capabilities_ready
+        or not _remote_firmware_version(remote_id)
+    ):
+        return None
+    client = _remote_clients.get(remote_id) if remote_id else None
+    flags = getattr(getattr(client, "system", None), "flags", None)
+    return getattr(flags, "inplace_upgrade_available", None)
 
 
-def _supports_inplace_update(remote_id: str | None = None) -> bool:
-    """Return True if the active remote supports in-place integration updates.
-
-    Requires firmware >= 2.9.3 which introduced POST /intg/install?update=true.
-    """
-    if remote_id is None:
-        remote_id = get_active_remote_id()
-    if not remote_id:
-        return False
-    version_str = _remote_firmware_versions.get(remote_id, "0.0.0")
-    try:
-        return Version(version_str) >= Version("2.9.3")
-    except InvalidVersion:
-        return False
+def _inplace_upgrade_error():
+    return _api_error(
+        "inplace_upgrade_unavailable",
+        "This Remote cannot upgrade integrations in place. Upgrade its firmware "
+        "to 2.9.3 or newer (enable beta updates), or install Integration Manager v2.0.6.",
+        409,
+    )
 
 
 # Per-Remote operation state prevents concurrent mutations of one Remote while
@@ -665,7 +700,9 @@ class AvailableIntegration:
 
     driver_id: str
     name: str
-    catalog_id: str = ""  # Stable registry identity; may differ from installed driver ID
+    catalog_id: str = (
+        ""  # Stable registry identity; may differ from installed driver ID
+    )
     description: str = ""
     icon: str = ""
     home_page: str = ""
@@ -880,6 +917,8 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
         "installState": install_state,
         "connectionState": connection_state,
         "updateAvailable": integration.update_available,
+        "inplaceUpgradeAvailable": _inplace_upgrade_available(get_active_remote_id()),
+        "remoteFirmwareVersion": _remote_firmware_version(get_active_remote_id()),
         "installed": installed,
         "driverInstalled": driver_installed,
         "configuredEntities": getattr(integration, "configured_entities", 0),
@@ -1162,6 +1201,12 @@ async def _run_automatic_updates(remote_id: str) -> None:
     """
     settings = Settings.load(remote_id=remote_id)
     if not settings.auto_update or not is_remote_online(remote_id):
+        return
+    if _inplace_upgrade_available(remote_id) is not True:
+        _LOG.info(
+            "[%s] Skipping automatic updates; in-place upgrades are unavailable",
+            remote_id,
+        )
         return
 
     state = _operation_state_for(remote_id)
@@ -1774,7 +1819,6 @@ async def api_v1_bootstrap():
         }
         for remote_id, config in _remote_configs.items()
     ]
-    client = _get_active_remote_client()
     active_config = _remote_configs.get(active_id) if active_id else None
     remote_configurator_url = (
         f"http://{active_config.address}" if active_config else None
@@ -1786,6 +1830,8 @@ async def api_v1_bootstrap():
                 "remotes": remotes,
                 "remoteConfiguratorUrl": remote_configurator_url,
                 "managerVersion": _manager_version(),
+                "firmwareVersion": _remote_firmware_version(active_id),
+                "inplaceUpgradeAvailable": _inplace_upgrade_available(active_id),
             }
         }
     )
@@ -1824,7 +1870,9 @@ async def api_v1_status():
         )
     except Exception as e:
         _LOG.warning("Failed to get remote status: %s", e)
-        return jsonify({"data": {"online": False, "docked": None, "batteryPercent": None}})
+        return jsonify(
+            {"data": {"online": False, "docked": None, "batteryPercent": None}}
+        )
 
 
 @app.route("/api/v1/remotes/active", methods=["POST"])
@@ -1898,7 +1946,9 @@ async def api_v1_refresh_integrations():
 # =============================================================================
 
 
-@app.route("/api/v1/integrations/<driver_id>/setup", methods=["GET", "POST", "PUT", "DELETE"])
+@app.route(
+    "/api/v1/integrations/<driver_id>/setup", methods=["GET", "POST", "PUT", "DELETE"]
+)
 async def api_v1_integration_setup(driver_id: str):
     """Expose unfurled's integration setup lifecycle to the SPA."""
     client = _get_active_remote_client()
@@ -1916,7 +1966,10 @@ async def api_v1_integration_setup(driver_id: str):
                 active_setup = await setup.status()
             except SetupNotFound:
                 active_setup = None
-            if active_setup and str(active_setup.state) not in ("SETUP", "WAIT_USER_ACTION"):
+            if active_setup and str(active_setup.state) not in (
+                "SETUP",
+                "WAIT_USER_ACTION",
+            ):
                 active_setup = None
             return jsonify(
                 {
@@ -2175,6 +2228,8 @@ async def update_integration_inplace(driver_id: str):
         return jsonify({"status": "error", "message": "Service not initialized"}), 500
 
     remote_id = get_active_remote_id()
+    if _inplace_upgrade_available(remote_id) is not True:
+        return _inplace_upgrade_error()
     _form = await request.form
     version = request.args.get("version") or _form.get("version")
 
@@ -2229,15 +2284,35 @@ async def update_integration_inplace(driver_id: str):
 
         # Check registry for asset_pattern
         registry = load_registry()
-        asset_pattern = next(
+        registry_entry = next(
             (
-                item.get("asset_pattern")
+                item
                 for item in registry
                 if item.get("driver_id") == integration.driver_id
                 or item.get("id") == integration.driver_id
             ),
             None,
         )
+        asset_pattern = registry_entry.get("asset_pattern") if registry_entry else None
+
+        # The release picker filters versions below this boundary, but an exact
+        # tag can also be submitted manually. Enforce the same rule here.
+        migration_required_at = (
+            registry_entry.get("migration_required_at") if registry_entry else None
+        )
+        if version and migration_required_at:
+            try:
+                selected_version = Version(version.lstrip("v"))
+                if selected_version <= Version(migration_required_at):
+                    return _api_error(
+                        "migration_required",
+                        f"Cannot install version {version} - requires version > {migration_required_at}",
+                        400,
+                    )
+            except InvalidVersion:
+                return _api_error(
+                    "invalid_version", f"Invalid version format: {version}", 400
+                )
 
         if version:
             _LOG.info(
@@ -2981,6 +3056,8 @@ async def self_update_inplace():
         version = f"v{version}"
 
     remote_id = get_active_remote_id()
+    if _inplace_upgrade_available(remote_id) is not True:
+        return _inplace_upgrade_error()
     if conflict := await _try_acquire_operation_lock("self-update", remote_id):
         return conflict
 
@@ -3881,7 +3958,9 @@ async def api_v1_dock_firmware_install(dock_id: str):
         update_info = await client.api.get_dock_update(dock_id)
         if not update_info.get("update_available"):
             return _api_error(
-                "dock_firmware_up_to_date", "No firmware update is available for this dock", 409
+                "dock_firmware_up_to_date",
+                "No firmware update is available for this dock",
+                409,
             )
         await client.api.post_dock_update(dock_id)
         _LOG.info("[%s] Dock firmware update requested: %s", remote_id, dock_id)
@@ -4378,11 +4457,7 @@ class WebServer:
         :param host: Host to bind to
         :param port: Port to listen on
         """
-        global \
-            _remote_clients, \
-            _remote_configs, \
-            _github_client, \
-            _sync_github_client
+        global _remote_clients, _remote_configs, _github_client, _sync_github_client
 
         self._host = host
         self._port = port
@@ -4419,6 +4494,7 @@ class WebServer:
         previous_clients = list(_remote_clients.values())
         _remote_clients.clear()
         _remote_configs.clear()
+        _remote_capabilities_ready.clear()
         _remote_connectivity.clear()
         # Previous Remote instances are closed below, which also closes any
         # short-lived firmware-progress socket they owned.
@@ -4435,7 +4511,7 @@ class WebServer:
     ) -> None:
         """Atomically replace Remote clients and close prior aiohttp sessions."""
         previous_clients = self._replace_remote_references(remote_configs)
-        await _refresh_remote_localizations()
+        await _initialize_remotes()
         if previous_clients:
             results = await asyncio.gather(
                 *(client.close() for client in previous_clients),
@@ -4659,7 +4735,7 @@ class WebServer:
         try:
             # This public endpoint is deliberately a small, separately timed
             # liveness check rather than a full authenticated API operation.
-            await client.api.request(
+            version_info = await client.api.request(
                 "GET", "pub/version", timeout=_CONNECTIVITY_TIMEOUT
             )
             set_remote_online(remote_id, True)
@@ -4667,6 +4743,14 @@ class WebServer:
             probe.next_probe_at = 0.0
             if not was_online:
                 _LOG.info("[%s] Remote connectivity restored", remote_id)
+            reported_version = (
+                version_info.get("os") if isinstance(version_info, dict) else None
+            )
+            known_version = _remote_firmware_version(remote_id)
+            if remote_id not in _remote_capabilities_ready or (
+                reported_version and known_version and reported_version != known_version
+            ):
+                await _initialize_remote(remote_id, client)
         except Exception as e:
             probe.failure_count += 1
             delay = min(

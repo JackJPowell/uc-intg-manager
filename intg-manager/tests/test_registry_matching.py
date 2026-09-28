@@ -76,6 +76,184 @@ def test_registry_metadata_prefers_canonical_ids_over_partial_name_matches():
     assert match["author"] == "Unfolded Circle"
 
 
+def test_inplace_update_rejects_manual_version_at_migration_boundary(monkeypatch):
+    integration = ws.IntegrationInfo(
+        instance_id="demo_driver.main",
+        driver_id="demo_driver",
+        name="Demo",
+        version="1.3.0",
+        home_page="https://github.com/example/demo",
+    )
+
+    async def installed(_remote_id):
+        return [integration]
+
+    async def no_conflict(_operation, _remote_id):
+        return None
+
+    class _GitHub:
+        async def download_release_asset(self, *_args, **_kwargs):
+            raise AssertionError("An incompatible version must not be downloaded")
+
+    client = SimpleNamespace(
+        api=SimpleNamespace(),
+        device=SimpleNamespace(sw_version="2.9.3"),
+        system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=True)),
+    )
+    monkeypatch.setattr(ws, "_get_active_remote_client", lambda: client)
+    monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setattr(ws, "_remote_capabilities_ready", {"test-remote"})
+    monkeypatch.setattr(ws, "_github_client", _GitHub())
+    monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
+    monkeypatch.setattr(ws, "_get_installed_integrations", installed)
+    monkeypatch.setattr(ws, "_try_acquire_operation_lock", no_conflict)
+    monkeypatch.setattr(ws, "_release_operation_lock", no_conflict)
+    monkeypatch.setattr(
+        ws,
+        "load_registry",
+        lambda: [{"id": "demo_driver", "migration_required_at": "1.2.0"}],
+    )
+
+    async def request_update():
+        async with ws.app.test_request_context(
+            "/api/v1/integrations/demo_driver/update?version=v1.2.0", method="POST"
+        ):
+            response = await ws.update_integration_inplace("demo_driver")
+            return response[1], await response[0].get_json()
+
+    status, payload = asyncio.run(request_update())
+
+    assert status == 400
+    assert payload["error"]["code"] == "migration_required"
+
+
+def test_inplace_upgrade_flag_blocks_update_without_hiding_availability(monkeypatch):
+    client = SimpleNamespace(
+        api=SimpleNamespace(),
+        device=SimpleNamespace(sw_version="2.9.2"),
+        system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=False)),
+    )
+    monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setattr(ws, "_remote_capabilities_ready", {"test-remote"})
+    monkeypatch.setattr(ws, "_get_active_remote_client", lambda: client)
+    monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
+    monkeypatch.setattr(ws, "_github_client", object())
+    integration = ws.IntegrationInfo(
+        instance_id="demo.main",
+        driver_id="demo",
+        name="Demo",
+        version="1.0.0",
+        latest_version="1.1.0",
+        update_available=True,
+        can_update=True,
+    )
+
+    model = ws._integration_api_model(integration)
+    assert model["updateAvailable"] is True
+    assert model["capabilities"]["update"] is True
+    assert model["inplaceUpgradeAvailable"] is False
+    assert model["remoteFirmwareVersion"] == "2.9.2"
+
+    async def request_update():
+        async with ws.app.test_request_context(
+            "/api/v1/integrations/demo/update", method="POST"
+        ):
+            response, status = await ws.update_integration_inplace("demo")
+            return status, await response.get_json()
+
+    status, payload = asyncio.run(request_update())
+    assert status == 409
+    assert payload["error"]["code"] == "inplace_upgrade_unavailable"
+
+
+def test_unknown_firmware_capability_blocks_self_update(monkeypatch):
+    client = SimpleNamespace(
+        api=SimpleNamespace(),
+        device=SimpleNamespace(sw_version="N/A"),
+        system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=False)),
+    )
+    monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setattr(ws, "_get_active_remote_client", lambda: client)
+    monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
+    monkeypatch.setattr(ws, "_github_client", object())
+
+    async def request_update():
+        async with ws.app.test_request_context(
+            "/api/v1/self-update/inplace", method="POST", json={"version": "2.1.0"}
+        ):
+            response, status = await ws.self_update_inplace()
+            return status, await response.get_json()
+
+    status, payload = asyncio.run(request_update())
+    assert status == 409
+    assert payload["error"]["code"] == "inplace_upgrade_unavailable"
+
+
+def test_remote_initialization_warns_when_firmware_lacks_upgrade_flag(
+    caplog, monkeypatch
+):
+    async def request(*_args, **_kwargs):
+        return {"os": "2.9.2"}
+
+    async def init():
+        client.device.sw_version = "2.9.2"
+        client.system.flags.inplace_upgrade_available = False
+
+    async def refresh_localization():
+        return SimpleNamespace(language_code="en_GB")
+
+    client = SimpleNamespace(
+        api=SimpleNamespace(request=request),
+        init=init,
+        device=SimpleNamespace(sw_version="N/A"),
+        system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=False)),
+        settings=SimpleNamespace(refresh_localization=refresh_localization),
+    )
+    monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setattr(ws, "_remote_capabilities_ready", set())
+    asyncio.run(ws._initialize_remote("test-remote", client))
+
+    assert "2.9.3 or newer (enable beta updates)" in caplog.text
+    assert "Integration Manager v2.0.6" in caplog.text
+
+
+def test_failed_remote_initialization_keeps_upgrade_support_unknown(monkeypatch):
+    async def request(*_args, **_kwargs):
+        return {"os": "2.9.3"}
+
+    async def init():
+        raise RuntimeError("Remote initialization failed")
+
+    async def refresh_localization():
+        return SimpleNamespace(language_code="en_GB")
+
+    client = SimpleNamespace(
+        api=SimpleNamespace(request=request),
+        init=init,
+        device=SimpleNamespace(sw_version="2.9.3"),
+        system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=False)),
+        settings=SimpleNamespace(refresh_localization=refresh_localization),
+    )
+    monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setattr(ws, "_remote_capabilities_ready", set())
+    asyncio.run(ws._initialize_remote("test-remote", client))
+
+    assert ws._inplace_upgrade_available("test-remote") is None
+
+
+def test_automatic_updates_skip_unsupported_firmware(monkeypatch):
+    monkeypatch.setattr(
+        ws.Settings, "load", lambda **_kwargs: SimpleNamespace(auto_update=True)
+    )
+    monkeypatch.setattr(ws, "is_remote_online", lambda _remote_id: True)
+
+    async def installed(_remote_id):
+        raise AssertionError("Automatic updates must stop before loading integrations")
+
+    monkeypatch.setattr(ws, "_get_installed_integrations", installed)
+    asyncio.run(ws._run_automatic_updates("test-remote"))
+
+
 def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
     monkeypatch.setattr(ws, "load_registry", lambda: APPLE_TV_REGISTRY)
     monkeypatch.setitem(ws._remote_clients, "test-remote", _RemoteClient())
@@ -173,9 +351,7 @@ def test_setup_route_uses_the_existing_remote_setup_api(monkeypatch):
 
 def test_active_remote_locale_comes_from_unfurled_settings(monkeypatch):
     remote = SimpleNamespace(
-        settings=SimpleNamespace(
-            localization=SimpleNamespace(language_code="de_DE")
-        )
+        settings=SimpleNamespace(localization=SimpleNamespace(language_code="de_DE"))
     )
     monkeypatch.setattr(ws, "_get_active_remote_client", lambda: remote)
 
@@ -201,9 +377,7 @@ def test_setup_status_uses_unfurled_long_polling_and_surfaces_timeout(monkeypatc
 
     remote = SimpleNamespace(
         integrations=_Integrations(),
-        settings=SimpleNamespace(
-            localization=SimpleNamespace(language_code="en_GB")
-        ),
+        settings=SimpleNamespace(localization=SimpleNamespace(language_code="en_GB")),
     )
     monkeypatch.setattr(ws, "_get_active_remote_client", lambda: remote)
     monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
