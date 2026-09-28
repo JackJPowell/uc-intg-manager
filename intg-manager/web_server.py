@@ -269,7 +269,11 @@ def _get_active_remote_client() -> Remote | None:
 
 def _active_remote_locale() -> str:
     """Return the active Remote's cached display locale."""
-    client = _get_active_remote_client()
+    return _locale_for_client(_get_active_remote_client())
+
+
+def _locale_for_client(client: Remote | None) -> str:
+    """Read a Remote's cached locale without requiring a request context."""
     if client and client.settings.localization.language_code:
         return client.settings.localization.language_code
     return "en_GB"
@@ -335,7 +339,10 @@ def get_notification_manager(remote_id: str | None = None):
 
 
 def _get_localized_name(
-    name_dict: dict[str, str] | None, fallback: str = "Unknown"
+    name_dict: dict[str, str] | None,
+    fallback: str = "Unknown",
+    *,
+    remote_id: str | None = None,
 ) -> str:
     """
     Extract a localized name from a multi-language dictionary.
@@ -345,12 +352,17 @@ def _get_localized_name(
 
     :param name_dict: Dictionary with language codes as keys (e.g., {"en": "Name", "en_US": "Name"})
     :param fallback: Default value if no name found
+    :param remote_id: Use this Remote's cached locale for scheduled checks
     :return: Localized name string
     """
     if not name_dict or not isinstance(name_dict, dict):
         return fallback
 
-    locale = _active_remote_locale()
+    locale = (
+        _locale_for_client(_remote_clients.get(remote_id))
+        if remote_id is not None
+        else _active_remote_locale()
+    )
 
     # Try user's preferred language first (e.g., "en_US")
     if locale in name_dict:
@@ -1176,7 +1188,9 @@ async def _automatic_update_is_safe(remote_id: str) -> bool:
     if running:
         names = [
             _get_localized_name(
-                activity.get("name"), activity.get("entity_id", "activity")
+                activity.get("name"),
+                activity.get("entity_id", "activity"),
+                remote_id=remote_id,
             )
             for activity in running
         ]
@@ -4990,7 +5004,9 @@ class WebServer:
 
                     if activity_id not in activities:
                         activity_name = entity.get("activity_name", {})
-                        name = _get_localized_name(activity_name, "Unknown Activity")
+                        name = _get_localized_name(
+                            activity_name, "Unknown Activity", remote_id=remote_id
+                        )
                         activities[activity_id] = name
 
                 if activities:
