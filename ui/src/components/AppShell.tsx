@@ -102,7 +102,7 @@ export function AppShell({ children }: PropsWithChildren) {
       </nav>
       <main className="content">
         {bootstrap.isError && <div className="notice error"><CircleAlert /> Unable to load manager context.</div>}
-        {bootstrap.data?.inplaceUpgradeAvailable === false && <div className="notice firmware-upgrade-warning" role="alert"><CircleAlert aria-hidden="true" /><span><strong>In-place upgrades are unavailable.</strong> {inplaceUpgradeReason(bootstrap.data.firmwareVersion, false)} <a href="https://github.com/JackJPowell/uc-intg-manager/releases/tag/v2.0.6" target="_blank" rel="noreferrer">Get IM v2.0.6 <ExternalLink aria-hidden="true" /></a></span></div>}
+        {bootstrap.data?.inplaceUpgradeAvailable === false && <div className="notice firmware-upgrade-warning" role="alert"><CircleAlert aria-hidden="true" /><span><strong>In-place upgrades are unavailable.</strong> {inplaceUpgradeReason(bootstrap.data.firmwareVersion, false)} <a href="https://github.com/JackJPowell/uc-intg-manager/releases/tag/v2.0.6" target="_blank" rel="noreferrer">v2.0.6<ExternalLink aria-hidden="true" /></a></span></div>}
         {children}
       </main>
     </div>

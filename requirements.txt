@@ -1,8 +1,8 @@
 # Core dependencies
 ucapi==0.7.0
-ucapi-framework==1.9.5
+ucapi-framework==1.9.7
 pyee>=9.0
-unfurled>=0.4.0
+unfurled>=0.6.3
 
 # Web framework
 flask>=3.0.0
