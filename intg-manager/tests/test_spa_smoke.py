@@ -339,7 +339,7 @@ def test_inplace_update_clears_stale_release_data_before_the_spa_refetches():
     ).read_text(encoding="utf-8")
     assert "_get_version_cache(remote_id).pop(integration.driver_id, None)" in server
     assert (
-        "queryClient.refetchQueries({ queryKey: [mode, 'integrations'], type: 'active' })"
+        "void queryClient.invalidateQueries({ queryKey: [mode, 'integrations'] })"
         in collection
     )
 

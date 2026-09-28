@@ -15,9 +15,10 @@ export function IntegrationCollection({ mode }: { mode: 'installed' | 'catalog' 
   const [sortReverse, setSortReverse] = useState(false)
   const [completion, setCompletion] = useState<{ name: string; operation: CompletedOperation } | null>(null)
   const [managerUpdate, setManagerUpdate] = useState<{ version: string; startedAt: number } | null>(null)
+  const [reconnecting, setReconnecting] = useState<{ id: string; startedAt: number } | null>(null)
   const completionTimer = useRef<number | null>(null)
   const queryClient = useQueryClient()
-  const query = useQuery({ queryKey: [mode, 'integrations'], queryFn: mode === 'catalog' ? api.catalog : api.integrations, refetchInterval: mode === 'installed' ? 60_000 : false })
+  const query = useQuery({ queryKey: [mode, 'integrations'], queryFn: mode === 'catalog' ? api.catalog : api.integrations, refetchInterval: reconnecting ? 3_000 : mode === 'installed' ? 60_000 : false, refetchOnWindowFocus: Boolean(reconnecting) })
   const catalog = useQuery({ queryKey: ['catalog', 'integrations'], queryFn: api.catalog, enabled: mode === 'installed' })
   const showCompletion = (name: string, operation: CompletedOperation) => {
     if (completionTimer.current) window.clearTimeout(completionTimer.current)
@@ -27,10 +28,20 @@ export function IntegrationCollection({ mode }: { mode: 'installed' | 'catalog' 
   useEffect(() => () => { if (completionTimer.current) window.clearTimeout(completionTimer.current) }, [])
   const refresh = useMutation({ mutationFn: api.refreshIntegrations, onSuccess: () => queryClient.invalidateQueries({ queryKey: [mode, 'integrations'] }) })
   const install = useMutation({ mutationFn: ({ id, version }: { id: string; version?: string; name: string }) => api.installIntegration(id, version), onSuccess: async (_, variables) => { await queryClient.invalidateQueries({ queryKey: [mode, 'integrations'] }); showCompletion(variables.name, 'install') } })
-  const update = useMutation({ mutationFn: ({ id, version }: { id: string; version?: string; name: string }) => api.updateIntegration(id, version), onSuccess: async (_, variables) => { await queryClient.refetchQueries({ queryKey: [mode, 'integrations'], type: 'active' }); showCompletion(variables.name, 'update') } })
+  const update = useMutation({ mutationFn: ({ id, version }: { id: string; version?: string; name: string }) => api.updateIntegration(id, version), onSuccess: (result, variables) => { if (mode === 'installed' && result.reconnecting) setReconnecting({ id: variables.id, startedAt: Date.now() }); void queryClient.invalidateQueries({ queryKey: [mode, 'integrations'] }); showCompletion(variables.name, 'update') } })
   const selfUpdate = useMutation({ mutationFn: ({ version }: { version?: string }) => api.selfUpdate(version), onSuccess: result => setManagerUpdate({ version: result.targetVersion, startedAt: Date.now() }) })
   const backup = useMutation({ mutationFn: ({ id }: { id: string; name: string }) => api.backupIntegration(id), onSuccess: async (_, variables) => { await queryClient.invalidateQueries({ queryKey: [mode, 'integrations'] }); showCompletion(variables.name, 'backup') } })
   const remove = useMutation({ mutationFn: ({ id, scope }: { id: string; name: string; scope: 'configuration' | 'full' }) => api.deleteIntegration(id, scope), onSuccess: async (_, variables) => { await queryClient.invalidateQueries({ queryKey: [mode, 'integrations'] }); showCompletion(variables.name, 'delete') } })
+  useEffect(() => {
+    if (!reconnecting) return
+    const timer = window.setTimeout(() => setReconnecting(current => current?.startedAt === reconnecting.startedAt ? null : current), 60_000)
+    return () => window.clearTimeout(timer)
+  }, [reconnecting])
+  useEffect(() => {
+    if (!reconnecting || Date.now() - reconnecting.startedAt < 5_000 || query.dataUpdatedAt < reconnecting.startedAt || query.isFetching) return
+    const item = query.data?.find(value => value.id === reconnecting.id)
+    if ((item?.connectionState === 'connected' || item?.connectionState === 'ok') && item.inplaceUpgradeAvailable !== null) setReconnecting(null)
+  }, [query.data, query.dataUpdatedAt, query.isFetching, reconnecting])
   useEffect(() => {
     if (!managerUpdate) return
     let cancelled = false
@@ -74,7 +85,7 @@ export function IntegrationCollection({ mode }: { mode: 'installed' | 'catalog' 
     <header className="page-heading"><div><p className="eyebrow">Integration workspace</p><h1>{title}</h1><p>{subtitle}</p></div>
       <button className="refresh-button" type="button" onClick={() => refresh.mutate()} disabled={refresh.isPending}><RefreshCw className={refresh.isPending ? 'spin' : ''} /> Refresh</button>
     </header>
-    {completion && <div className="integration-complete-notice" role="status"><CircleCheck aria-hidden="true" /><span><strong>{{ install: `Installed ${completion.name}`, update: `Updated ${completion.name}`, backup: 'Backup created', delete: `Removed ${completion.name}` }[completion.operation]}</strong><small>{{ install: 'Ready to configure here in Integration Manager.', update: 'The latest Remote state is now loaded.', backup: `${completion.name} configuration is safely stored.`, delete: 'The integrations list has been refreshed.' }[completion.operation]}</small></span></div>}
+    {completion && <div className="integration-complete-notice" role="status"><CircleCheck aria-hidden="true" /><span><strong>{{ install: `Installed ${completion.name}`, update: `Updated ${completion.name}`, backup: 'Backup created', delete: `Removed ${completion.name}` }[completion.operation]}</strong><small>{{ install: 'Ready to configure here in Integration Manager.', update: 'The Remote may take a moment to reconnect; status refreshes automatically.', backup: `${completion.name} configuration is safely stored.`, delete: 'The integrations list has been refreshed.' }[completion.operation]}</small></span></div>}
     {mode === 'installed' && <section className="integration-overview" aria-label="Integration summary"><button type="button" className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}><Cable /><span><strong>{installedCount}</strong><small>Installed integrations</small></span></button><button type="button" className={filter === 'updates' ? 'active update-summary' : 'update-summary'} onClick={() => setFilter('updates')}><Upload /><span><strong>{updatesCount}</strong><small>{updatesCount === 1 ? 'Update available' : 'Updates available'}</small></span></button><button type="button" className={filter === 'disconnected' ? 'active attention-summary' : 'attention-summary'} onClick={() => setFilter('disconnected')}><CircleAlert /><span><strong>{attentionCount}</strong><small>Needs attention</small></span></button><Link className="integration-overview-catalog" to="/catalog"><Boxes /><span><strong>{catalogCount}</strong><small>Browse integrations</small></span></Link></section>}
     {mode === 'catalog' && <p className="catalog-discovery"><Boxes aria-hidden="true" /><strong>{customIntegrationCount.toLocaleString()}</strong><span>custom integrations and counting</span></p>}
     <div className={`filters ${mode === 'catalog' ? 'catalog-filters' : ''}`}><label><Search /><span className="sr-only">Search integrations</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder={mode === 'catalog' ? 'Search available integrations' : 'Search integrations'} /></label>
