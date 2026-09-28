@@ -5,6 +5,8 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import web_server as ws  # noqa: E402
 from unfurled import (  # noqa: E402
@@ -271,6 +273,69 @@ def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
         assert installed[0].developer == "Unfolded Circle"
     finally:
         ws._remote_clients.pop("test-remote", None)
+
+
+@pytest.mark.parametrize("configured", [True, False])
+@pytest.mark.parametrize("registry_custom", [True, False])
+def test_external_update_is_visible_without_manager_update_capability(
+    monkeypatch, configured, registry_custom
+):
+    class _ExternalAPI:
+        async def get_drivers(self):
+            return [
+                {
+                    "driver_id": "docker_demo",
+                    "driver_type": "EXTERNAL",
+                    "version": "3.0.0",
+                    "name": {"en": "Docker Demo"},
+                    "developer": {"name": "Example", "url": "https://github.com/example/demo"},
+                }
+            ]
+
+        async def get_integrations(self):
+            return [
+                {
+                    "driver_id": "docker_demo",
+                    "integration_id": "docker-demo.main",
+                    "device_state": "UNKNOWN",
+                    "configured_entities": [],
+                }
+            ] if configured else []
+
+    monkeypatch.setitem(
+        ws._remote_clients, "test-remote", SimpleNamespace(api=_ExternalAPI())
+    )
+    monkeypatch.setitem(
+        ws._cached_version_data,
+        "test-remote",
+        {"docker_demo": {"has_update": True, "latest": "v3.1.0"}},
+    )
+    monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
+    monkeypatch.setattr(ws, "_github_client", None)
+    monkeypatch.setattr(
+        ws,
+        "load_registry",
+        lambda: [
+            {
+                "id": "docker-demo",
+                "driver_id": "docker_demo",
+                "name": "Docker Demo",
+                "repository": "https://github.com/example/demo",
+                "custom": registry_custom,
+            }
+        ],
+    )
+
+    installed = asyncio.run(ws._get_installed_integrations("test-remote"))
+    catalog = asyncio.run(ws._get_available_integrations("test-remote"))
+
+    for integration in (installed[0], catalog[0]):
+        model = ws._integration_api_model(integration)
+        assert model["management"] == "external"
+        assert model["updateAvailable"] is True
+        assert model["latestVersion"] == "v3.1.0"
+        assert model["capabilities"]["update"] is False
+        assert model["capabilities"]["install"] is False
 
 
 def test_setup_route_uses_the_existing_remote_setup_api(monkeypatch):

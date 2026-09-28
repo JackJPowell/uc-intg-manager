@@ -17,7 +17,7 @@ export function IntegrationCollection({ mode }: { mode: 'installed' | 'catalog' 
   const [managerUpdate, setManagerUpdate] = useState<{ version: string; startedAt: number } | null>(null)
   const completionTimer = useRef<number | null>(null)
   const queryClient = useQueryClient()
-  const query = useQuery({ queryKey: [mode, 'integrations'], queryFn: mode === 'catalog' ? api.catalog : api.integrations })
+  const query = useQuery({ queryKey: [mode, 'integrations'], queryFn: mode === 'catalog' ? api.catalog : api.integrations, refetchInterval: mode === 'installed' ? 60_000 : false })
   const catalog = useQuery({ queryKey: ['catalog', 'integrations'], queryFn: api.catalog, enabled: mode === 'installed' })
   const showCompletion = (name: string, operation: CompletedOperation) => {
     if (completionTimer.current) window.clearTimeout(completionTimer.current)
@@ -60,7 +60,7 @@ export function IntegrationCollection({ mode }: { mode: 'installed' | 'catalog' 
   }).sort((a, b) => { const direction = sortReverse ? -1 : 1; if (sortBy === 'stars') return (b.repository.stars - a.repository.stars) * direction; if (sortBy === 'downloads') return (b.repository.downloads - a.repository.downloads) * direction; if (sortBy === 'created') return String(b.repository.createdAt ?? '').localeCompare(String(a.repository.createdAt ?? '')) * direction; if (sortBy === 'updated') return String(b.repository.updatedAt ?? '').localeCompare(String(a.repository.updatedAt ?? '')) * direction; if (sortBy === 'name') return a.name.localeCompare(b.name) * direction; if (sortBy === 'developer') return String(a.developer ?? '').localeCompare(String(b.developer ?? '')) * direction; return (a.originalIndex - b.originalIndex) * direction }), [category, filter, mode, query.data, search, sortBy, sortReverse])
   const installedCount = query.data?.length ?? 0
   const updatesCount = (query.data ?? []).filter(
-    item => item.updateAvailable && item.management !== 'official' && item.management !== 'external',
+    item => item.updateAvailable && item.management !== 'official',
   ).length
   const attentionCount = (query.data ?? []).filter(
     item => item.connectionState === 'disconnected' || item.connectionState === 'error',

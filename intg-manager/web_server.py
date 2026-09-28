@@ -1411,10 +1411,9 @@ async def _get_installed_integrations(
             )[0],
         )
 
-        # Check for updates using cached version data from background checks
-        # This ensures consistent version info regardless of when page is loaded
+        # Show cached release availability for both Remote and Docker drivers.
         _remote_cache = _get_version_cache(remote_id)
-        if is_custom and driver_id in _remote_cache:
+        if not is_official and driver_id in _remote_cache:
             version_info = _remote_cache[driver_id]
             if version_info.get("has_update"):
                 # Always mark that an update is available (for badge display)
@@ -1427,8 +1426,8 @@ async def _get_installed_integrations(
                 #     info.latest_version,
                 # )
 
-                # Show update button for custom integrations (but not self_managed ones)
-                info.can_update = not self_managed
+                # External drivers are updated in Docker, not through the Remote.
+                info.can_update = is_custom and not self_managed
                 # _LOG.debug(
                 #     "Update button enabled for %s (can_update=True)",
                 #     driver_id,
@@ -1526,17 +1525,17 @@ async def _get_installed_integrations(
             )[0],
         )
 
-        # Check for updates using cached version data (for unconfigured drivers too)
+        # Show cached release availability for unconfigured drivers too.
         _remote_cache = _get_version_cache(remote_id)
-        if is_custom and driver_id in _remote_cache:
+        if not is_official and driver_id in _remote_cache:
             version_info = _remote_cache[driver_id]
             if version_info.get("has_update"):
                 # Always mark that an update is available (for badge display)
                 info.update_available = True
                 info.latest_version = version_info.get("latest", "")
 
-                # Show update button for all custom integrations with updates
-                info.can_update = True
+                # The Remote cannot update a driver managed in Docker.
+                info.can_update = is_custom
                 # _LOG.debug(
                 #     "Update button enabled for unconfigured %s (can_update=True)",
                 #     driver_id,
@@ -1642,8 +1641,6 @@ async def _get_available_integrations(
     available: list[AvailableIntegration] = []
     _remote_cache = _get_version_cache(remote_id)
     for item in registry:
-        # Derive official status from custom field (official = not custom)
-        is_official = not item.get("custom", True)
         driver_id = item.get("id", "")
         name = item.get("name", "")
         home_page = item.get("repository", "")
@@ -1657,15 +1654,17 @@ async def _get_available_integrations(
             instance_id,
             actual_driver_id,
         ) = is_match(item)
+        # The Remote's EXTERNAL driver type takes precedence over registry metadata.
+        is_official = not item.get("custom", True) and not is_external
 
-        # Check for updates for installed custom integrations using cached data
+        # Check cached releases for installed Remote and Docker integrations.
         update_available = False
         latest_version = ""
         can_update = False
         supports_backup = item.get("supports_backup", False)
         self_managed = item.get("self_managed", False)
 
-        if is_installed and not is_official and not is_external:
+        if is_installed and not is_official:
             # Use the actual driver_id from the remote (not registry id) for cache lookup
             if actual_driver_id and actual_driver_id in _remote_cache:
                 version_info = _remote_cache[actual_driver_id]
@@ -1674,8 +1673,8 @@ async def _get_available_integrations(
                     update_available = True
                     latest_version = version_info.get("latest", "")
 
-                    # Show update button for custom integrations (but not self_managed ones)
-                    can_update = not self_managed
+                    # External drivers remain read-only in Integration Manager.
+                    can_update = not is_external and not self_managed
 
         # Fetch repository stats from GitHub (cached)
         stars = 0

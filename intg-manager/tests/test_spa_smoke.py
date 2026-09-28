@@ -195,20 +195,23 @@ def test_setup_add_action_does_not_require_an_empty_device_choice():
     assert "field.id !== 'choice' || values.action !== 'add'" in modal
 
 
-def test_configure_action_is_next_to_the_primary_card_action():
+def test_update_action_is_next_to_configure_and_in_its_menu():
     card = (ROOT / "ui" / "src" / "components" / "IntegrationCard.tsx").read_text(
         encoding="utf-8"
     )
     delete_action = 'data-tooltip="Delete integration"'
+    update_action = 'className="icon-action inline-update-action"'
     configure_action = 'className="card-menu action-split setup-split"'
     primary_action = "className={`compact-action ${primaryAction"
 
     assert (
         card.index(delete_action)
+        < card.index(update_action)
         < card.index(configure_action)
         < card.index(primary_action)
     )
-    assert "Select Version" in card
+    assert "Update to {updateVersion}" in card
+    assert "Install another version…" in card
     assert "Backup Config" in card
     assert "Release Notes" in card
 
