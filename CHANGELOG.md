@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## v3.2.1 - 2026-09-28
+
+### Fixed
+
+- **Integration cards after upgrades** — The installed integrations list now refreshes every few seconds while an upgraded integration reconnects, so temporary disconnected or disabled states clear without a page reload. The upgrade overlay also clears as soon as the install request finishes.
+
+---
+
+## v3.2.0 - 2026-09-28
+
+### Added
+
+- **More options on installed integrations** — The Configure/Reconfigure menu now offers Install another version, Backup Config, and Release Notes when available. Install another version lets you choose a release or enter an exact version tag.
+- **Clearer available updates** — Installed integration cards show a yellow upward-arrow update action beside Configure/Reconfigure and an update option in the menu. The tooltip identifies the available version.
+- **Docker update badges** — Externally managed integrations now show the available version on their cards and count toward the updates total. A tooltip explains that the update must be performed in Docker; Integration Manager does not offer an update action for these integrations.
+
+### Changed
+
+- **Firmware-aware upgrades** — When the Remote does not support in-place upgrades, Integration Manager shows a warning and disables in-place update and version-selection controls. The warning explains how to enable beta updates and upgrade to Remote firmware 2.9.3 or newer, or use Integration Manager v2.0.6. Automatic integration updates are also paused on unsupported Remotes.
+- **Update status refresh** — The installed integrations list now refreshes automatically every minute.
+
+### Fixed
+
+- **Copy backup** — Copying backup JSON now has a fallback for browsers that do not provide clipboard access on HTTP local-network pages. If automatic copying is blocked, the backup text is selected and the page explains how to copy it manually.
+- **Background entity checks** — Scheduled orphaned-entity checks no longer fail with a request-context error.
+- **Version compatibility** — Manually entered integration versions that require migration are now rejected with an explanation before installation starts.
+
+---
+
 ## v3.0.2 - 2026-08-18
 
 ### Fixed
