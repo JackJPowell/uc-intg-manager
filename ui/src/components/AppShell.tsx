@@ -3,6 +3,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import { Activity, Archive, Bell, BookOpen, Boxes, Cable, ChevronDown, CircleAlert, ExternalLink, FileText, Inbox, Plus, Settings } from 'lucide-react'
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import { api } from '../lib/api'
+import { inplaceUpgradeReason } from '../lib/inplaceUpgrade'
 
 const navigation = [
   ['/', 'Your integrations', Cable],
@@ -21,6 +22,7 @@ export function AppShell({ children }: PropsWithChildren) {
   const location = useRouterState({ select: state => state.location.pathname })
   const [remoteMenuOpen, setRemoteMenuOpen] = useState(false)
   const remotePickerRef = useRef<HTMLDivElement>(null)
+  const lastCapability = useRef<string | null>(null)
   const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap, refetchInterval: 30_000 })
   const status = useQuery({ queryKey: ['status'], queryFn: api.status, refetchInterval: 30_000 })
   const selectRemote = useMutation({
@@ -28,6 +30,16 @@ export function AppShell({ children }: PropsWithChildren) {
     onSuccess: () => queryClient.invalidateQueries(),
   })
   const remote = bootstrap.data?.remotes.find(item => item.active)
+
+  useEffect(() => {
+    if (!bootstrap.data) return
+    const capability = `${bootstrap.data.activeRemoteId}:${bootstrap.data.firmwareVersion}:${bootstrap.data.inplaceUpgradeAvailable}`
+    if (lastCapability.current && lastCapability.current !== capability) {
+      void queryClient.invalidateQueries({ queryKey: ['installed', 'integrations'] })
+      void queryClient.invalidateQueries({ queryKey: ['catalog', 'integrations'] })
+    }
+    lastCapability.current = capability
+  }, [bootstrap.data?.activeRemoteId, bootstrap.data?.firmwareVersion, bootstrap.data?.inplaceUpgradeAvailable, queryClient])
 
   useEffect(() => {
     if (!remoteMenuOpen) return
@@ -90,6 +102,7 @@ export function AppShell({ children }: PropsWithChildren) {
       </nav>
       <main className="content">
         {bootstrap.isError && <div className="notice error"><CircleAlert /> Unable to load manager context.</div>}
+        {bootstrap.data?.inplaceUpgradeAvailable === false && <div className="notice firmware-upgrade-warning" role="alert"><CircleAlert aria-hidden="true" /><span><strong>In-place upgrades are unavailable.</strong> {inplaceUpgradeReason(bootstrap.data.firmwareVersion, false)} <a href="https://github.com/JackJPowell/uc-intg-manager/releases/tag/v2.0.6" target="_blank" rel="noreferrer">Get IM v2.0.6 <ExternalLink aria-hidden="true" /></a></span></div>}
         {children}
       </main>
     </div>
