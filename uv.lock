@@ -1198,7 +1198,7 @@ wheels = [
 
 [[package]]
 name = "uc-intg-manager"
-version = "3.1.0"
+version = "3.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1234,8 +1234,8 @@ requires-dist = [
     { name = "quart", specifier = ">=0.21.0" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "ucapi", specifier = "==0.7.0" },
-    { name = "ucapi-framework", specifier = "==1.9.5" },
-    { name = "unfurled", specifier = ">=0.4.0" },
+    { name = "ucapi-framework", specifier = "==1.9.7" },
+    { name = "unfurled", specifier = ">=0.6.3" },
     { name = "werkzeug", specifier = ">=3.1.8" },
 ]
 
@@ -1264,21 +1264,21 @@ wheels = [
 
 [[package]]
 name = "ucapi-framework"
-version = "1.9.5"
+version = "1.9.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "pyee" },
     { name = "ucapi" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/14/72f6d6e856fb5375c9ad3933999fa5b986398443e2aaac103ab8ca8cd2bf/ucapi_framework-1.9.5.tar.gz", hash = "sha256:30ce6f0bbdebf4caf5a2084bf026b8657ef82425520c4e4d953e1dc333a9bdd5", size = 157075, upload-time = "2026-05-17T15:24:25.959Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/e2/f2e1347e97b9ee6dd9791c30514afdede7e44254fefc54f682f3340e0195/ucapi_framework-1.9.7.tar.gz", hash = "sha256:a5314ea37a176c5c5a574c92300d228ed533a20d132c9e02764a36e6367e6272", size = 157795, upload-time = "2026-09-24T20:11:32.527Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/f0/e45ae077635af71c86d458278ed2d9ad796196bbd09c613a124a6b076fe9/ucapi_framework-1.9.5-py3-none-any.whl", hash = "sha256:f44c7754b22f61d483e84f17975d414e1b9a6c83a7799ca8f1d5f715549bb031", size = 98720, upload-time = "2026-05-17T15:24:24.06Z" },
+    { url = "https://files.pythonhosted.org/packages/54/6f/87dbf78c7bf2c47085194856c4172407cf24e871a0423f174a450bdfdffa/ucapi_framework-1.9.7-py3-none-any.whl", hash = "sha256:e9e9c9c4461301b55c33535a0ff5e6fda36d8bcbbc568f43e9f5384fe26e24be", size = 98982, upload-time = "2026-09-24T20:11:31.22Z" },
 ]
 
 [[package]]
 name = "unfurled"
-version = "0.4.0"
+version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1287,9 +1287,9 @@ dependencies = [
     { name = "websockets" },
     { name = "zeroconf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/93/488bacd7318c0ab89a64819447f9604c194136f18806b8d8f436ba708d63/unfurled-0.4.0.tar.gz", hash = "sha256:cdecd6103f57db6a3634bf3ded8252a27b6fb8624b4a959ceaeaff3e49ba51a5", size = 179348, upload-time = "2026-08-19T22:32:18.098Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5e/b2/d6b676e5be4e5b02a015f56920074c6408d3df96120f66625855dbfbf011/unfurled-0.6.3.tar.gz", hash = "sha256:47faa48e9435fb2e3030f379fcac2a91ca70cb16c39b558b7e8b1ccdbe2c3d2c", size = 184777, upload-time = "2026-09-28T18:33:52.586Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a4/ce/34f1bee35db45417104eacf84889e9ca1c6b96a896257aceb059ac99ba6b/unfurled-0.4.0-py3-none-any.whl", hash = "sha256:8e3e01e0554b274190fb2c74e03b3879f7789c68a4d1da75652546cf8cf6a28d", size = 66578, upload-time = "2026-08-19T22:32:16.889Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/a3/f26a07a7ddcad4785337af2a91c703d6a7af45577c8b1b5e12842524308d/unfurled-0.6.3-py3-none-any.whl", hash = "sha256:a92ee1063b3ee4cf58d399f6974e71ddc89f19f55f8be62e4a3077dbccc9a9ea", size = 69058, upload-time = "2026-09-28T18:33:51.275Z" },
 ]
 
 [[package]]

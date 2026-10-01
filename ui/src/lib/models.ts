@@ -21,6 +21,8 @@ export interface Integration {
   installState: 'available' | 'installed' | 'configured' | 'official' | 'external' | 'self_managed'
   connectionState: ConnectionState
   updateAvailable: boolean
+  inplaceUpgradeAvailable: boolean | null
+  remoteFirmwareVersion: string | null
   installed: boolean
   driverInstalled: boolean
   configuredEntities: number
@@ -41,6 +43,8 @@ export interface Bootstrap {
   remotes: Array<{ id: string; name: string; address: string; active: boolean; online: boolean }>
   remoteConfiguratorUrl: string | null
   managerVersion: string | null
+  firmwareVersion: string | null
+  inplaceUpgradeAvailable: boolean | null
 }
 
 export interface SettingsPayload {

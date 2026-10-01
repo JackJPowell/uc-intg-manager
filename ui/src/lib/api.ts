@@ -49,6 +49,7 @@ export const api = {
     const query = params.size ? `?${params}` : ''
     return request<{ releases: Array<{ tag_name: string; name: string; published_at: string; is_beta: boolean }>; versionFloor: string | null }>(`/version-selector/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(id)}${query}`)
   },
+  integrationReleaseNotes: (owner: string, repo: string, version: string) => request<{ version: string; publishedAt: string; notes: string; name: string; url: string; author: string; isPrerelease: boolean }>(`/release-notes/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(version)}`),
   selfUpdate: (version?: string) => request<{ started: boolean; targetVersion: string }>('/self-update/inplace', { method: 'POST', body: JSON.stringify(version ? { version } : {}) }),
   managerHealth: async () => {
     const response = await fetch('/health', { cache: 'no-store', credentials: 'same-origin' })

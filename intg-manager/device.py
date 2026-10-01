@@ -30,7 +30,6 @@ from unfurled.api import CoreAPI
 from unfurled.helpers.exceptions import UnfurledError as RemoteAPIError
 from web_server import (
     WebServer,
-    set_firmware_version,
     set_remote_online,
     set_system_update_info,
 )
@@ -287,18 +286,6 @@ class IntegrationManagerDevice(PollingDevice):
                 self._connected = True
                 set_remote_online(self.identifier, True)
                 _LOG.info("[%s] Connected to remote", self.log_id)
-
-                # Fetch and cache firmware version for inplace-update capability checks
-                try:
-                    fw_version = str(
-                        (await self._client.get_version()).get("os", "0.0.0")
-                    )
-                    set_firmware_version(self.identifier, fw_version)
-                    _LOG.info("[%s] Firmware version: %s", self.log_id, fw_version)
-                except Exception as e:
-                    _LOG.warning(
-                        "[%s] Could not fetch firmware version: %s", self.log_id, e
-                    )
 
                 # Check if we're running in external mode
                 self._is_external = is_external_mode()
