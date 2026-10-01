@@ -204,6 +204,7 @@ services:
 |----------|-------------|---------|----------|
 | `UC_INTG_MANAGER_HTTP_PORT` | HTTP port for Integration Manager Web Server | `9999` | No|
 | `UC_CONFIG_HOME` | Configuration directory path | `/config` | No |
+| `UC_INTG_MANAGER_EXTERNAL` | Force external/Docker mode. **Enable** with `1`, `true`, `yes`, or `on` (case-insensitive, whitespace ignored). **Any other value** — including empty string, `0`, `false`, `no`, `off`, or a typo — disables external mode. When the variable is unset entirely, mode is inferred from `UC_CONFIG_HOME` (unset → external; starts with `/config` → external; otherwise on-remote). | Docker: `1`, others: manual | No |
 | `UC_INTEGRATION_INTERFACE` | Network interface to bind integration API | `0.0.0.0` | No |
 | `UC_INTEGRATION_HTTP_PORT` | HTTP port for integration API | `9090` | No |
 

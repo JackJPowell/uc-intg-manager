@@ -175,6 +175,7 @@ def test_unknown_firmware_capability_blocks_self_update(monkeypatch):
         system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=False)),
     )
     monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setitem(ws._remote_online, "test-remote", True)
     monkeypatch.setattr(ws, "_get_active_remote_client", lambda: client)
     monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
     monkeypatch.setattr(ws, "_github_client", object())
@@ -259,6 +260,7 @@ def test_automatic_updates_skip_unsupported_firmware(monkeypatch):
 def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
     monkeypatch.setattr(ws, "load_registry", lambda: APPLE_TV_REGISTRY)
     monkeypatch.setitem(ws._remote_clients, "test-remote", _RemoteClient())
+    ws.set_remote_online("test-remote", True)
 
     try:
         catalog = asyncio.run(ws._get_available_integrations("test-remote"))
@@ -273,6 +275,7 @@ def test_catalog_keeps_similarly_named_entries_distinct(monkeypatch):
         assert installed[0].developer == "Unfolded Circle"
     finally:
         ws._remote_clients.pop("test-remote", None)
+        ws._remote_online.pop("test-remote", None)
 
 
 @pytest.mark.parametrize("configured", [True, False])
@@ -305,6 +308,7 @@ def test_external_update_is_visible_without_manager_update_capability(
     monkeypatch.setitem(
         ws._remote_clients, "test-remote", SimpleNamespace(api=_ExternalAPI())
     )
+    monkeypatch.setitem(ws._remote_online, "test-remote", True)
     monkeypatch.setitem(
         ws._cached_version_data,
         "test-remote",

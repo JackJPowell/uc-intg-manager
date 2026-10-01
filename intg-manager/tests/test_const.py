@@ -9,7 +9,7 @@ from dataclasses import fields
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import const  # noqa: E402
-from const import RemoteConfig, Settings, UIPreferences  # noqa: E402
+from const import RemoteConfig, Settings, UIPreferences, is_external_mode  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -154,3 +154,62 @@ def test_remote_config_repr_exposes_non_sensitive_fields():
     assert "my-id" in r
     assert "Living Room" in r
     assert "10.0.0.5" in r
+
+
+# ---------------------------------------------------------------------------
+# is_external_mode
+# ---------------------------------------------------------------------------
+
+
+def _clear_env(monkeypatch):
+    """Strip env vars that influence is_external_mode()."""
+    monkeypatch.delenv("UC_INTG_MANAGER_EXTERNAL", raising=False)
+    monkeypatch.delenv("UC_CONFIG_HOME", raising=False)
+
+
+def test_is_external_mode_override_truthy_values(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("UC_CONFIG_HOME", "/opt/uc-remote/data")  # would otherwise be False
+    for v in ("1", "true", "TRUE", "True", "yes", "Yes", "on", "  on  "):
+        monkeypatch.setenv("UC_INTG_MANAGER_EXTERNAL", v)
+        assert is_external_mode() is True, f"expected True for {v!r}"
+
+
+def test_is_external_mode_override_falsy_values(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("UC_CONFIG_HOME", "/config")  # would otherwise be True
+    for v in ("0", "false", "FALSE", "no", "off", "anything-else", ""):
+        monkeypatch.setenv("UC_INTG_MANAGER_EXTERNAL", v)
+        assert is_external_mode() is False, f"expected False for {v!r}"
+
+
+def test_is_external_mode_unset_config_home_is_external(monkeypatch):
+    _clear_env(monkeypatch)
+    assert is_external_mode() is True
+
+
+def test_is_external_mode_config_home_starts_with_config_is_external(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("UC_CONFIG_HOME", "/config")
+    assert is_external_mode() is True
+    monkeypatch.setenv("UC_CONFIG_HOME", "/config/sub/dir")
+    assert is_external_mode() is True
+
+
+def test_is_external_mode_other_config_home_is_on_remote(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("UC_CONFIG_HOME", "/opt/uc-remote/data")
+    assert is_external_mode() is False
+    monkeypatch.setenv("UC_CONFIG_HOME", "/var/lib/intg")
+    assert is_external_mode() is False
+
+
+def test_is_external_mode_override_wins_over_config_home(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("UC_CONFIG_HOME", "/config")
+    monkeypatch.setenv("UC_INTG_MANAGER_EXTERNAL", "0")
+    assert is_external_mode() is False
+
+    monkeypatch.setenv("UC_CONFIG_HOME", "/opt/uc-remote/data")
+    monkeypatch.setenv("UC_INTG_MANAGER_EXTERNAL", "1")
+    assert is_external_mode() is True
