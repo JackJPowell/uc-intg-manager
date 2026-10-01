@@ -175,6 +175,7 @@ def test_unknown_firmware_capability_blocks_self_update(monkeypatch):
         system=SimpleNamespace(flags=SimpleNamespace(inplace_upgrade_available=False)),
     )
     monkeypatch.setitem(ws._remote_clients, "test-remote", client)
+    monkeypatch.setitem(ws._remote_online, "test-remote", True)
     monkeypatch.setattr(ws, "_get_active_remote_client", lambda: client)
     monkeypatch.setattr(ws, "get_active_remote_id", lambda: "test-remote")
     monkeypatch.setattr(ws, "_github_client", object())
@@ -307,6 +308,7 @@ def test_external_update_is_visible_without_manager_update_capability(
     monkeypatch.setitem(
         ws._remote_clients, "test-remote", SimpleNamespace(api=_ExternalAPI())
     )
+    monkeypatch.setitem(ws._remote_online, "test-remote", True)
     monkeypatch.setitem(
         ws._cached_version_data,
         "test-remote",
