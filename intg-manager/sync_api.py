@@ -12,7 +12,10 @@ import logging
 import os
 import re
 import ssl
+import tempfile
+from contextlib import AbstractContextManager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -39,6 +42,67 @@ _SYNC_REQUEST_TIMEOUT = (10, 30)
 _registry_cache: dict[str, Any] | list | None = None
 _registry_cache_time: float = 0.0
 _REGISTRY_CACHE_TTL = 1800  # 30 minutes
+
+
+def archive_storage_directory() -> str:
+    """Use persistent writable storage rather than the Remote's RAM-backed /tmp."""
+    return (
+        os.environ.get("UC_DATA_HOME")
+        or os.environ.get("UC_CONFIG_HOME")
+        or os.getcwd()
+    )
+
+
+def cleanup_stale_archives() -> None:
+    """Called before serving requests to remove files left by a killed process."""
+    for directory in Path(archive_storage_directory()).glob("im-archive-*"):
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        try:
+            (directory / "archive.tar.gz").unlink(missing_ok=True)
+            directory.rmdir()
+        except OSError as error:
+            _LOG.warning("Could not remove stale archive %s: %s", directory, error)
+
+
+class DownloadedArchive(AbstractContextManager):
+    """Disk-backed release archive, owned until its installation finishes."""
+
+    def __init__(self, filename: str) -> None:
+        # Remote /tmp is a RAM filesystem. Never use tempfile's default there.
+        self._directory = tempfile.TemporaryDirectory(
+            prefix="im-archive-", dir=archive_storage_directory()
+        )
+        self.path = Path(self._directory.name) / "archive.tar.gz"
+        self.filename = filename
+        self.size = 0
+
+    def __enter__(self) -> "DownloadedArchive":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.cleanup()
+
+    def cleanup(self) -> None:
+        self._directory.cleanup()
+
+    async def install(self, api: Any, *, update: bool = False) -> Any:
+        """Stream the file through the authenticated CoreAPI request interface."""
+        with self.path.open("rb") as archive:
+            form = aiohttp.FormData()
+            form.add_field(
+                "file",
+                archive,
+                filename=self.filename,
+                content_type="application/x-gzip",
+            )
+            return await api.request(
+                "POST",
+                "intg/install",
+                data=form,
+                params={"update": "true"} if update else None,
+                timeout=120.0,
+            )
 
 
 class GitHubClient:
@@ -163,8 +227,8 @@ class GitHubClient:
         repo: str,
         asset_pattern: str | None = None,
         version: str | None = None,
-    ) -> tuple[bytes, str] | None:
-        """Download a release asset (tar.gz file) from a release."""
+    ) -> DownloadedArchive | None:
+        """Stream a release to disk. The caller must close the returned archive."""
         if version:
             release = await self.get_release_by_tag(owner, repo, version)
             if not release:
@@ -215,7 +279,18 @@ class GitHubClient:
                     download_url, headers={"Accept": "application/octet-stream"}
                 ) as response:
                     if response.status == 200:
-                        return await response.read(), target_asset["name"]
+                        archive = DownloadedArchive(target_asset["name"])
+                        try:
+                            with archive.path.open("wb") as destination:
+                                async for chunk in response.content.iter_chunked(
+                                    64 * 1024
+                                ):
+                                    destination.write(chunk)
+                                    archive.size += len(chunk)
+                            return archive
+                        except BaseException:
+                            archive.cleanup()
+                            raise
                     _LOG.error("Failed to download asset: %s", response.status)
                     return None
             except aiohttp.ClientError as e:
