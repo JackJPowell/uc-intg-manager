@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## v3.2.2 - 2026-10-10
+
+### Changed
+
+- **Lower memory use during installs and updates** — Integration archives are now downloaded to temporary files and uploaded in chunks, reducing memory use for large releases.
+
+---
+
 ## v3.2.1 - 2026-09-28
 
 ### Fixed
