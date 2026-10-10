@@ -29,10 +29,12 @@ def test_orphan_check_localizes_and_notifies_without_request_context(monkeypatch
         settings=SimpleNamespace(localization=SimpleNamespace(language_code="de_DE")),
     )
     monkeypatch.setitem(ws._remote_clients, "remote-1", remote)
+
     def no_request_context():
         raise AssertionError("No request context")
 
     monkeypatch.setattr(ws, "get_active_remote_id", no_request_context)
+
     def notifications_for(remote_id):
         assert remote_id == "remote-1"
         return SimpleNamespace(notify_orphaned_entities=notify_orphaned_entities)
@@ -65,6 +67,7 @@ def test_automatic_update_activity_check_localizes_without_request_context(
         settings=SimpleNamespace(localization=SimpleNamespace(language_code="de_DE")),
     )
     monkeypatch.setitem(ws._remote_clients, "remote-1", remote)
+
     def no_request_context():
         raise AssertionError("No request context")
 

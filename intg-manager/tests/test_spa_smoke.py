@@ -157,7 +157,7 @@ def test_integration_lifecycle_uses_coreapi_operations():
         )
     ]
     for operation in (
-        "post_integration_install",
+        "await archive.install(client.api",
         "delete_integration",
         "delete_driver",
     ):
