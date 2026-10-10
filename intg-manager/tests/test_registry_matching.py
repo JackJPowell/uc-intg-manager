@@ -291,19 +291,26 @@ def test_external_update_is_visible_without_manager_update_capability(
                     "driver_type": "EXTERNAL",
                     "version": "3.0.0",
                     "name": {"en": "Docker Demo"},
-                    "developer": {"name": "Example", "url": "https://github.com/example/demo"},
+                    "developer": {
+                        "name": "Example",
+                        "url": "https://github.com/example/demo",
+                    },
                 }
             ]
 
         async def get_integrations(self):
-            return [
-                {
-                    "driver_id": "docker_demo",
-                    "integration_id": "docker-demo.main",
-                    "device_state": "UNKNOWN",
-                    "configured_entities": [],
-                }
-            ] if configured else []
+            return (
+                [
+                    {
+                        "driver_id": "docker_demo",
+                        "integration_id": "docker-demo.main",
+                        "device_state": "UNKNOWN",
+                        "configured_entities": [],
+                    }
+                ]
+                if configured
+                else []
+            )
 
     monkeypatch.setitem(
         ws._remote_clients, "test-remote", SimpleNamespace(api=_ExternalAPI())

@@ -204,10 +204,17 @@ services:
 |----------|-------------|---------|----------|
 | `UC_INTG_MANAGER_HTTP_PORT` | HTTP port for Integration Manager Web Server | `9999` | No|
 | `UC_CONFIG_HOME` | Configuration directory path | `/config` | No |
+| `UC_DATA_HOME` | Data directory; preferred storage for temporary integration archives | Falls back to `UC_CONFIG_HOME`, then the working directory | No |
 | `UC_INTG_MANAGER_EXTERNAL` | Force external/Docker mode. **Enable** with `1`, `true`, `yes`, or `on` (case-insensitive, whitespace ignored). **Any other value** — including empty string, `0`, `false`, `no`, `off`, or a typo — disables external mode. When the variable is unset entirely, mode is inferred from `UC_CONFIG_HOME` (unset → external; starts with `/config` → external; otherwise on-remote). | Docker: `1`, others: manual | No |
 | `UC_INTEGRATION_INTERFACE` | Network interface to bind integration API | `0.0.0.0` | No |
 | `UC_INTEGRATION_HTTP_PORT` | HTTP port for integration API | `9090` | No |
 
+
+Integration archives are downloaded and uploaded in chunks using temporary files in `UC_DATA_HOME`
+(or `UC_CONFIG_HOME` when unset). Use disk-backed storage with enough free space for the archive.
+On the Remote, `/tmp` is RAM-backed and unsuitable for large archives. Files are removed after
+installation, including failed or cancelled operations; files left by process termination are removed
+when IM's web server starts again.
 
 ## Usage
 

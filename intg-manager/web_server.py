@@ -74,6 +74,7 @@ from quart import (
 from sync_api import (
     GitHubClient,
     _SyncGitHubClient,
+    cleanup_stale_archives,
     get_cached_repo_info,
     load_registry,
     load_registry_data,
@@ -1135,14 +1136,14 @@ async def _apply_automatic_inplace_update(
     if not download_result:
         raise RuntimeError(f"No release found for {owner}/{repo}")
 
-    archive_data, filename = download_result
-    _LOG.info(
-        "[%s] Automatically updating %s with %s",
-        remote_id,
-        integration.driver_id,
-        filename,
-    )
-    await client.api.post_integration_install(archive_data, filename, update=True)
+    with download_result as archive:
+        _LOG.info(
+            "[%s] Automatically updating %s with %s",
+            remote_id,
+            integration.driver_id,
+            archive.filename,
+        )
+        await archive.install(client.api, update=True)
 
 
 async def _automatic_update_is_safe(remote_id: str) -> bool:
@@ -2373,12 +2374,13 @@ async def update_integration_inplace(driver_id: str):
                 {"status": "error", "message": f"No release found for {owner}/{repo}"}
             ), 404
 
-        archive_data, filename = download_result
-        _LOG.info(
-            "Downloaded %s (%d bytes) for in-place update", filename, len(archive_data)
-        )
-
-        await client.api.post_integration_install(archive_data, filename, update=True)  # ty:ignore[unresolved-attribute]
+        with download_result as archive:
+            _LOG.info(
+                "Downloaded %s (%d bytes) for in-place update",
+                archive.filename,
+                archive.size,
+            )
+            await archive.install(client.api, update=True)
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
 
         # Do not leave the just-updated driver's stale release record in the
@@ -2626,11 +2628,11 @@ async def install_integration(driver_id: str):
                 }
             ), 404
 
-        archive_data, filename = download_result
-        _LOG.info("Downloaded %s (%d bytes) for install", filename, len(archive_data))
-
-        # Install the integration
-        await client.api.post_integration_install(archive_data, filename)  # ty:ignore[unresolved-attribute]
+        with download_result as archive:
+            _LOG.info(
+                "Downloaded %s (%d bytes) for install", archive.filename, archive.size
+            )
+            await archive.install(client.api)
         _LOG.info("Installed integration %s successfully", integration.get("name"))
 
         # Return the updated integration data for the SPA.
@@ -3045,17 +3047,17 @@ async def _do_self_update_inplace(
             _self_update_pending = False
             return
 
-        archive_data, filename = download_result
-        _LOG.info(
-            "Self-update-inplace: downloaded %s (%d bytes) — sending install",
-            filename,
-            len(archive_data),
-        )
+        with download_result as archive:
+            _LOG.info(
+                "Self-update-inplace: downloaded %s (%d bytes) — sending install",
+                archive.filename,
+                archive.size,
+            )
 
-        client = _remote_clients.get(remote_id)
-        if not client:
-            raise RuntimeError("Active Remote is no longer configured")
-        await client.api.post_integration_install(archive_data, filename, update=True)  # ty:ignore[unresolved-attribute]
+            client = _remote_clients.get(remote_id)
+            if not client:
+                raise RuntimeError("Active Remote is no longer configured")
+            await archive.install(client.api, update=True)
         # Install accepted — remote will restart IM.  Keep _self_update_pending
         # True so /health returns "UPDATING" until the new IM process takes over.
         _LOG.info(
@@ -4630,6 +4632,7 @@ class WebServer:
         self._loop = loop
         self._shutdown_event = _asyncio.Event()
         try:
+            cleanup_stale_archives()
             is_docker = os.environ.get("UC_CONFIG_HOME", "").startswith("/config")
             _LOG.info(
                 "Creating Hypercorn server on %s:%d%s",
