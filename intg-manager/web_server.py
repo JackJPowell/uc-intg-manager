@@ -81,6 +81,15 @@ from sync_api import (
     save_repo_cache,
 )
 from system_messages import get_system_messages_service
+from bundle_service import (
+    BUNDLE_SITE,
+    BundleClient,
+    BundleError,
+    bundle_children,
+    bundle_summary,
+    is_bundle_driver,
+    looks_like_bundle,
+)
 from setup_presenter import SetupPresenter, setup_api_error
 from unfurled import Remote
 from unfurled.helpers.exceptions import SetupNotFound, UnfurledError
@@ -389,6 +398,8 @@ def _get_localized_name(
 
 # Cached version data for integrations, keyed by remote_id.
 _cached_version_data: dict[str, dict] = {}
+# Integration bundles (bundle.unfolded.tools): update checks and rebuilds
+_bundle_client = BundleClient()
 _version_check_timestamp: dict[str, str] = {}
 _cached_driver_ids: dict[str, set] = {}  # remote_id -> installed driver IDs
 
@@ -705,6 +716,10 @@ class IntegrationInfo:
     configured_entities: int = 0
     can_update: bool = False  # Show update button (always true if update available for custom integrations)
     backup_available: bool = False
+    # Integration bundle (bundle.unfolded.tools): the bundled integrations and the Remote's driver data
+    bundle: list[dict[str, Any]] | None = None
+    bundle_status: dict[str, Any] | None = None
+    bundle_driver: dict[str, Any] | None = None
 
 
 @dataclass
@@ -742,6 +757,7 @@ class AvailableIntegration:
     pushed_at: str = ""
     downloads: int = 0
     original_index: int = 0  # Original position in registry
+    bundled_in: str = ""  # Name of an installed bundle that contains this integration
 
     @property
     def install_status(self) -> str:
@@ -802,6 +818,152 @@ def _registry_item_for_driver(
         and item["name"].strip().casefold() == normalized_name
     ]
     return name_matches[0] if len(name_matches) == 1 else {}
+
+
+async def _bundle_driver_data(client: Remote, driver: dict[str, Any]) -> dict[str, Any] | None:
+    """The full driver data of an integration bundle (bundle.unfolded.tools), None for other drivers.
+
+    The driver list may leave out the setup page and description that describe a bundle's contents,
+    so a driver that links to the bundle site is read on its own.
+    """
+    if not isinstance(driver, dict) or not looks_like_bundle(driver):
+        return None
+    full = driver
+    if "setup_data_schema" not in driver or not driver.get("description"):
+        try:
+            full = await client.api.get_driver(driver.get("driver_id", ""))
+        except UnfurledError as error:
+            _LOG.debug("Unable to read bundle driver %s: %s", driver.get("driver_id"), error)
+            return None
+    return full if is_bundle_driver(full) else None
+
+
+def _apply_bundle_info(
+    info: IntegrationInfo, driver: dict[str, Any], remote_id: str | None
+) -> None:
+    """Mark an installed driver as a bundle: its integrations, merged with the last update check."""
+    cached = _get_version_cache(remote_id).get(info.driver_id, {})
+    plan = cached.get("bundle") if isinstance(cached.get("bundle"), dict) else {}
+    rows = {
+        row.get("key"): row for row in plan.get("rows", []) if isinstance(row, dict)
+    }
+    children = []
+    for child in bundle_children(driver):
+        row = rows.get(child["key"], {})
+        children.append(
+            {
+                **child,
+                "latest": row.get("latest") or None,
+                "updateAvailable": row.get("action") == "update",
+                "note": row.get("reason") or None,
+            }
+        )
+    info.bundle = children
+    info.bundle_driver = driver
+    info.bundle_status = {
+        "checked": bool(plan),
+        "updates": int(plan.get("updates") or 0),
+        "updatable": bool(plan.get("updatable", True)),
+        "reason": plan.get("reason") or None,
+        "nextVersion": plan.get("next_version") or None,
+        "site": plan.get("site") or BUNDLE_SITE,
+    }
+    info.description = bundle_summary(driver) or info.description
+    info.home_page = BUNDLE_SITE
+    # Bundles with integrations added as files are updated on the bundle site, not here.
+    if plan and not plan.get("updatable", True):
+        info.can_update = False
+
+
+async def _check_bundle_update(
+    integration: IntegrationInfo, remote_id: str | None
+) -> dict[str, Any] | None:
+    """Ask the bundle site whether a bundle's integrations have newer releases (version cache entry)."""
+    if integration.bundle_driver is None:
+        return None
+    try:
+        plan = await _bundle_client.check(integration.bundle_driver)
+    except BundleError as error:
+        _LOG.info(
+            "[%s] Bundle update check for %s failed: %s",
+            remote_id,
+            integration.driver_id,
+            error,
+        )
+        return None
+    updates = int(plan.get("updates") or 0)
+    entry = {
+        "name": integration.name,
+        "current": integration.version,
+        "latest": plan.get("next_version") or "",
+        "has_update": updates > 0,
+        "downloads": 0,
+        "bundle": plan,
+    }
+    if updates and remote_id:
+        try:
+            nm = get_notification_manager(remote_id)
+            await nm.notify_integration_update_available(
+                integration.driver_id,
+                integration.name,
+                integration.version,
+                entry["latest"],
+            )
+        except Exception as notify_error:
+            _LOG.error("Failed to send update notification: %s", notify_error)
+    return entry
+
+
+async def _install_bundle_update(integration: IntegrationInfo, client: Remote) -> None:
+    """Rebuild a bundle with the latest releases on the bundle site and install it in place."""
+    if integration.bundle_driver is None:
+        raise BundleError(f"{integration.name} is not an integration bundle")
+    plan, archive = await _bundle_client.build_update(integration.bundle_driver)
+    with archive:
+        _LOG.info(
+            "Installing bundle %s %s (%d bytes, %d integration update(s))",
+            integration.driver_id,
+            plan.get("next_version", ""),
+            archive.size,
+            int(plan.get("updates") or 0),
+        )
+        await archive.install(client.api, update=True)
+
+
+def _bundle_child_registry_item(
+    registry: list[dict[str, Any]], child: dict[str, Any]
+) -> dict[str, Any]:
+    """The registry item a bundled integration came from: by repository, else by ID or exact name."""
+
+    def repo(url: Any) -> str:
+        return (
+            str(url or "").strip().lower().replace("http://", "https://").removesuffix(".git").rstrip("/")
+        )
+
+    if child.get("repository"):
+        matches = [item for item in registry if repo(item.get("repository")) == repo(child["repository"])]
+        if len(matches) == 1:
+            return matches[0]
+    key = _canonical_integration_id(str(child.get("key", "")))
+    matches = [
+        item
+        for item in registry
+        if key
+        and any(
+            _canonical_integration_id(value) == key
+            for value in (item.get("driver_id", ""), item.get("id", ""))
+            if isinstance(value, str)
+        )
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    name = str(child.get("name", "")).strip().casefold()
+    matches = [
+        item
+        for item in registry
+        if isinstance(item.get("name"), str) and item["name"].strip().casefold() == name
+    ]
+    return matches[0] if len(matches) == 1 else {}
 
 
 def _api_error(code: str, message: str, status: int = 400):
@@ -910,6 +1072,14 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
 
     can_mutate = management == "custom"
     developer = _developer_api_model(integration.developer)
+    bundle = (
+        {
+            "integrations": integration.bundle,
+            **(integration.bundle_status or {}),
+        }
+        if isinstance(integration, IntegrationInfo) and integration.bundle is not None
+        else None
+    )
     return {
         "id": integration.driver_id,
         "catalogId": catalog_id,
@@ -935,6 +1105,8 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
         "installed": installed,
         "driverInstalled": driver_installed,
         "configuredEntities": getattr(integration, "configured_entities", 0),
+        "bundle": bundle,
+        "bundledIn": getattr(integration, "bundled_in", "") or None,
         "capabilities": {
             "install": is_available and can_mutate and not driver_installed,
             "update": can_mutate and integration.can_update,
@@ -942,7 +1114,7 @@ def _integration_api_model(integration: IntegrationInfo | AvailableIntegration) 
             "backup": can_mutate and installed and integration.backup_available,
             "deleteConfiguration": can_mutate and installed,
             "deleteDriver": can_mutate and driver_installed,
-            "selectVersion": can_mutate and bool(integration.home_page),
+            "selectVersion": can_mutate and bool(integration.home_page) and not bundle,
             # Driver setup is a Core API capability and is independent from
             # whether this manager owns the driver's installation lifecycle.
             "configure": driver_installed and management != "self_managed",
@@ -1011,6 +1183,12 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
             current_driver_ids.add(integration.driver_id)
 
             if integration.official:
+                continue
+
+            if integration.bundle_driver is not None:
+                bundle_entry = await _check_bundle_update(integration, remote_id)
+                if bundle_entry:
+                    version_updates[integration.driver_id] = bundle_entry
                 continue
 
             if not integration.home_page or "github.com" not in integration.home_page:
@@ -1107,6 +1285,9 @@ async def _apply_automatic_inplace_update(
 ) -> None:
     """Download and apply the current release through the firmware update API."""
     client = _remote_clients.get(remote_id)
+    if client and integration.bundle_driver is not None:
+        await _install_bundle_update(integration, client)
+        return
     if not client or not _github_client:
         raise RuntimeError("Remote or GitHub service is unavailable")
 
@@ -1434,6 +1615,9 @@ async def _get_installed_integrations(
                 #     driver_id,
                 # )
 
+        if is_custom and (bundle_driver := await _bundle_driver_data(client, driver)):
+            _apply_bundle_info(info, bundle_driver, remote_id)
+
         integrations.append(info)
 
         # Check for error states and send notification
@@ -1542,6 +1726,9 @@ async def _get_installed_integrations(
                 #     driver_id,
                 # )
 
+        if is_custom and (bundle_driver := await _bundle_driver_data(client, driver)):
+            _apply_bundle_info(info, bundle_driver, remote_id)
+
         integrations.append(info)
 
     return integrations
@@ -1571,6 +1758,7 @@ async def _get_available_integrations(
     installed_drivers = {}  # driver_id -> (driver_type, version)
     configured_driver_ids = {}  # driver_id -> instance_id
     driver_names: dict[str, list[tuple[str, str, str]]] = {}
+    bundled_in: dict[str, str] = {}  # registry id -> name of the installed bundle containing it
 
     if client:
         try:
@@ -1587,6 +1775,15 @@ async def _get_available_integrations(
                     driver_names.setdefault(name, []).append(
                         (driver_id, driver_type, version)
                     )
+                if driver_type == "CUSTOM" and (
+                    bundle_driver := await _bundle_driver_data(client, driver)
+                ):
+                    bundle_name = _get_localized_name(
+                        bundle_driver.get("name"), driver_id, remote_id=remote_id
+                    )
+                    for child in bundle_children(bundle_driver):
+                        if registry_id := _bundle_child_registry_item(registry, child).get("id"):
+                            bundled_in.setdefault(registry_id, bundle_name)
         except UnfurledError:
             pass
 
@@ -1729,6 +1926,7 @@ async def _get_available_integrations(
             pushed_at=pushed_at,
             downloads=downloads,
             original_index=len(available),
+            bundled_in=bundled_in.get(driver_id, ""),
         )
         available.append(avail)
 
@@ -2223,6 +2421,40 @@ async def get_integration_card(driver_id: str):
     return jsonify({"data": _integration_api_model(integration)})
 
 
+async def _updated_integration_response(
+    integration: IntegrationInfo, remote_id: str | None
+):
+    """The card of an integration that was just updated in place."""
+    # Do not leave the just-updated driver's stale release record in the
+    # cache while the fuller background refresh runs. Otherwise the SPA's
+    # immediate refetch can incorrectly keep showing an Update action.
+    _get_version_cache(remote_id).pop(integration.driver_id, None)
+
+    # Refresh remaining release metadata in the background. The immediate
+    # cache invalidation above lets the returned card reflect the update
+    # without making the user wait for every installed integration's
+    # GitHub lookup.
+    asyncio.create_task(_refresh_version_cache(remote_id))
+
+    refreshed = next(
+        (
+            item
+            for item in await _get_installed_integrations(remote_id)
+            if item.driver_id == integration.driver_id
+            or item.instance_id == integration.instance_id
+        ),
+        integration,
+    )
+    return jsonify(
+        {
+            "data": {
+                "integration": _integration_api_model(refreshed),
+                "reconnecting": True,
+            }
+        }
+    )
+
+
 @app.route("/api/v1/integrations/<driver_id>/update", methods=["POST"])
 async def update_integration_inplace(driver_id: str):
     """
@@ -2279,6 +2511,21 @@ async def update_integration_inplace(driver_id: str):
                     "message": "Official integrations are managed by firmware updates",
                 }
             ), 400
+
+        if integration.bundle_driver is not None:
+            if version:
+                return _api_error(
+                    "version_unavailable",
+                    "Integration bundles are rebuilt with the latest release of each integration",
+                    400,
+                )
+            _LOG.info("Updating bundle %s through %s", integration.driver_id, BUNDLE_SITE)
+            try:
+                await _install_bundle_update(integration, client)
+            except BundleError as error:
+                _LOG.error("Bundle update of %s failed: %s", integration.driver_id, error)
+                return _api_error("update_failed", str(error), 502)
+            return await _updated_integration_response(integration, remote_id)
 
         if not integration.home_page or "github.com" not in integration.home_page:
             return jsonify(
@@ -2354,35 +2601,7 @@ async def update_integration_inplace(driver_id: str):
             )
             await archive.install(client.api, update=True)
         _LOG.info("In-place update of %s completed successfully", integration.driver_id)
-
-        # Do not leave the just-updated driver's stale release record in the
-        # cache while the fuller background refresh runs. Otherwise the SPA's
-        # immediate refetch can incorrectly keep showing an Update action.
-        _get_version_cache(remote_id).pop(integration.driver_id, None)
-
-        # Refresh remaining release metadata in the background. The immediate
-        # cache invalidation above lets the returned card reflect the update
-        # without making the user wait for every installed integration's
-        # GitHub lookup.
-        asyncio.create_task(_refresh_version_cache(remote_id))
-
-        refreshed = next(
-            (
-                item
-                for item in await _get_installed_integrations(remote_id)
-                if item.driver_id == integration.driver_id
-                or item.instance_id == integration.instance_id
-            ),
-            integration,
-        )
-        return jsonify(
-            {
-                "data": {
-                    "integration": _integration_api_model(refreshed),
-                    "reconnecting": True,
-                }
-            }
-        )
+        return await _updated_integration_response(integration, remote_id)
 
     except UnfurledError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
@@ -3142,6 +3361,14 @@ async def check_versions():
 
         for integration in integrations:
             if integration.official:
+                continue
+
+            if integration.bundle_driver is not None:
+                bundle_entry = await _check_bundle_update(integration, remote_id)
+                if bundle_entry:
+                    version_updates[integration.driver_id] = bundle_entry
+                    checked += 1
+                    updates_available += int(bundle_entry["has_update"])
                 continue
 
             if not integration.home_page or "github.com" not in integration.home_page:

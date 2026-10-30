@@ -1,6 +1,28 @@
 export type ConnectionState = 'connected' | 'ok' | 'not_configured' | 'disconnected' | 'error' | 'unknown'
 export type ManagementMode = 'custom' | 'official' | 'external' | 'self_managed'
 
+export interface BundledIntegration {
+  key: string
+  name: string
+  version: string
+  developer: string
+  repository: string
+  latest: string | null
+  updateAvailable: boolean
+  note: string | null
+}
+
+/** An integration bundle from bundle.unfolded.tools: one driver running several integrations. */
+export interface BundleInfo {
+  integrations: BundledIntegration[]
+  checked: boolean
+  updates: number
+  updatable: boolean
+  reason: string | null
+  nextVersion: string | null
+  site: string
+}
+
 export interface Integration {
   id: string
   catalogId: string
@@ -26,6 +48,8 @@ export interface Integration {
   installed: boolean
   driverInstalled: boolean
   configuredEntities: number
+  bundle: BundleInfo | null
+  bundledIn: string | null
   capabilities: {
     install: boolean
     update: boolean
