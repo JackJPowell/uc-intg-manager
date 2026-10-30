@@ -820,22 +820,35 @@ def _registry_item_for_driver(
     return name_matches[0] if len(name_matches) == 1 else {}
 
 
+# (client, driver ID, version) -> full driver data of a bundle, or None for other drivers
+_bundle_driver_cache: dict[tuple[int, str, str], dict[str, Any] | None] = {}
+
+
 async def _bundle_driver_data(client: Remote, driver: dict[str, Any]) -> dict[str, Any] | None:
     """The full driver data of an integration bundle (bundle.unfolded.tools), None for other drivers.
 
-    The driver list may leave out the setup page and description that describe a bundle's contents,
-    so a driver that links to the bundle site is read on its own.
+    GET /intg/drivers only returns driver summaries (no links, description or setup page), so a
+    custom driver is read on its own once per installed version to see whether it is a bundle.
     """
-    if not isinstance(driver, dict) or not looks_like_bundle(driver):
+    if not isinstance(driver, dict) or not driver.get("driver_id"):
         return None
-    full = driver
-    if "setup_data_schema" not in driver or not driver.get("description"):
-        try:
-            full = await client.api.get_driver(driver.get("driver_id", ""))
-        except UnfurledError as error:
-            _LOG.debug("Unable to read bundle driver %s: %s", driver.get("driver_id"), error)
-            return None
-    return full if is_bundle_driver(full) else None
+    if is_bundle_driver(driver):
+        return driver
+    has_links = "home_page" in driver or isinstance(driver.get("developer"), dict)
+    if has_links and not looks_like_bundle(driver):
+        return None
+    driver_id = str(driver["driver_id"])
+    key = (id(client), driver_id, str(driver.get("version", "")))
+    if key in _bundle_driver_cache:
+        return _bundle_driver_cache[key]
+    try:
+        full = await client.api.get_driver(driver_id)
+    except UnfurledError as error:
+        _LOG.debug("Unable to read driver %s: %s", driver_id, error)
+        return None
+    result = full if isinstance(full, dict) and is_bundle_driver(full) else None
+    _bundle_driver_cache[key] = result
+    return result
 
 
 def _apply_bundle_info(

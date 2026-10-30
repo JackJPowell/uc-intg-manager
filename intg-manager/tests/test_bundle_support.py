@@ -70,8 +70,11 @@ REGISTRY = [
 
 
 def summary(driver):
-    """The driver list leaves out the setup page."""
-    return {k: v for k, v in driver.items() if k not in ("setup_data_schema",)}
+    """GET /intg/drivers returns IntegrationDriverInfo summaries: no links, description or setup page."""
+    info = {k: driver[k] for k in ("driver_id", "name", "driver_type", "version", "icon", "enabled") if k in driver}
+    if isinstance(driver.get("developer"), dict):
+        info["developer_name"] = driver["developer"].get("name", "")
+    return info
 
 
 class _API:
@@ -102,6 +105,7 @@ def _client(api):
 
 @pytest.fixture
 def remote(monkeypatch):
+    monkeypatch.setattr(ws, "_bundle_driver_cache", {})
     api = _API(
         [BUNDLE_DRIVER, {"driver_id": "plain", "name": {"en": "Plain"}, "version": "1.0", "driver_type": "CUSTOM",
                          "developer": {"name": "x", "url": "https://github.com/x/plain"}}],
@@ -120,8 +124,8 @@ def remote(monkeypatch):
 
 def test_driver_data_describes_the_bundle():
     assert bs.is_bundle_driver(BUNDLE_DRIVER)
-    assert not bs.is_bundle_driver(summary(BUNDLE_DRIVER)), "needs the setup page"
-    assert bs.looks_like_bundle(summary(BUNDLE_DRIVER))
+    assert not bs.is_bundle_driver(summary(BUNDLE_DRIVER)), "the driver list doesn't tell"
+    assert not bs.looks_like_bundle(summary(BUNDLE_DRIVER))
     assert not bs.looks_like_bundle({"developer": {"url": "https://github.com/x/y"}})
     assert bs.looks_like_bundle({"developer": {"url": "https://github.com/jstnjx/uc-intg-bundle-v2"}})
     assert bs.bundle_children(BUNDLE_DRIVER) == [
@@ -141,7 +145,9 @@ def test_installed_bundle_shows_its_integrations(remote):
     bundle = next(i for i in integrations if i.driver_id == "living_room")
     plain = next(i for i in integrations if i.driver_id == "plain")
     assert plain.bundle is None
-    assert remote.driver_reads == ["living_room"], "only drivers linking to the bundle site are read"
+    assert sorted(remote.driver_reads) == ["living_room", "plain"], "custom drivers are read to find bundles"
+    asyncio.run(ws._get_installed_integrations("test-remote"))
+    assert len(remote.driver_reads) == 2, "once per installed version"
     assert [c["name"] for c in bundle.bundle] == ["Samsung TV", "My Gadget"]
     assert bundle.home_page == "https://bundle.unfolded.tools"
     assert bundle.description == "Integration bundle running 2 integrations as one"
