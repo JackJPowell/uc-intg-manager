@@ -90,3 +90,19 @@ a { color: inherit; text-decoration: none; }.sr-only { position: absolute; width
 .state-pill.external-update-tooltip::after{position:absolute;top:calc(100% + .45rem);right:0;z-index:20;width:max-content;max-width:min(16rem,calc(100vw - 2rem));padding:.45rem .6rem;border:1px solid #4b6c96;border-radius:.4rem;color:#e8f2ff;background:#102039;box-shadow:0 8px 20px #07101f9c;content:attr(data-tooltip);font-size:.73rem;font-weight:500;line-height:1.35;text-align:left;white-space:normal;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-3px);transition:opacity .14s ease,transform .14s ease,visibility .14s}
 .state-pill.external-update-tooltip:hover::after,.state-pill.external-update-tooltip:focus-visible::after{opacity:1;visibility:visible;transform:translateY(0)}
 .state-pill.external-update-tooltip:focus-visible{outline:2px solid #8abaff;outline-offset:2px}
+
+/* Integration bundles (bundle.unfolded.tools) */
+.bundle-contents { flex:1; margin:1rem 0; min-width:0; }
+.bundle-summary { margin:0 0 .5rem; color:#b3c0d5; font-size:.86rem; line-height:1.45; }
+.bundle-list { display:grid; gap:.3rem; margin:0; padding:0; list-style:none; font-size:.8rem; }
+.bundle-list li { display:flex; justify-content:space-between; align-items:baseline; gap:.6rem; min-width:0; padding:.3rem .5rem; border-radius:.4rem; background:#22385a; }
+.bundle-child-name { display:flex; align-items:baseline; gap:.4rem; min-width:0; overflow:hidden; color:#d6e3f7; white-space:nowrap; text-overflow:ellipsis; }
+.bundle-child-name a { color:#a9c6ed; overflow:hidden; text-overflow:ellipsis; }
+.bundle-child-name small { color:#8a9bb5; overflow:hidden; text-overflow:ellipsis; }
+.bundle-child-version { display:inline-flex; flex:none; align-items:center; gap:.2rem; color:#a7bdd8; font-variant-numeric:tabular-nums; }
+.bundle-child-version.has-update { color:#f2c46d; }
+.bundle-child-version svg { width:12px; height:12px; }
+.bundle-note { margin:.5rem 0 0; color:#f2c46d; font-size:.75rem; line-height:1.4; }
+.bundle-note a { display:inline-flex; align-items:center; gap:.2rem; color:#a9c6ed; }
+.bundle-note svg { width:12px; height:12px; }
+.capability-row .bundled-in { color:#a9c6ed; }
