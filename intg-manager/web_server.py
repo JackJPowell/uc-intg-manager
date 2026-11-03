@@ -605,6 +605,8 @@ def _inplace_upgrade_error():
 # Per-Remote operation state prevents concurrent mutations of one Remote while
 # allowing independent configured Remotes to be managed in parallel.
 _OPERATION_LOCK_TIMEOUT = 15 * 60  # 15 minutes — force-release stale lock
+# Bound the whole update while its lock is held, including builds and uploads.
+_UPDATE_OPERATION_TIMEOUT = 14 * 60
 
 
 @dataclass
@@ -927,12 +929,21 @@ async def _check_bundle_update(
     return entry
 
 
-async def _install_bundle_update(integration: IntegrationInfo, client: Remote) -> None:
+async def _install_bundle_update(
+    integration: IntegrationInfo,
+    client: Remote,
+    *,
+    automatic_remote_id: str | None = None,
+) -> bool:
     """Rebuild a bundle with the latest releases on the bundle site and install it in place."""
     if integration.bundle_driver is None:
         raise BundleError(f"{integration.name} is not an integration bundle")
     plan, archive = await _bundle_client.build_update(integration.bundle_driver)
     with archive:
+        if automatic_remote_id is not None and not await _automatic_update_is_safe(
+            automatic_remote_id
+        ):
+            return False
         _LOG.info(
             "Installing bundle %s %s (%d bytes, %d integration update(s))",
             integration.driver_id,
@@ -941,6 +952,7 @@ async def _install_bundle_update(integration: IntegrationInfo, client: Remote) -
             int(plan.get("updates") or 0),
         )
         await archive.install(client.api, update=True)
+    return True
 
 
 def _bundle_child_registry_item(
@@ -1295,12 +1307,13 @@ async def _refresh_version_cache(remote_id: str | None = None) -> None:
 
 async def _apply_automatic_inplace_update(
     integration: IntegrationInfo, remote_id: str
-) -> None:
+) -> bool:
     """Download and apply the current release through the firmware update API."""
     client = _remote_clients.get(remote_id)
     if client and integration.bundle_driver is not None:
-        await _install_bundle_update(integration, client)
-        return
+        return await _install_bundle_update(
+            integration, client, automatic_remote_id=remote_id
+        )
     if not client or not _github_client:
         raise RuntimeError("Remote or GitHub service is unavailable")
 
@@ -1326,6 +1339,8 @@ async def _apply_automatic_inplace_update(
         raise RuntimeError(f"No release found for {owner}/{repo}")
 
     with download_result as archive:
+        if not await _automatic_update_is_safe(remote_id):
+            return False
         _LOG.info(
             "[%s] Automatically updating %s with %s",
             remote_id,
@@ -1333,6 +1348,7 @@ async def _apply_automatic_inplace_update(
             archive.filename,
         )
         await archive.install(client.api, update=True)
+    return True
 
 
 async def _automatic_update_is_safe(remote_id: str) -> bool:
@@ -1441,46 +1457,54 @@ async def _run_automatic_updates(remote_id: str) -> None:
 
     candidates: list[IntegrationInfo] = []
     try:
-        integrations = await _get_installed_integrations(remote_id)
-        candidates = [
-            integration
-            for integration in integrations
-            if integration.update_available
-            and integration.can_update
-            and not integration.official
-            and not integration.external
-            and not integration.self_managed
-        ]
-        if not candidates:
-            _LOG.debug("[%s] No eligible automatic updates", remote_id)
-            return
-        if not await _automatic_update_is_safe(remote_id):
-            return
-
-        _LOG.info(
-            "[%s] Processing %d automatic integration update(s) sequentially",
-            remote_id,
-            len(candidates),
-        )
-        for integration in candidates:
-            # A queued update can take long enough for an activity to start or
-            # the Remote to be removed from its charger. Re-check each item.
+        async with asyncio.timeout(_UPDATE_OPERATION_TIMEOUT):
+            integrations = await _get_installed_integrations(remote_id)
+            candidates = [
+                integration
+                for integration in integrations
+                if integration.update_available
+                and integration.can_update
+                and not integration.official
+                and not integration.external
+                and not integration.self_managed
+            ]
+            if not candidates:
+                _LOG.debug("[%s] No eligible automatic updates", remote_id)
+                return
             if not await _automatic_update_is_safe(remote_id):
                 return
-            try:
-                await _apply_automatic_inplace_update(integration, remote_id)
-                _LOG.info(
-                    "[%s] Automatically updated %s",
-                    remote_id,
-                    integration.driver_id,
-                )
-            except Exception as error:
-                _LOG.error(
-                    "[%s] Automatic update failed for %s: %s",
-                    remote_id,
-                    integration.driver_id,
-                    error,
-                )
+
+            _LOG.info(
+                "[%s] Processing %d automatic integration update(s) sequentially",
+                remote_id,
+                len(candidates),
+            )
+            for integration in candidates:
+                # A queued update can take long enough for an activity to start or
+                # the Remote to be removed from its charger. Re-check each item.
+                if not await _automatic_update_is_safe(remote_id):
+                    return
+                try:
+                    if not await _apply_automatic_inplace_update(integration, remote_id):
+                        return
+                    _LOG.info(
+                        "[%s] Automatically updated %s",
+                        remote_id,
+                        integration.driver_id,
+                    )
+                except Exception as error:
+                    _LOG.error(
+                        "[%s] Automatic update failed for %s: %s",
+                        remote_id,
+                        integration.driver_id,
+                        error,
+                    )
+    except TimeoutError:
+        _LOG.warning(
+            "[%s] Automatic update batch exceeded the %d-second operation limit",
+            remote_id,
+            _UPDATE_OPERATION_TIMEOUT,
+        )
     finally:
         await _release_operation_lock(remote_id, "automatic updates")
         # Refresh once after the whole batch so the cache reflects every result.
@@ -2498,124 +2522,132 @@ async def update_integration_inplace(driver_id: str):
         return conflict
 
     try:
-        integrations = await _get_installed_integrations(remote_id)
-        integration = next(
-            (
-                i
-                for i in integrations
-                if i.driver_id == driver_id or i.instance_id == driver_id
-            ),
-            None,
-        )
-
-        # Also search by instance_id (driver_id arg may actually be an instance_id)
-        if not integration:
+        async with asyncio.timeout(_UPDATE_OPERATION_TIMEOUT):
+            integrations = await _get_installed_integrations(remote_id)
             integration = next(
-                (i for i in integrations if i.instance_id == driver_id), None
+                (
+                    i
+                    for i in integrations
+                    if i.driver_id == driver_id or i.instance_id == driver_id
+                ),
+                None,
             )
 
-        if not integration:
-            return jsonify({"status": "error", "message": "Integration not found"}), 404
-
-        if integration.official:
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Official integrations are managed by firmware updates",
-                }
-            ), 400
-
-        if integration.bundle_driver is not None:
-            if version:
-                return _api_error(
-                    "version_unavailable",
-                    "Integration bundles are rebuilt with the latest release of each integration",
-                    400,
+            # Also search by instance_id (driver_id arg may actually be an instance_id)
+            if not integration:
+                integration = next(
+                    (i for i in integrations if i.instance_id == driver_id), None
                 )
-            _LOG.info("Updating bundle %s through %s", integration.driver_id, BUNDLE_SITE)
-            try:
-                await _install_bundle_update(integration, client)
-            except BundleError as error:
-                _LOG.error("Bundle update of %s failed: %s", integration.driver_id, error)
-                return _api_error("update_failed", str(error), 502)
-            return await _updated_integration_response(integration, remote_id)
 
-        if not integration.home_page or "github.com" not in integration.home_page:
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "No GitHub repository found for this integration",
-                }
-            ), 400
+            if not integration:
+                return jsonify({"status": "error", "message": "Integration not found"}), 404
 
-        parsed = GitHubClient.parse_github_url(integration.home_page)
-        if not parsed:
-            return jsonify(
-                {"status": "error", "message": "Could not parse GitHub URL"}
-            ), 400
+            if integration.official:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "Official integrations are managed by firmware updates",
+                    }
+                ), 400
 
-        owner, repo = parsed
-
-        # Check registry for asset_pattern
-        registry = load_registry()
-        registry_entry = next(
-            (
-                item
-                for item in registry
-                if item.get("driver_id") == integration.driver_id
-                or item.get("id") == integration.driver_id
-            ),
-            None,
-        )
-        asset_pattern = registry_entry.get("asset_pattern") if registry_entry else None
-
-        # The release picker filters versions below this boundary, but an exact
-        # tag can also be submitted manually. Enforce the same rule here.
-        migration_required_at = (
-            registry_entry.get("migration_required_at") if registry_entry else None
-        )
-        if version and migration_required_at:
-            try:
-                selected_version = Version(version.lstrip("v"))
-                if selected_version <= Version(migration_required_at):
+            if integration.bundle_driver is not None:
+                if version:
                     return _api_error(
-                        "migration_required",
-                        f"Cannot install version {version} - requires version > {migration_required_at}",
+                        "version_unavailable",
+                        "Integration bundles are rebuilt with the latest release of each integration",
                         400,
                     )
-            except InvalidVersion:
-                return _api_error(
-                    "invalid_version", f"Invalid version format: {version}", 400
+                _LOG.info("Updating bundle %s through %s", integration.driver_id, BUNDLE_SITE)
+                try:
+                    await _install_bundle_update(integration, client)
+                except BundleError as error:
+                    _LOG.error("Bundle update of %s failed: %s", integration.driver_id, error)
+                    return _api_error("update_failed", str(error), 502)
+                return await _updated_integration_response(integration, remote_id)
+
+            if not integration.home_page or "github.com" not in integration.home_page:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "No GitHub repository found for this integration",
+                    }
+                ), 400
+
+            parsed = GitHubClient.parse_github_url(integration.home_page)
+            if not parsed:
+                return jsonify(
+                    {"status": "error", "message": "Could not parse GitHub URL"}
+                ), 400
+
+            owner, repo = parsed
+
+            # Check registry for asset_pattern
+            registry = load_registry()
+            registry_entry = next(
+                (
+                    item
+                    for item in registry
+                    if item.get("driver_id") == integration.driver_id
+                    or item.get("id") == integration.driver_id
+                ),
+                None,
+            )
+            asset_pattern = registry_entry.get("asset_pattern") if registry_entry else None
+
+            # The release picker filters versions below this boundary, but an exact
+            # tag can also be submitted manually. Enforce the same rule here.
+            migration_required_at = (
+                registry_entry.get("migration_required_at") if registry_entry else None
+            )
+            if version and migration_required_at:
+                try:
+                    selected_version = Version(version.lstrip("v"))
+                    if selected_version <= Version(migration_required_at):
+                        return _api_error(
+                            "migration_required",
+                            f"Cannot install version {version} - requires version > {migration_required_at}",
+                            400,
+                        )
+                except InvalidVersion:
+                    return _api_error(
+                        "invalid_version", f"Invalid version format: {version}", 400
+                    )
+
+            if version:
+                _LOG.info(
+                    "In-place updating %s to version %s", integration.driver_id, version
+                )
+                download_result = await _github_client.download_release_asset(
+                    owner, repo, asset_pattern=asset_pattern, version=version
+                )
+            else:
+                _LOG.info("In-place updating %s to latest version", integration.driver_id)
+                download_result = await _github_client.download_release_asset(
+                    owner, repo, asset_pattern=asset_pattern
                 )
 
-        if version:
-            _LOG.info(
-                "In-place updating %s to version %s", integration.driver_id, version
-            )
-            download_result = await _github_client.download_release_asset(
-                owner, repo, asset_pattern=asset_pattern, version=version
-            )
-        else:
-            _LOG.info("In-place updating %s to latest version", integration.driver_id)
-            download_result = await _github_client.download_release_asset(
-                owner, repo, asset_pattern=asset_pattern
-            )
+            if not download_result:
+                return jsonify(
+                    {"status": "error", "message": f"No release found for {owner}/{repo}"}
+                ), 404
 
-        if not download_result:
-            return jsonify(
-                {"status": "error", "message": f"No release found for {owner}/{repo}"}
-            ), 404
+            with download_result as archive:
+                _LOG.info(
+                    "Downloaded %s (%d bytes) for in-place update",
+                    archive.filename,
+                    archive.size,
+                )
+                await archive.install(client.api, update=True)
+            _LOG.info("In-place update of %s completed successfully", integration.driver_id)
+            return await _updated_integration_response(integration, remote_id)
 
-        with download_result as archive:
-            _LOG.info(
-                "Downloaded %s (%d bytes) for in-place update",
-                archive.filename,
-                archive.size,
-            )
-            await archive.install(client.api, update=True)
-        _LOG.info("In-place update of %s completed successfully", integration.driver_id)
-        return await _updated_integration_response(integration, remote_id)
-
+    except TimeoutError:
+        _LOG.warning("Update of %s exceeded the operation limit", driver_id)
+        return _api_error(
+            "operation_timeout",
+            "The update exceeded the 14-minute limit. Check the Remote integration status before retrying.",
+            504,
+        )
     except UnfurledError as e:
         _LOG.error("In-place update failed for %s: %s", driver_id, e)
         return _api_error("update_failed", str(e), 502)
