@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## v3.3.0 - 2026-11-09
+
+### Added
+
+- **Integration bundles** — View the integrations and versions inside installed bundles, check for updates, and rebuild and install updated bundles through bundle.unfolded.tools while preserving configuration and entities. Thanks @jstnjx! #57
+- **Bundled integration badges** — Integration catalog cards now identify which installed bundle contains an integration.
+
+---
+
 ## v3.2.2 - 2026-10-10
 
 ### Changed
