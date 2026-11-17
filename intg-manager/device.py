@@ -40,6 +40,10 @@ _LOG = logging.getLogger(__name__)
 _all_remote_configs: list[RemoteConfig] = []
 _web_server_instance: WebServer | None = None
 
+# Allow Wi-Fi to recover after wake without abandoning the connection.
+_CONNECTION_RETRY_DELAY = 2
+_CONNECTION_RETRY_MAX_DELAY = 30
+
 
 def register_remote_config(config: RemoteConfig) -> None:
     """Register a remote config for multi-remote support."""
@@ -94,6 +98,7 @@ class IntegrationManagerDevice(PollingDevice):
         # Track dock state
         self._is_docked: bool = False
         self._connected: bool = False
+        self._connection_task: asyncio.Task[bool] | None = None
 
         # Track if we're running in external/Docker mode
         self._is_external: bool = False
@@ -240,6 +245,30 @@ class IntegrationManagerDevice(PollingDevice):
     # Connection Management
     # =========================================================================
 
+    async def connect(self) -> bool:
+        """Connect and start polling, retrying until connected or disconnected.
+
+        Wake/connect events can overlap while Wi-Fi is still recovering. Share
+        one task so only one connection attempt and polling loop can run.
+        """
+        if self._connection_task is None or self._connection_task.done():
+            self._connection_task = asyncio.create_task(self._connect_with_retry())
+        return await asyncio.shield(self._connection_task)
+
+    async def _connect_with_retry(self) -> bool:
+        """Retry the full connection lifecycle with capped exponential backoff."""
+        delay = _CONNECTION_RETRY_DELAY
+        while True:
+            # The base class emits connection/error events and starts polling
+            # only after establish_connection() succeeds.
+            if await super().connect():
+                return True
+            _LOG.info(
+                "[%s] Connection failed; retrying in %s seconds", self.log_id, delay
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _CONNECTION_RETRY_MAX_DELAY)
+
     async def _test_remote_connection(self) -> bool:
         """Return whether the Remote responds to its public version endpoint."""
         try:
@@ -346,6 +375,17 @@ class IntegrationManagerDevice(PollingDevice):
         """Disconnect from the remote."""
         _LOG.debug("[%s] Disconnecting from remote", self.log_id)
         global _web_server_instance
+
+        # Stop both delayed retries and in-flight connection tests before
+        # closing the client, so standby cannot restart the server or polling.
+        if self._connection_task and not self._connection_task.done():
+            self._connection_task.cancel()
+            try:
+                await self._connection_task
+            except asyncio.CancelledError:
+                pass
+        self._connection_task = None
+
         set_remote_online(self.identifier, False)
 
         # Only stop web server if:
