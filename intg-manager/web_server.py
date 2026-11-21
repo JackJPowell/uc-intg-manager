@@ -4791,6 +4791,9 @@ class WebServer:
             _remote_clients[config.identifier] = self._make_remote(config)
             if config.identifier not in _remote_online:
                 _remote_online[config.identifier] = True
+        # Keep ownership separate from the global lookup: a replacement server
+        # can publish its clients while this server is still shutting down.
+        self._owned_remote_clients = list(_remote_clients.values())
         return previous_clients
 
     async def _replace_remotes_on_server_loop(
@@ -4810,7 +4813,7 @@ class WebServer:
 
     async def _close_remote_clients_on_server_loop(self) -> None:
         """Close unfurled resources before Hypercorn's owning loop exits."""
-        clients = list(_remote_clients.values())
+        clients = self._owned_remote_clients
         if not clients:
             return
         results = await asyncio.gather(
@@ -4872,14 +4875,29 @@ class WebServer:
             )
         except OSError as e:
             _LOG.error("Web server OS error (port may be in use): %s", e)
-            self._running = False
         except Exception as e:
             _LOG.error("Web server error: %s", e)
-            self._running = False
         finally:
-            if hasattr(self, "_loop"):
-                self._loop.close()
+            self._running = False
+            try:
+                # Hypercorn has finished draining requests. Cancel remaining
+                # background work before closing clients so it cannot reopen a
+                # session that would outlive this loop, including on startup errors.
+                loop.run_until_complete(self._cleanup_server_loop())
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
                 _asyncio.set_event_loop(None)
+
+    async def _cleanup_server_loop(self) -> None:
+        """Release pending work and HTTP sessions on their owning event loop."""
+        current_task = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current_task]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await self._close_remote_clients_on_server_loop()
 
     async def _shutdown_trigger(self) -> None:
         """Awaitable trigger used by hypercorn to initiate graceful shutdown."""
@@ -4892,16 +4910,8 @@ class WebServer:
             return
 
         _LOG.info("Stopping web server")
-        loop = getattr(self, "_loop", None)
-        if loop is not None and loop.is_running():
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self._close_remote_clients_on_server_loop(), loop
-                ).result(timeout=5)
-            except Exception as error:
-                _LOG.warning(
-                    "Failed to close Remote clients before shutdown: %s", error
-                )
+        # Signal Hypercorn first. Its thread closes clients only after accepted
+        # requests have finished, immediately before closing the event loop.
         self._running = False
 
         if self._server_thread:

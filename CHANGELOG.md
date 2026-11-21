@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 3.3.3 - 2026-11-17
+
+### Fixed
+
+- Corrects incorrectly reported unused number entities in the diagnosic reports
+
+---
+
+## 3.3.2 - 2026-11-17
+
+### Fixed
+
+- **Reconnect after standby** — Retry failed Remote connection tests with a delay that grows from 2 to 30 seconds, allowing Integration Manager to recover when Wi-Fi is not ready immediately after wake. Retries stop when the Remote enters standby or disconnects.
+
+---
+
+## v3.3.1 - 2026-11-14
+
+### Fixed
+
+- **Web server session cleanup** — Prevent HTTP sessions from surviving their event loop during shutdown, server failures, and restarts, which could cause "Event loop is closed" errors when loading installed integrations.
 
 ---
 
