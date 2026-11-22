@@ -19,6 +19,7 @@ import { Route as IntegrationsRouteImport } from './routes/integrations'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as PortMovedRouteImport } from './routes/port-moved'
+import { Route as RemoteRouteImport } from './routes/remote'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SystemMessagesRouteImport } from './routes/system-messages'
 
@@ -72,6 +73,11 @@ const PortMovedRoute = PortMovedRouteImport.update({
   path: '/port-moved',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RemoteRoute = RemoteRouteImport.update({
+  id: '/remote',
+  path: '/remote',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/logs': typeof LogsRoute
   '/notifications': typeof NotificationsRoute
   '/port-moved': typeof PortMovedRoute
+  '/remote': typeof RemoteRoute
   '/settings': typeof SettingsRoute
   '/system-messages': typeof SystemMessagesRoute
 }
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/logs': typeof LogsRoute
   '/notifications': typeof NotificationsRoute
   '/port-moved': typeof PortMovedRoute
+  '/remote': typeof RemoteRoute
   '/settings': typeof SettingsRoute
   '/system-messages': typeof SystemMessagesRoute
 }
@@ -123,6 +131,7 @@ export interface FileRoutesById {
   '/logs': typeof LogsRoute
   '/notifications': typeof NotificationsRoute
   '/port-moved': typeof PortMovedRoute
+  '/remote': typeof RemoteRoute
   '/settings': typeof SettingsRoute
   '/system-messages': typeof SystemMessagesRoute
 }
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
     | '/logs'
     | '/notifications'
     | '/port-moved'
+    | '/remote'
     | '/settings'
     | '/system-messages'
   fileRoutesByTo: FileRoutesByTo
@@ -153,6 +163,7 @@ export interface FileRouteTypes {
     | '/logs'
     | '/notifications'
     | '/port-moved'
+    | '/remote'
     | '/settings'
     | '/system-messages'
   id:
@@ -167,6 +178,7 @@ export interface FileRouteTypes {
     | '/logs'
     | '/notifications'
     | '/port-moved'
+    | '/remote'
     | '/settings'
     | '/system-messages'
   fileRoutesById: FileRoutesById
@@ -182,6 +194,7 @@ export interface RootRouteChildren {
   LogsRoute: typeof LogsRoute
   NotificationsRoute: typeof NotificationsRoute
   PortMovedRoute: typeof PortMovedRoute
+  RemoteRoute: typeof RemoteRoute
   SettingsRoute: typeof SettingsRoute
   SystemMessagesRoute: typeof SystemMessagesRoute
 }
@@ -258,6 +271,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PortMovedRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/remote': {
+      id: '/remote'
+      path: '/remote'
+      fullPath: '/remote'
+      preLoaderRoute: typeof RemoteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -286,6 +306,7 @@ const rootRouteChildren: RootRouteChildren = {
   LogsRoute: LogsRoute,
   NotificationsRoute: NotificationsRoute,
   PortMovedRoute: PortMovedRoute,
+  RemoteRoute: RemoteRoute,
   SettingsRoute: SettingsRoute,
   SystemMessagesRoute: SystemMessagesRoute,
 }

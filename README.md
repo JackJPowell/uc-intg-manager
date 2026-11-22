@@ -16,6 +16,20 @@ A web-based integration manager for [Unfolded Circle Remote Two/3](https://www.u
 
 ## Features
 
+### Remote screen
+
+Open `/manager/remote` on the manager's web server, or choose **Remote view** in the sidebar, for a dedicated Remote interface. It shares the manager's currently active Remote; its name is shown at the top.
+
+- **Updates:** review disconnected/error integrations and available updates, and confirm each update individually. Firmware compatibility and management restrictions still apply. Manager self-updates use the full interface.
+- **Entity issues:** inspect missing (orphaned) and unused entities grouped by activity. Missing entities can still be referenced by steps or controls. Both lists offer **Remove from activity**, with confirmation. Missing-entity cleanup rechecks availability and removes broken activity steps and controls. Unused cleanup skips entities that have become referenced since the scan. Configured entities remain on the Remote. The main Diagnostics page offers the same cleanup controls.
+- **System:** view unread system-message counts and expandable summaries without marking messages read, or restart/shut down the active Remote with confirmation.
+
+Use left/right on the D-pad, swipe horizontally, or tap the bottom arrows to switch pages without reloading. Up/down scrolls the content; touch scrolling, Page Up/Down, Home and End are also supported. Tab moves between buttons and Enter activates them. The confirmation initially focuses Cancel. The webview's default Back action closes the webview; Escape cancels a confirmation when mapped to a key.
+
+The dedicated layout follows the app's colors and typography, with large controls and a fixed header/footer around vertically scrolling content. It fills the available viewport, including shorter activity widgets, instead of adding a breakpoint to the full manager. Hardware sizes are [480 × 800 for Remote 3 and 480 × 854 for Remote Two](https://github.com/unfoldedcircle/remote-ui/blob/main/docs/adr/0008-remote-two-and-remote-3-with-feature-parity.md).
+
+This adds the view only: it does not register a webview entity or require the `feat/webview` library branches. When configuring a webview manually on compatible firmware, use an absolute URL ending in `/manager/remote`, default arrow-key mappings, 100% zoom, and no periodic page reload. The screen refreshes status, updates, and unread messages once a minute while their pages are visible; entity scans run when their page opens or when refreshed. Entity removal requires an unfurled release containing `helpers.remove_activity_entities(...)` (unused cleanup uses `only_unused=True`; missing-entity cleanup uses `False` after verifying that the entity is still missing).
+
 ### Release Notes and Version Management
 
 Access comprehensive release information directly from the web interface.

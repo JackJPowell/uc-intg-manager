@@ -106,3 +106,11 @@ a { color: inherit; text-decoration: none; }.sr-only { position: absolute; width
 .bundle-note a { display:inline-flex; align-items:center; gap:.2rem; color:#a9c6ed; }
 .bundle-note svg { width:12px; height:12px; }
 .capability-row .bundled-in { color:#a9c6ed; }
+/* Keep entity actions beside the ID control, without an extra row. */
+.entity-reference>div>.entity-reference-actions { display:inline-flex; align-items:center; gap:.2rem; flex:none; overflow:visible; }
+.entity-reference .entity-id-toggle { min-width:44px; min-height:44px; }
+.entity-reference .entity-cleanup-action { display:inline-flex; align-items:center; justify-content:center; flex:none; width:44px; height:44px; padding:0; border:1px solid transparent; border-radius:.4rem; color:#e4a1a9; background:transparent; }
+.entity-reference .entity-cleanup-action svg { width:16px; height:16px; }
+.entity-reference .entity-cleanup-action:hover:not(:disabled) { color:#ffc1c5; background:#492a34; border-color:#79464f; }
+.entity-reference .entity-cleanup-action:active:not(:disabled) { background:#603440; }
+.entity-reference .entity-cleanup-action:focus-visible,.entity-reference .entity-id-toggle:focus-visible { outline:2px solid #8abaff; outline-offset:2px; }

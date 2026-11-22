@@ -1,0 +1,67 @@
+/* Dedicated webview surface: fill the supplied viewport, including activity widgets. */
+body.remote-mode { min-width: 0; min-height: 0; background: #101a2d; overflow: hidden; }
+.remote-app { position: fixed; inset: 0; display: flex; flex-direction: column; max-width: 480px; margin-inline: auto; background: #101a2d; color: #edf2f8; font-size: 22px; line-height: 1.45; }
+.remote-app * { min-width: 0; }
+.remote-app button { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 64px; padding: 12px 16px; border: 1px solid #435a7c; border-radius: 12px; color: #edf2f8; background: #1b2b48; font-size: 21px; font-weight: 650; touch-action: manipulation; }
+.remote-app button:focus-visible, .remote-scroll:focus-visible { outline: 3px solid #a8cdff; outline-offset: -3px; }
+.remote-app button:active { background: #344d74; }
+.remote-app svg { flex: none; width: 26px; height: 26px; }
+.remote-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid #2e4262; background: #13213a; }
+.remote-header div { display: flex; flex-direction: column; overflow: hidden; }
+.remote-header span { color: #aabbd4; font-size: 17px; }
+.remote-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 22px; }
+.remote-header button { flex: none; width: 64px; padding: 0; }
+.remote-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 24px 20px; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: #587498 transparent; }
+.remote-app h1, .remote-app h2, .remote-app h3, .remote-app p { margin: 0; }
+.remote-app h1 { font-size: 34px; line-height: 1.15; letter-spacing: -.04em; }
+.remote-app h2 { font-size: 25px; line-height: 1.25; }
+.remote-app h3 { font-size: 21px; }
+.remote-app p { color: #b6c6dd; margin-block: 12px; }
+.remote-app small, .remote-app code { display: block; font-size: 18px; color: #b6c6dd; }
+.remote-app .remote-eyebrow { font-size: 16px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 8px; color: #95b8ec; }
+.remote-app .remote-connection { font-size:17px; line-height:1.35; margin:3px 0 0; }
+.remote-title { margin-bottom:24px; }
+.remote-app .remote-error { color: #ffb9b5; }
+.remote-app .remote-message { padding: 16px; border-radius: 10px; background: #203e3b; color: #c2ead7; }
+.remote-update, .remote-system { padding: 22px 0; border-top: 1px solid #2e4262; }
+.remote-update button, .remote-system button, .remote-confirm button { width: 100%; margin-top: 16px; }
+.remote-app .remote-primary { background: #82b4ff; color: #112340; border-color: #82b4ff; }
+.remote-app .remote-primary:active { background: #a8cdff; }
+.remote-app .remote-danger { background: #462a35; color: #ffc3bf; border-color: #86505b; }
+.remote-empty { padding-block: 36px; }
+.remote-empty > svg { color: #9bd8bb; width: 42px; height: 42px; margin-bottom: 16px; }
+.remote-issues { margin-bottom:28px; padding:0 14px 12px; border:1px solid #79633f; border-radius:12px; background:#172337; overflow:hidden; }
+.remote-issues.danger { border-color:#86505b; background:#1c2236; }
+.remote-issues-heading { display:grid; grid-template-columns:26px minmax(0,1fr) auto; align-items:center; gap:10px; margin:0 -14px 16px; padding:16px 14px; border-bottom:1px solid #79633f; background:#383127; color:#f4cd91; }
+.remote-issues.danger .remote-issues-heading { border-color:#86505b; background:#3d2936; color:#ffc0c5; }
+.remote-issues-heading h2 { font-size:24px; }
+.remote-issue-count { display:grid; place-items:center; min-width:34px; min-height:34px; padding:2px 8px; border-radius:8px; background:#172337; font-size:21px; font-weight:700; }
+.remote-issues article { margin-top: 22px; }
+.remote-issues ul { padding: 0; margin: 10px 0 0; list-style: none; }
+.remote-issues li { padding: 14px 0; border-bottom: 1px solid #263852; }
+.remote-issues li strong { font-size: 21px; font-weight: 550; }
+.remote-issues code { margin-top: 4px; font-size: 16px; }
+.remote-app .remote-clear { display: flex; align-items: center; gap: 8px; color: #a6dfc1; }
+.remote-app .remote-footnote { font-size: 18px; line-height: 1.5; margin-top: 24px; }
+.remote-app .remote-target { color: #edf2f8; font-weight: 650; }
+.remote-confirm > p { margin-block: 20px; }
+.remote-pagination { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px max(8px, env(safe-area-inset-bottom)); border-top: 1px solid #2e4262; background: #13213a; }
+.remote-pagination > button { width: 64px; padding: 0; flex: none; background: transparent; border-color: transparent; }
+.remote-pagination > div { text-align: center; }
+.remote-pagination span { font-size: 18px; font-weight: 650; }
+.remote-dots { display: flex; justify-content: center; gap: 10px; padding-top: 8px; }
+.remote-dots i { height: 7px; width: 7px; border-radius: 50%; background: #536987; }
+.remote-dots i.active { background: #97c0ff; }
+@media (prefers-reduced-motion: reduce) { .remote-app .spin { animation: none; } }
+.remote-issues li { display:flex; align-items:center; gap:12px; }
+.remote-entity-copy { flex:1; min-width:0; }
+.remote-app .remote-entity-remove { flex:none; width:64px; min-height:64px; padding:0; color:#ffc3bf; border-color:transparent; background:transparent; }
+.remote-app .remote-entity-remove:active { background:#462a35; }
+.remote-attention, .remote-messages { border-top: 1px solid #2e4262; padding-block: 22px; }
+.remote-attention h2, .remote-messages h2 { display: flex; justify-content: space-between; gap: 12px; }
+.remote-attention h2 span, .remote-messages h2 span { color: #f4c482; }
+.remote-attention article, .remote-messages article { padding-top: 20px; }
+.remote-messages details { margin-top: 12px; }
+.remote-messages summary { display: flex; align-items: center; min-height: 64px; padding: 12px 16px; border: 1px solid #435a7c; border-radius: 12px; color: #b7d4ff; cursor: pointer; }
+.remote-messages summary:focus-visible { outline: 3px solid #a8cdff; }
+.remote-messages details p { white-space: pre-wrap; }

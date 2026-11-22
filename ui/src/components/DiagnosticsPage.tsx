@@ -2,25 +2,38 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, ChevronRight, CircleCheck, Cpu, Download, ExternalLink, Link2, Power, RefreshCw, ShieldAlert, Trash2, TriangleAlert, Wrench } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api, type DiagnosticActivityResult, type DiagnosticEntity, type IrCodeset } from '../lib/api'
+import { activityCleanupDescription, invalidateActivityScans, type ActivityCleanupSelection } from '../lib/activityCleanup'
 import { Modal } from './Modal'
 
-function EntityReference({ entity }: { entity: DiagnosticEntity }) {
+type ScanEntitySelection = Omit<ActivityCleanupSelection, 'kind' | 'remoteId'>
+
+function EntityReference({ entity, onRemove, disabled }: { entity: DiagnosticEntity; onRemove?: () => void; disabled?: boolean }) {
   const [showId, setShowId] = useState(false)
   const entityId = String(entity.entity_id ?? entity.id ?? '')
   const name = String((entity.localized_name ?? entityId) || 'Unknown entity')
-  return <li className={showId ? 'entity-reference id-visible' : 'entity-reference'}><div><span>{name}</span>{entity.integration?.localized_name && <small>{entity.integration.localized_name}</small>} {entityId && <button type="button" className="entity-id-toggle" aria-expanded={showId} onClick={() => setShowId(value => !value)}>{showId ? 'Hide ID' : 'ID'}</button>}</div>{showId && <code>{entityId}</code>}</li>
+  return <li className={showId ? 'entity-reference id-visible' : 'entity-reference'}>
+    <div>
+      <span title={name}>{name}</span>
+      {entity.integration?.localized_name && <small>{entity.integration.localized_name}</small>}
+      {entityId && <span className="entity-reference-actions">
+        <button type="button" className="entity-id-toggle" aria-expanded={showId} onClick={() => setShowId(value => !value)}>{showId ? 'Hide ID' : 'ID'}</button>
+        {onRemove && <button type="button" className="entity-cleanup-action" title="Remove from activity" aria-label={`Remove ${name} from activity`} disabled={disabled} onClick={onRemove}><Trash2 aria-hidden="true" /></button>}
+      </span>}
+    </div>
+    {showId && <code>{entityId}</code>}
+  </li>
 }
 
-function ScanResult({ result, empty, warning }: { result?: DiagnosticActivityResult; empty: string; warning: string }) {
+export function ScanResult({ result, empty, warning, onRemove, disabled }: { result?: DiagnosticActivityResult; empty: string; warning: string; onRemove?: (selection: ScanEntitySelection) => void; disabled?: boolean }) {
   if (!result) return null
-  const activities = Object.entries(result.activities)
+  const activities = Object.entries(result.activities).filter(([, activity]) => activity.entities.length)
   if (!activities.length) return <div className="diagnostics-clear"><CircleCheck />{empty}</div>
-  return <div className="diagnostics-results">{activities.map(([id, activity]) => <div className="diagnostics-activity" key={id}><div><strong>{activity.name}</strong><span>{activity.entities.length} {activity.entities.length === 1 ? 'entity' : 'entities'}</span></div><ul>{activity.entities.map((entity, index) => <EntityReference entity={entity} key={`${entity.id ?? entity.entity_id ?? index}`} />)}</ul></div>)}<p className="diagnostics-help"><ShieldAlert />{warning}</p></div>
+  return <div className="diagnostics-results">{activities.map(([id, activity]) => <div className="diagnostics-activity" key={id}><div><strong>{activity.name}</strong><span>{activity.entities.length} {activity.entities.length === 1 ? 'entity' : 'entities'}</span></div><ul>{activity.entities.map((entity, index) => <EntityReference entity={entity} disabled={disabled} onRemove={onRemove ? () => onRemove({ activityId: id, activityName: activity.name, entityId: String(entity.entity_id ?? entity.id ?? ''), entityName: String(entity.localized_name ?? entity.entity_id ?? entity.id ?? 'Unknown entity') }) : undefined} key={`${entity.id ?? entity.entity_id ?? index}`} />)}</ul></div>)}<p className="diagnostics-help"><ShieldAlert />{warning}</p></div>
 }
 
-function ScanPanel({ title, description, queryKey, load, empty, warning, tone }: { title: string; description: string; queryKey: string; load: () => Promise<DiagnosticActivityResult>; empty: string; warning: string; tone: 'danger' | 'warning' }) {
-  const scan = useQuery({ queryKey: ['diagnostics', queryKey], queryFn: load })
-  return <article className={`diagnostics-panel ${tone}`}><header><div className="diagnostics-panel-icon"><Activity /></div><div><h2>{title}</h2><p>{description}</p></div><button className="secondary-action" type="button" onClick={() => scan.refetch()} disabled={scan.isFetching}><RefreshCw className={scan.isFetching ? 'spin' : ''} /> Scan</button></header>{scan.isError ? <div className="notice error"><TriangleAlert />{scan.error.message}</div> : <ScanResult result={scan.data} empty={empty} warning={warning} />}</article>
+function ScanPanel({ title, description, queryKey, load, empty, warning, tone, remoteId, onRemove, disabled }: { title: string; description: string; queryKey: string; load: () => Promise<DiagnosticActivityResult>; empty: string; warning: string; tone: 'danger' | 'warning'; remoteId?: string | null; onRemove: (selection: ScanEntitySelection) => void; disabled: boolean }) {
+  const scan = useQuery({ queryKey: ['diagnostics', remoteId, queryKey], queryFn: load, enabled: Boolean(remoteId) })
+  return <article className={`diagnostics-panel ${tone}`}><header><div className="diagnostics-panel-icon"><Activity /></div><div><h2>{title}</h2><p>{description}</p></div><button className="secondary-action" type="button" onClick={() => scan.refetch()} disabled={scan.isFetching}><RefreshCw className={scan.isFetching ? 'spin' : ''} /> Scan</button></header>{scan.isError ? <div className="notice error" role="alert"><TriangleAlert />{scan.error.message}</div> : <ScanResult result={scan.data} empty={empty} warning={warning} onRemove={onRemove} disabled={disabled || scan.isFetching} />}</article>
 }
 
 function codesetId(codeset: IrCodeset) { return String(codeset.device_id ?? codeset.id ?? '') }
@@ -28,6 +41,27 @@ function codesetName(codeset: IrCodeset) { return String(codeset.device_name ?? 
 
 export function DiagnosticsPage() {
   const client = useQueryClient()
+  const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap })
+  const remoteId = bootstrap.data?.activeRemoteId
+  const [cleanup, setCleanup] = useState<ActivityCleanupSelection | null>(null)
+  const [cleanupMessage, setCleanupMessage] = useState('')
+  const removeEntity = useMutation({
+    mutationFn: (selection: ActivityCleanupSelection) => api.removeActivityEntity(selection),
+    onSuccess: (_result, selection) => {
+      if (selection.remoteId !== remoteId) return
+      setCleanup(null)
+      setCleanupMessage(`${selection.entityName} removed from ${selection.activityName}.`)
+    },
+    // Rescan after failures too: unfurled may have completed some writes.
+    onSettled: (_result, _error, selection) => invalidateActivityScans(client, selection.remoteId),
+  })
+  useEffect(() => { setCleanup(null); setCleanupMessage(''); removeEntity.reset() }, [remoteId])
+  const requestCleanup = (kind: 'orphaned' | 'unused', selection: ScanEntitySelection) => {
+    if (!remoteId) return
+    removeEntity.reset()
+    setCleanupMessage('')
+    setCleanup({ ...selection, kind, remoteId })
+  }
   const [reassociate, setReassociate] = useState<string | null>(null)
   const [remoteName, setRemoteName] = useState('')
   const [confirmPowerOff, setConfirmPowerOff] = useState(false)
@@ -73,11 +107,18 @@ export function DiagnosticsPage() {
 
     <section className="dock-firmware" aria-labelledby="dock-firmware-heading"><header><div><p className="eyebrow">Connected docks</p><h2 id="dock-firmware-heading">Dock firmware</h2><p>Firmware versions and updates for docks connected to this Remote.</p></div>{dockFirmware.data && <span>{dockFirmware.data.length} {dockFirmware.data.length === 1 ? 'dock' : 'docks'}</span>}</header>{dockFirmware.isError ? <div className="notice error"><TriangleAlert />{dockFirmware.error.message}</div> : !dockFirmware.data?.length ? <div className="dock-firmware-empty"><CircleCheck />No connected docks found.</div> : <div className="dock-firmware-list">{dockFirmware.data.map(dock => <article className={`dock-firmware-item ${dock.updateAvailable ? 'update-ready' : ''}`} key={dock.id}><div className="firmware-icon"><Cpu /></div><div><strong>{dock.name}</strong><p>{dock.model} · {dock.error ? 'Firmware status unavailable' : dock.updateAvailable ? `${dock.availableVersion ?? 'A newer version'} is ready` : 'Up to date'}</p>{dock.error && <small>{dock.error}</small>}</div><div className="dock-firmware-meta"><span>Installed</span><strong>{dock.installedVersion}</strong>{dock.updateAvailable && !dock.error && <button className="primary-action" type="button" onClick={() => installDockFirmware.mutate(dock.id)} disabled={installDockFirmware.isPending}><Download /> {installDockFirmware.isPending && installDockFirmware.variables === dock.id ? 'Starting…' : 'Update'}</button>}</div></article>)}</div>}{installDockFirmware.isError && <div className="notice error"><TriangleAlert />{installDockFirmware.error.message}</div>}</section>
 
-    <div className="diagnostics-section-heading"><div><p className="eyebrow">Configuration hygiene</p><h2>Activity references</h2></div><p>These checks are read-only. Fix references in the Remote Configurator after reviewing the result.</p></div>
-    <div className="diagnostics-scan-grid"><ScanPanel title="Orphaned entities" description="Entities referenced by an activity but no longer supplied by its integration." queryKey="orphaned" load={api.orphanedEntities} empty="No orphaned entity references found." warning="Missing references can prevent an activity from working correctly." tone="danger" /><ScanPanel title="Unused activity entities" description="Entities available to an activity that are not used by any step." queryKey="unused" load={api.unusedActivityEntities} empty="Every activity entity is currently in use." warning="Review these before removal; an unused entity may be intended for a future step." tone="warning" /></div>
+    <div className="diagnostics-section-heading"><div><p className="eyebrow">Configuration hygiene</p><h2>Activity references</h2></div><p>Review each finding and remove it from its activity. Missing-entity cleanup also removes its broken steps and controls.</p></div>
+    {cleanupMessage && <div className="notice success" role="status"><CircleCheck />{cleanupMessage}</div>}
+    <div className="diagnostics-scan-grid"><ScanPanel remoteId={remoteId} onRemove={selection => requestCleanup('orphaned', selection)} disabled={!remoteId || removeEntity.isPending} title="Orphaned entities" description="Entities referenced by an activity but no longer supplied by its integration." queryKey="orphaned" load={api.orphanedEntities} empty="No orphaned entity references found." warning="Missing references can prevent an activity from working correctly." tone="danger" /><ScanPanel remoteId={remoteId} onRemove={selection => requestCleanup('unused', selection)} disabled={!remoteId || removeEntity.isPending} title="Unused activity entities" description="Entities included in an activity that are not referenced by steps or controls." queryKey="unused" load={api.unusedActivityEntities} empty="Every activity entity is currently in use." warning="Review these before removal; an unused entity may be intended for a future step." tone="warning" /></div>
 
     <section className="diagnostics-section-heading"><div><p className="eyebrow">Infrared library</p><h2>Orphaned IR codesets</h2></div><button className="secondary-action" type="button" onClick={() => codesets.refetch()} disabled={codesets.isFetching}><RefreshCw className={codesets.isFetching ? 'spin' : ''} /> Scan</button></section>
     <article className="diagnostics-codesets">{codesets.isError ? <div className="notice error"><TriangleAlert />{codesets.error.message}</div> : !codesets.data?.length ? <div className="diagnostics-clear"><CircleCheck />No unassigned custom IR codesets found.</div> : <div className="codeset-list">{codesets.data.map((codeset, index) => { const id = codesetId(codeset); const active = reassociate === id; return <div className="codeset-row" key={id || index}><div className="codeset-name"><Wrench /><div><strong>{codesetName(codeset)}</strong><span>{id || 'Unknown codeset ID'}</span></div></div>{active ? <form className="codeset-form" onSubmit={(event) => { event.preventDefault(); if (remoteName.trim()) attachCodeset.mutate({ id, name: remoteName.trim() }) }}><input autoFocus value={remoteName} onChange={(event) => setRemoteName(event.target.value)} placeholder="New remote name" /><button className="primary-action" disabled={attachCodeset.isPending || !remoteName.trim()}>Create remote</button><button className="codeset-cancel" type="button" onClick={() => { setReassociate(null); setRemoteName('') }}>Cancel</button></form> : <div className="action-row"><button className="secondary-action" type="button" onClick={() => setReassociate(id)} disabled={!id || removeCodeset.isPending}><Link2 /> Re-associate</button><button className="icon-action danger" type="button" aria-label={`Delete ${codesetName(codeset)}`} onClick={() => setCodesetToDelete(codeset)} disabled={!id || removeCodeset.isPending}><Trash2 /></button></div>}</div>})}</div>}</article>
+    {cleanup && <Modal title={`Remove ${cleanup.kind === 'orphaned' ? 'missing' : 'unused'} entity?`} close={() => { if (!removeEntity.isPending) setCleanup(null) }}><div className="confirm-dialog">
+      <p>{activityCleanupDescription(cleanup)}</p>
+      <p><strong>Remote: {bootstrap.data?.remotes.find(remote => remote.id === cleanup.remoteId)?.name ?? cleanup.remoteId}</strong></p>
+      {removeEntity.isError && <div className="notice error" role="alert">{removeEntity.error.message}</div>}
+      <div><button className="secondary-action" type="button" autoFocus disabled={removeEntity.isPending} onClick={() => setCleanup(null)}>Cancel</button><button className="danger-action" type="button" disabled={removeEntity.isPending} onClick={() => removeEntity.mutate(cleanup)}>{removeEntity.isPending ? 'Removing…' : 'Remove from activity'}</button></div>
+    </div></Modal>}
     {codesetToDelete && <Modal title={`Delete ${codesetName(codesetToDelete)}?`} close={() => { if (!removeCodeset.isPending) setCodesetToDelete(null) }}><div className="confirm-dialog"><p>This removes the unassigned IR codeset from the Remote. This cannot be undone.</p><div><button className="secondary-action" type="button" onClick={() => setCodesetToDelete(null)} disabled={removeCodeset.isPending}>Cancel</button><button className="danger-action" type="button" onClick={() => removeCodeset.mutate(codesetId(codesetToDelete))} disabled={removeCodeset.isPending}>{removeCodeset.isPending ? 'Deleting…' : 'Delete codeset'}</button></div></div></Modal>}
 
     <section className="diagnostics-section-heading power-heading"><div><p className="eyebrow">Remote controls</p><h2>Power &amp; restart</h2></div><p>These commands are sent directly to the active Remote.</p></section>

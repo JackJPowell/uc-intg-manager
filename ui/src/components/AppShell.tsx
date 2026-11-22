@@ -97,6 +97,7 @@ export function AppShell({ children }: PropsWithChildren) {
           <Icon aria-hidden="true" /><span>{label}</span>
         </Link>)}
         <div className="sidebar-foot">
+          <Link to="/remote"><Cable aria-hidden="true" /><span>Remote view</span></Link>
           {bootstrap.data?.remoteConfiguratorUrl && <a href={bootstrap.data.remoteConfiguratorUrl} target="_blank" rel="noreferrer"><ExternalLink /><span>Web Configurator</span></a>}
         </div>
       </nav>

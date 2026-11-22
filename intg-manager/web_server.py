@@ -4116,7 +4116,7 @@ async def api_v1_system_messages():
         service = get_system_messages_service()
         unread = service.get_unread_messages()
         read = service.get_read_messages()
-        if unread:
+        if unread and request.args.get("markRead", "true").lower() != "false":
             service.mark_messages_as_read([message.id for message in unread])
 
         def serialize(message):
@@ -4344,6 +4344,8 @@ async def get_unused_activity_entities():
     """Return unused activity entities grouped by activity as JSON."""
     if not _get_active_remote_client():
         return jsonify({"data": {"activities": {}}})
+    if not is_remote_online(get_active_remote_id()):
+        return _api_error("remote_offline", "The active remote is offline", 503)
 
     try:
         unused = (
@@ -4380,6 +4382,82 @@ async def get_unused_activity_entities():
     except UnfurledError as e:
         _LOG.error("Failed to fetch unused activity entities: %s", e)
         return _api_error("unused_entities_unavailable", str(e), 502)
+
+
+@app.route("/api/v1/diagnostics/unused-activity-entities/remove", methods=["POST"])
+async def remove_unused_activity_entity():
+    """Remove one unused activity member, preserving configured Remote entities."""
+    return await _remove_activity_entity(only_unused=True)
+
+
+@app.route("/api/v1/diagnostics/orphaned-entities/remove", methods=["POST"])
+async def remove_orphaned_activity_entity():
+    """Remove one missing activity member and its broken references."""
+    return await _remove_activity_entity(only_unused=False)
+
+
+async def _remove_activity_entity(*, only_unused: bool):
+    """Share validation, locking and verification for activity cleanup."""
+    data = await request.get_json(silent=True)
+    if not isinstance(data, dict) or any(
+        not isinstance(data.get(key), str) or not data[key].strip()
+        for key in ("remoteId", "activityId", "entityId")
+    ):
+        return _api_error(
+            "invalid_entity_selection", "remoteId, activityId and entityId are required"
+        )
+    remote_id = get_active_remote_id()
+    if data["remoteId"] != remote_id:
+        return _api_error(
+            "remote_changed", "The selected Remote changed. Refresh and try again.", 409
+        )
+    client = _get_active_remote_client()
+    if not client or not is_remote_online(remote_id):
+        return _api_error("remote_offline", "The active Remote is offline", 503)
+    operation = "remove unused activity entity" if only_unused else "remove orphaned activity entity"
+    if await _try_acquire_operation_lock(operation, remote_id):
+        return _api_error(
+            "operation_in_progress", "Another operation is already in progress on this Remote.", 409
+        )
+    try:
+        activity_id, entity_id = data["activityId"], data["entityId"]
+        if not only_unused:
+            # Forced cleanup is restricted to entities that are still missing.
+            # Never trust the scan result from the browser's earlier request.
+            current = await client.api.get_activity(activity_id)
+            included = current["options"]["included_entities"]
+            if not any(
+                entity.get("entity_id") == entity_id and entity.get("available") is False
+                for entity in included
+            ):
+                return _api_error(
+                    "entity_not_orphaned",
+                    "The entity is no longer missing. Rescan the activity before removing it.", 409
+                )
+        # Unused cleanup always rechecks usage; orphan cleanup also removes
+        # broken references through unfurled's explicit forced-removal option.
+        await client.helpers.remove_activity_entities(
+            activity_id, [entity_id], only_unused=only_unused
+        )
+        activity = await client.api.get_activity(activity_id)
+        included = activity["options"]["included_entities"]
+        if any(entity.get("entity_id") == entity_id for entity in included):
+            return _api_error(
+                "entity_in_use" if only_unused else "entity_removal_incomplete",
+                "The entity was not removed. It may now be in use; rescan the activity."
+                if only_unused else "The missing entity was not removed. Rescan the activity.", 409
+            )
+        return jsonify(
+            {"data": {"activityId": activity_id, "entityId": entity_id, "removed": True}}
+        )
+    except Exception as error:
+        _LOG.exception("Failed to remove activity entity: %s", error)
+        return _api_error(
+            "entity_removal_failed",
+            "Removal could not be verified. Rescan the activity before retrying.", 502
+        )
+    finally:
+        await _release_operation_lock(remote_id, operation)
 
 
 @app.route("/api/v1/diagnostics/orphaned-ir-codesets")
