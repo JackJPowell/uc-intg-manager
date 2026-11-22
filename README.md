@@ -30,6 +30,8 @@ The dedicated layout follows the app's colors and typography, with large control
 
 This adds the view only: it does not register a webview entity or require the `feat/webview` library branches. When configuring a webview manually on compatible firmware, use an absolute URL ending in `/manager/remote`, default arrow-key mappings, 100% zoom, and no periodic page reload. The screen refreshes status, updates, and unread messages once a minute while their pages are visible; entity scans run when their page opens or when refreshed. Entity removal requires an unfurled release containing `helpers.remove_activity_entities(...)` (unused cleanup uses `only_unused=True`; missing-entity cleanup uses `False` after verifying that the entity is still missing).
 
+On firmware supporting the [WebView device state API](https://github.com/unfoldedcircle/core-api/blob/feat/webview-entity/doc/entities/entity_webview.md#device-state-for-web-pages) (WebView library 0.9.0 or newer), enable `device_api: true` in the WebView options. The Remote view pauses polling while hidden or suspended and refreshes the selected Remote's status and displayed page after waking, retrying reads briefly while Wi-Fi recovers. Update reconnection checks account for time spent asleep. Waking never repeats updates, removals, restarts, or shutdowns. Decorative spinners stop in power-saving mode. Ordinary browsers and older firmware use page visibility as a fallback. Battery and charging information continue to come from the manager's selected Remote; background backups, notifications, and update checks are unaffected.
+
 ### Release Notes and Version Management
 
 Access comprehensive release information directly from the web interface.

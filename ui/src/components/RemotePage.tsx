@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type SystemMessage, type DiagnosticActivityResult } from '../lib/api'
 import { activityCleanupDescription, invalidateActivityScans, type ActivityCleanupSelection } from '../lib/activityCleanup'
 import type { Integration } from '../lib/models'
+import { reconnectOutcome, refreshRemoteView } from '../lib/remoteRecovery'
+import { useRemoteLifecycle } from '../lib/useRemoteLifecycle'
 import './remote.css'
 
 const pages = ['Updates', 'Entity issues', 'System'] as const
@@ -48,19 +50,23 @@ export function RemotePage() {
   const [page, setPage] = useState(0)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [message, setMessage] = useState('')
-  const [reconnecting, setReconnecting] = useState(false)
+  const [reconnectDeadline, setReconnectDeadline] = useState<number | null>(null)
+  const reconnecting = reconnectDeadline !== null
+  const currentPage = useRef(page)
+  currentPage.current = page
+  const { active, recovering } = useRemoteLifecycle(isActive => refreshRemoteView(client, () => currentPage.current, isActive))
   const scroll = useRef<HTMLDivElement>(null)
   const focusAfterConfirmation = useRef<HTMLElement | null>(null)
   const cancelButton = useRef<HTMLButtonElement>(null)
   const touch = useRef<{ x: number; y: number } | null>(null)
-  const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap, refetchInterval: 60_000 })
+  const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap, refetchInterval: active ? 60_000 : false })
   const remoteId = bootstrap.data?.activeRemoteId
   const remote = bootstrap.data?.remotes.find(item => item.id === remoteId)
-  const status = useQuery({ queryKey: ['remote-view', remoteId, 'status'], queryFn: api.status, enabled: Boolean(remoteId), refetchInterval: 60_000 })
-  const integrations = useQuery({ queryKey: ['remote-view', remoteId, 'integrations'], queryFn: api.integrations, enabled: Boolean(remoteId) && page === 0, refetchInterval: reconnecting ? 3_000 : 60_000 })
+  const status = useQuery({ queryKey: ['remote-view', remoteId, 'status'], queryFn: api.status, enabled: Boolean(remoteId), refetchInterval: active ? 60_000 : false })
+  const integrations = useQuery({ queryKey: ['remote-view', remoteId, 'integrations'], queryFn: api.integrations, enabled: Boolean(remoteId) && page === 0, refetchInterval: active ? (reconnecting ? 3_000 : 60_000) : false })
   const orphaned = useQuery({ queryKey: ['remote-view', remoteId, 'orphaned'], queryFn: api.orphanedEntities, enabled: Boolean(remoteId) && page === 1 })
   const unused = useQuery({ queryKey: ['remote-view', remoteId, 'unused'], queryFn: api.unusedActivityEntities, enabled: Boolean(remoteId) && page === 1 })
-  const messages = useQuery({ queryKey: ['remote-view', 'system-messages'], queryFn: api.systemMessageSummary, enabled: page === 2, refetchInterval: 60_000 })
+  const messages = useQuery({ queryKey: ['remote-view', 'system-messages'], queryFn: api.systemMessageSummary, enabled: page === 2, refetchInterval: active ? 60_000 : false })
   const action = useMutation({
     mutationFn: async (value: Confirmation) => value.kind === 'update' ? api.updateIntegration(value.item.id) : value.kind === 'remove' ? api.removeActivityEntity(value.selection) : value.kind === 'restart' ? api.rebootRemote() : api.powerOffRemote(),
     onSuccess: (result, value) => {
@@ -68,7 +74,7 @@ export function RemotePage() {
       setConfirmation(null)
       setMessage(value.kind === 'remove' ? `${value.selection.entityName} removed from ${value.selection.activityName}.` : value.kind === 'update' ? `${value.item.name} updated.${'reconnecting' in result && result.reconnecting ? ' Reconnecting…' : ''}` : value.kind === 'restart' ? 'Restart requested. The Remote will briefly go offline.' : 'Shutdown requested. Turn the Remote back on using its power button.')
       if (value.kind === 'update') {
-        setReconnecting('reconnecting' in result && result.reconnecting)
+        setReconnectDeadline('reconnecting' in result && result.reconnecting ? Date.now() + 60_000 : null)
         void client.invalidateQueries({ queryKey: ['remote-view', remoteId, 'integrations'] })
         void client.invalidateQueries({ queryKey: ['installed', 'integrations'] })
       }
@@ -81,7 +87,7 @@ export function RemotePage() {
     },
   })
   const refresh = useMutation({ mutationFn: api.refreshIntegrations, onSuccess: () => client.invalidateQueries({ queryKey: ['remote-view', remoteId, 'integrations'] }) })
-  const busy = action.isPending || refresh.isPending || reconnecting
+  const busy = action.isPending || refresh.isPending || reconnecting || recovering
   const online = status.data?.online === true && !status.isError && !bootstrap.isError
   const updates = (integrations.data ?? []).filter(item => item.updateAvailable).sort((a, b) => a.name.localeCompare(b.name))
   const changePage = (direction: number) => { if (!confirmation && !action.isPending) setPage(current => (current + direction + pages.length) % pages.length) }
@@ -101,25 +107,28 @@ export function RemotePage() {
     if (confirmation) cancelButton.current?.focus()
     else focusAfterConfirmation.current?.focus()
   }, [page, confirmation])
-  useEffect(() => { setConfirmation(null); setMessage(''); action.reset(); setReconnecting(false) }, [remoteId]) // A confirmation must never carry over to another Remote.
+  useEffect(() => { setConfirmation(null); setMessage(''); action.reset(); setReconnectDeadline(null) }, [remoteId]) // A confirmation must never carry over to another Remote.
   useEffect(() => {
-    if (!reconnecting) return
+    if (reconnectDeadline === null || !active || recovering) return
+    // Use wall-clock time: WebView timers stop advancing during standby.
+    // Read the actual outcome at the deadline instead of timing out cached data.
     const timer = window.setTimeout(() => {
-      setReconnecting(false)
-      setMessage('Update sent. Check the integration status in the full manager if it has not reconnected.')
-    }, 60_000)
+      void integrations.refetch()
+    }, Math.max(0, reconnectDeadline - Date.now()))
     return () => window.clearTimeout(timer)
-  }, [reconnecting])
+  }, [reconnectDeadline, active, recovering, integrations.refetch])
   useEffect(() => {
     const value = action.variables
-    if (reconnecting && value?.kind === 'update' && integrations.dataUpdatedAt > action.submittedAt + 5_000) {
+    if (reconnectDeadline !== null && active && !recovering && !integrations.isFetching && value?.kind === 'update') {
       const item = integrations.data?.find(item => item.id === value.item.id)
-      if (item && ['connected', 'ok'].includes(item.connectionState) && !item.updateAvailable) {
-        setReconnecting(false)
-        setMessage(`${item.name} updated and connected.`)
+      const checkedAt = integrations.isError ? integrations.errorUpdatedAt : integrations.dataUpdatedAt
+      const outcome = reconnectOutcome(integrations.isError ? undefined : item, checkedAt, action.submittedAt, reconnectDeadline)
+      if (outcome) {
+        setReconnectDeadline(null)
+        setMessage(outcome === 'connected' ? `${value.item.name} updated and connected.` : 'Update sent. Check the integration status in the full manager if it has not reconnected.')
       }
     }
-  }, [reconnecting, integrations.data, integrations.dataUpdatedAt, action.variables, action.submittedAt])
+  }, [reconnectDeadline, active, recovering, integrations.data, integrations.dataUpdatedAt, integrations.errorUpdatedAt, integrations.isError, integrations.isFetching, action.variables, action.submittedAt])
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey) return
